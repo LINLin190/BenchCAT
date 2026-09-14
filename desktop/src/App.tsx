@@ -65,6 +65,7 @@ import {
   ExpandMoreRounded,
 } from "@mui/icons-material";
 import packageInfo from "../package.json";
+import { EscHardwareCard } from "./EscHardwareCard";
 import { alStatusInfo, type AlStatusLanguage } from "./alStatus";
 import { BridgeRequestError, bridgeRequest, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
 import { minimumBusState } from "./busState";
@@ -212,7 +213,7 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
         <Stack spacing={1.25} className="overview-cards">
           <Card sx={cardSx}>
             <CardContent>
-              <Box><Typography variant="h6">运行摘要</Typography><Typography variant="caption" color="text.secondary">当前从站的运行状态与诊断信息</Typography></Box>
+              <Typography variant="h6">运行摘要</Typography>
               <Box className="overview-summary-grid">
                 <Box className="overview-metric">
                   <Typography className="section-label">当前状态</Typography>
@@ -247,7 +248,7 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
           <Card sx={cardSx}>
             <CardContent>
               <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.25 }}>
-                <Box><Typography variant="h6">设备身份</Typography><Typography variant="caption" color="text.secondary">当前从站的识别与地址信息</Typography></Box>
+                <Typography variant="h6">设备身份</Typography>
                 <Chip size="small" variant="outlined" label={slave.configured_address === undefined ? "配置地址：未知" : `配置地址：${hex(slave.configured_address)}`} />
               </Stack>
               <Box className="kv-grid overview-identity-grid">
@@ -259,6 +260,7 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
               </Box>
             </CardContent>
           </Card>
+          <EscHardwareCard key={`${slave.position}-${registerProfile}`} slave={slave} profile={registerProfile} />
           <Card sx={cardSx}>
             <CardContent>
               <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>

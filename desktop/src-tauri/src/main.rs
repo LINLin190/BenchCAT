@@ -1455,6 +1455,50 @@ fn open_external(url: String) -> Result<(), String> {
     Ok(())
 }
 
+fn preferred_window_size(work_width: f64, work_height: f64) -> tauri::LogicalSize<f64> {
+    const PREFERRED_WIDTH: f64 = 1600.0;
+    const PREFERRED_HEIGHT: f64 = 1200.0;
+    const MIN_WIDTH: f64 = 960.0;
+    const MIN_HEIGHT: f64 = 600.0;
+    const EDGE_MARGIN: f64 = 32.0;
+
+    let available_width = (work_width - EDGE_MARGIN).max(MIN_WIDTH).min(work_width);
+    let available_height = (work_height - EDGE_MARGIN).max(MIN_HEIGHT).min(work_height);
+    tauri::LogicalSize::new(
+        PREFERRED_WIDTH.min(available_width),
+        PREFERRED_HEIGHT.min(available_height),
+    )
+}
+
+fn configure_main_window(app: &tauri::App) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(monitor) = monitor {
+        let scale_factor = monitor.scale_factor();
+        let work_area = monitor.work_area();
+        let logical_work_area = work_area.size.to_logical::<f64>(scale_factor);
+        let size = preferred_window_size(logical_work_area.width, logical_work_area.height);
+        let physical_size = size.to_physical::<u32>(scale_factor);
+        let x = work_area.position.x
+            + ((work_area.size.width.saturating_sub(physical_size.width)) / 2) as i32;
+        let y = work_area.position.y
+            + ((work_area.size.height.saturating_sub(physical_size.height)) / 2) as i32;
+        let _ = window.set_min_size(Some(tauri::LogicalSize::new(
+            960.0_f64.min(size.width),
+            600.0_f64.min(size.height),
+        )));
+        let _ = window.set_size(size);
+        let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    }
+    let _ = window.show();
+}
+
 fn main() {
     let _single_instance = match acquire_single_instance_or_activate() {
         Ok(Some(guard)) => guard,
@@ -1469,6 +1513,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            configure_main_window(app);
             let supervisor = BridgeSupervisor::new(app.handle().clone());
             app.manage(BridgeState(supervisor));
             Ok(())
@@ -1516,6 +1561,30 @@ mod tests {
         let mut r = File::open(&path).unwrap();
         assert_eq!(read_frame(&mut r, 1024).unwrap()["type"], "heartbeat");
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn preferred_window_size_uses_target_when_work_area_is_large_enough() {
+        assert_eq!(
+            preferred_window_size(2560.0, 1400.0),
+            tauri::LogicalSize::new(1600.0, 1200.0)
+        );
+    }
+
+    #[test]
+    fn preferred_window_size_fits_a_smaller_work_area() {
+        assert_eq!(
+            preferred_window_size(1366.0, 728.0),
+            tauri::LogicalSize::new(1334.0, 696.0)
+        );
+    }
+
+    #[test]
+    fn preferred_window_size_never_exceeds_a_tiny_work_area() {
+        assert_eq!(
+            preferred_window_size(800.0, 480.0),
+            tauri::LogicalSize::new(800.0, 480.0)
+        );
     }
 
     #[test]

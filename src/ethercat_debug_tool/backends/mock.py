@@ -68,8 +68,8 @@ class MockBackend:
             self._registers[i][0x10:0x12] = slave.configured_address.to_bytes(2, "little")
             self._registers[i][0x130:0x132] = int(slave.state).to_bytes(2, "little")
             self._registers[i][0x134:0x136] = b"\x00\x00"
-            chip_ids = (0xE101, 0xE252, 0xE253)
-            self._registers[i][0x0E00:0x0E04] = chip_ids[i].to_bytes(4, "little")
+            hardware = ("4C 24 00 00 00 00 00 00", "01 00 52 92 25 00 00 00", "02 00 53 92 2D 68 00 00")
+            self._registers[i][0x0E00:0x0E08] = bytes.fromhex(hardware[i])
         self._sdo: list[dict[tuple[int, int], bytes]] = []
         for slave in self._slaves:
             ident = slave.identity
@@ -123,10 +123,15 @@ class MockBackend:
 
     def scan(self) -> list[SlaveInfo]:
         self._check()
+        self._slaves = [
+            replace(info, esc_hardware=bytes(self._registers[i][0x0E00:0x0E00 + (2 if info.chip_model == "E101" else 8)]).hex(" ").upper())
+            for i, info in enumerate(self._slaves)
+        ]
         return list(self._slaves)
 
     def read_states(self) -> list[SlaveInfo]:
-        return self.scan()
+        self._check()
+        return list(self._slaves)
 
     def request_state(self, position: int | None, state: EtherCatState, timeout_us: int) -> list[SlaveInfo]:
         self._check(position)

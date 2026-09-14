@@ -104,6 +104,11 @@ class ProfileRegistry:
         except ValueError as exc:
             raise ValueError(f"Unsupported investigated register address: {value}") from exc
 
+    @cached_property
+    def _hardware_fields(self) -> dict[str, list[dict[str, Any]]]:
+        resource = files("ethercat_debug_tool.esc_profiles.data").joinpath("esc_hardware_fields.json")
+        return json.loads(resource.read_text(encoding="utf-8"))
+
     @staticmethod
     def _write_semantics(master_access: str, fields: list[dict[str, Any]], has_write_effect: bool) -> str:
         if master_access in {"RO", "R", "RO_READ_SIDE_EFFECT"}:
@@ -148,7 +153,11 @@ class ProfileRegistry:
 
     def _definition(self, profile: str, record: dict[str, Any]) -> dict[str, Any]:
         address_space = _ADDRESS_SPACES.get(str(record.get("address_space")), "unknown")
-        fields = [dict(field) for field in record.get("fields", [])]
+        source_fields = (
+            self._hardware_fields[record["fields_source"]]
+            if "fields_source" in record else record.get("fields", [])
+        )
+        fields = [dict(field) for field in source_fields]
         master_access = str(record.get("master_access", "not documented"))
         semantic = self._write_semantics(master_access, fields, bool(record.get("write_side_effects")))
         address_text = str(record["address"])

@@ -22767,108 +22767,7 @@
         "write_sequence": "not documented",
         "byte_order": "LSB at lower ESC address for multi-byte ESC registers; coherent/latch behavior is register-specific",
         "reserved_bits_rule": "write 0 unless the register-specific description explicitly requires another behavior; ignore reserved read values",
-        "fields": [
-          {
-            "chip": "ET1100",
-            "register_address": "0x0E00-0x0E01",
-            "register_name": "Power-on values ET1100",
-            "bits": "1:0",
-            "name": "Port mode (P_MODE)",
-            "access": "ECAT:RO; PDI:RO",
-            "ecat_access": "RO",
-            "pdi_access": "RO",
-            "reset_value": "Depends on hardware",
-            "description": "Port mode (P_MODE): configuration 00: Logical ports 0 and 1 available 01: Logical ports 0, 1 and 2 available 10: Logical ports 0, 1 and 3 available 11: Logical ports 0, 1, 2 and...",
-            "enum_values": [
-              {
-                "value": "00",
-                "meaning": "Logical ports 0 and 1 available"
-              },
-              {
-                "value": "01",
-                "meaning": "Logical ports 0, 1 and 2 available"
-              },
-              {
-                "value": "10",
-                "meaning": "Logical ports 0, 1 and 3 available"
-              },
-              {
-                "value": "11",
-                "meaning": "Logical ports 0, 1, 2 and 3 available"
-              },
-              {
-                "value": "5",
-                "meaning": "2 Physical layer of available ports (P_CONF). r/- r/-"
-              },
-              {
-                "value": "0",
-                "meaning": "EBUS"
-              },
-              {
-                "value": "1",
-                "meaning": "MII"
-              },
-              {
-                "value": "7",
-                "meaning": "6 CPU clock output (CLK_MODE): r/- r/-"
-              },
-              {
-                "value": "00",
-                "meaning": "Off – PDI[7] available as PDI port"
-              },
-              {
-                "value": "01",
-                "meaning": "PDI[7] = 25MHz"
-              },
-              {
-                "value": "10",
-                "meaning": "PDI[7] = 20MHz"
-              },
-              {
-                "value": "11",
-                "meaning": "PDI[7] = 10MHz"
-              },
-              {
-                "value": "9",
-                "meaning": "8 TX signal shift (C25_SHI): r/- r/-"
-              },
-              {
-                "value": "00",
-                "meaning": "MII TX signals shifted by 0°"
-              },
-              {
-                "value": "01",
-                "meaning": "MII TX signals shifted by 90°"
-              },
-              {
-                "value": "10",
-                "meaning": "MII TX signals shifted by 180°"
-              },
-              {
-                "value": "11",
-                "meaning": "MII TX signals shifted by 270°"
-              },
-              {
-                "value": "0",
-                "meaning": "Disabled – PDI[31] available as PDI port"
-              },
-              {
-                "value": "1",
-                "meaning": "Enabled – PDI[31] = 25MHz (OSC)"
-              },
-              {
-                "value": "0",
-                "meaning": "Disabled"
-              }
-            ],
-            "write_semantics": "not writable",
-            "read_semantics": "normal or register-specific",
-            "reserved": false,
-            "reserved_rule": null,
-            "source": "beckhoff_sec2_v3.3",
-            "confidence": "official_explicit"
-          }
-        ],
+        "fields_source": "ET1100",
         "source": [
           {
             "source_id": "beckhoff_sec2_v3.3",
@@ -34915,27 +34814,7 @@
         "write_sequence": "not documented",
         "byte_order": "LSB is stored at the lowest EtherCAT Core CSR address; MSB at the highest address",
         "reserved_bits_rule": "reserved fields must be written 0; reserved read values are not guaranteed",
-        "fields": [
-          {
-            "chip": "LAN9252",
-            "register_address": "0x0E00-0x0E07",
-            "register_name": "Product Id Register",
-            "bits": "63:0",
-            "name": "Product ID",
-            "access": "ECAT:RO; PDI:RO",
-            "ecat_access": "RO",
-            "pdi_access": "RO",
-            "reset_value": "0000h",
-            "description": "Product ID 00ssh 9252h rrrrh",
-            "enum_values": [],
-            "write_semantics": "not writable",
-            "read_semantics": "normal or register-specific",
-            "reserved": false,
-            "reserved_rule": null,
-            "source": "microchip_lan9252_ds00001909c",
-            "confidence": "official_explicit"
-          }
-        ],
+        "fields_source": "LAN9252",
         "source": [
           {
             "source_id": "microchip_lan9252_ds00001909c",
@@ -55448,27 +55327,7 @@
         "write_sequence": "not documented",
         "byte_order": "LSB is stored at the lowest EtherCAT Core CSR address; MSB at the highest address",
         "reserved_bits_rule": "reserved fields must be written 0; reserved read values are not guaranteed",
-        "fields": [
-          {
-            "chip": "LAN9253",
-            "register_address": "0x0E00-0x0E07",
-            "register_name": "Product Id Register",
-            "bits": "63:0",
-            "name": "Product ID",
-            "access": "ECAT:RO; PDI:RO",
-            "ecat_access": "RO",
-            "pdi_access": "RO",
-            "reset_value": "0000h",
-            "description": "Product ID ssssh 9253h rrrrh",
-            "enum_values": [],
-            "write_semantics": "not writable",
-            "read_semantics": "normal or register-specific",
-            "reserved": false,
-            "reserved_rule": null,
-            "source": "microchip_lan9253_ds00003421b",
-            "confidence": "official_explicit"
-          }
-        ],
+        "fields_source": "LAN9253",
         "source": [
           {
             "source_id": "microchip_lan9253_ds00003421b",

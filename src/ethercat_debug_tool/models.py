@@ -66,6 +66,8 @@ class SlaveInfo:
     raw_state: int | None = None
     pdi_type: int | None = None
     pdo_size_source: str = "mapped"
+    esc_hardware: str | None = None
+    esc_hardware_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

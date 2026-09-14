@@ -44,6 +44,19 @@ def test_same_address_has_profile_scoped_meaning() -> None:
     assert len({et1100["definition_id"], lan9252["definition_id"], lan9253["definition_id"]}) == 3
 
 
+@pytest.mark.parametrize("profile,width", [("ET1100", 16), ("E101", 16), ("LAN9252", 64), ("E252", 64), ("LAN9253", 64), ("E253", 64)])
+def test_hardware_fields_cover_each_bit_once(profile, width):
+    definition = ProfileRegistry().find(profile, "esc_core", 0x0E00)
+    covered = set()
+    for field in definition["bit_fields"]:
+        bits = set(range(field["shift"], field["shift"] + field["bits"]))
+        assert not covered.intersection(bits)
+        covered.update(bits)
+    assert covered == set(range(width))
+    assert definition["direct_read_allowed"] and not definition["direct_write_allowed"]
+    assert all(field["ecat_access"] == "RO" for field in definition["fields"])
+
+
 def test_local_lan925x_registers_are_documented_but_not_master_accessible() -> None:
     registry = ProfileRegistry()
     local = next(item for item in registry.catalog("LAN9252") if item["address_space"] == "lan925x_system_csr")

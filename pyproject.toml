@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ethercat-workbench"
-version = "1.0.1"
+version = "1.1.0"
 description = "EtherCAT Workbench - Windows pySOEM EtherCAT slave debugging application"
 requires-python = ">=3.11"
 readme = "README.md"

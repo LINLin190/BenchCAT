@@ -296,6 +296,18 @@ class PysoemBackend:
             return []
         master.read_state()
         self._slaves = [self._info(i, slave) for i, slave in enumerate(master.slaves, 1)]
+        # Keep a power-on information snapshot until the next scan, even after reset.
+        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
+            size = 2 if info.chip_model in {"ET1100", "E101"} else 8
+            if info.chip_model not in {"ET1100", "E101", "LAN9252", "E252", "LAN9253", "E253"}:
+                continue
+            try:
+                data = slave._fprd(0x0E00, size, DISCOVERY_FPRD_TIMEOUT_US)
+                if len(data) != size:
+                    raise ValueError(f"Expected {size} bytes, received {len(data)}")
+                self._slaves[index] = replace(info, esc_hardware=data.hex(" ").upper())
+            except Exception as exc:
+                self._slaves[index] = replace(info, esc_hardware_error=str(exc))
         # Establish fixed PDO widths once during discovery while the slave is in PREOP.
         try:
             self.map_process_data()

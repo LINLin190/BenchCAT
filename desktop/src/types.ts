@@ -28,6 +28,8 @@ export interface SlaveInfo {
   raw_state?: number | null;
   pdi_type?: number | null;
   pdo_size_source?: "mapped" | "cache" | "sii" | "unknown";
+  esc_hardware?: string | null;
+  esc_hardware_error?: string | null;
 }
 
 export interface WorkbenchStatus {
