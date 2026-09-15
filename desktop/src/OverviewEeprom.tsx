@@ -1,43 +1,143 @@
-import { useState } from "react";
-import { Alert, Box, Button, Card, CardContent, Collapse, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
-import { ExpandMoreRounded, ExpandLessRounded } from "@mui/icons-material";
-import { decodeEepromPrefix, decodeEepromStatus } from "./eepromDiagnostics";
+import { Alert, Box, Card, CardContent, Collapse, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
+import { CardHeading, useDisclosure } from "./OverviewDisclosure";
+import { decodeEepromPrefix, decodeEepromStatus, type EepromFamily } from "./eepromDiagnostics";
+import { hardwareFamily } from "./escHardware";
 import type { SlaveInfo } from "./types";
 
-export function OverviewEeprom({ slave }: { slave: SlaveInfo }) {
-  const [statusExpanded, setStatusExpanded] = useState(false);
-  const [configExpanded, setConfigExpanded] = useState(false);
+/** The EEPROM prefix words share the ESC register numbering, so the profile picks them. */
+function eepromFamily(profile: string): EepromFamily {
+  const family = hardwareFamily(profile);
+  return family === "LAN9252" || family === "LAN9253" ? family : "ET1100";
+}
+
+/** Field name and decoded value lead, the bit position trails: the text column must own the
+ *  flexible width, otherwise it wraps several lines deep once the detail table expands. */
+const BIT_TABLE_COLUMNS = ["Name", "Value", "Bit", "Description"];
+
+function HeadRow({ labels }: { labels: string[] }) {
+  return (
+    <TableHead>
+      <TableRow>{labels.map((label) => <TableCell key={label} scope="col">{label}</TableCell>)}</TableRow>
+    </TableHead>
+  );
+}
+
+/**
+ * EEPROM diagnostics. Collapsed it answers the two questions an operator actually has: what the
+ * configuration bytes say (0x0140 / 0x0150) and what the control/status register reports right
+ * now. Expanding adds the full sixteen-byte word decode and the control/status bit fields.
+ */
+export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: string }) {
   const status = decodeEepromStatus(slave.eeprom_status);
-  const prefix = decodeEepromPrefix(slave.eeprom_prefix);
-  return <>
-    <Box className="overview-eeprom-grid">
-      <Card variant="outlined"><CardContent>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 1.5 }}><Typography variant="h6">EEPROM 控制 / 状态</Typography><Typography variant="caption" className="mono" color="text.secondary">0x0502–0x0503</Typography></Stack>
-        {!status ? <Alert severity={slave.eeprom_status_error ? "warning" : "info"}>{slave.eeprom_status_error || "无可用寄存器数据"}</Alert> : <>
-          <Box className="overview-raw"><Typography variant="caption" color="text.secondary">Raw value</Typography><Typography className="mono" fontWeight={700} color="primary.main">{status.raw}</Typography></Box>
-          {status.summary.map((field) => <Box className="overview-status-field" key={field.bits}><Typography variant="body2">{field.name}</Typography><Typography variant="body2" fontWeight={650} color={field.error ? "warning.main" : "text.primary"}>{field.description}{field.detail ? `（${field.detail}）` : ""}</Typography></Box>)}
-          <Button size="small" aria-expanded={statusExpanded} aria-controls="eeprom-status-details" onClick={() => setStatusExpanded((value) => !value)} endIcon={statusExpanded ? <ExpandLessRounded /> : <ExpandMoreRounded />} sx={{ mt: 1, px: 0 }}>{statusExpanded ? "收起完整位域" : "展开完整位域"}</Button>
-        </>}
-      </CardContent></Card>
-      <Card variant="outlined"><CardContent>
-        <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}><Typography variant="h6">EEPROM 配置区</Typography><Typography variant="caption" color="text.secondary">前 16 字节</Typography></Stack>
-        {!prefix ? <Alert severity={slave.eeprom_prefix_error ? "warning" : "info"}>{slave.eeprom_prefix_error || "无可用 EEPROM 数据"}</Alert> : <>
-          <Box className="overview-raw mono overview-prefix-raw">0000: {prefix.raw}</Box>
-          <Box className="overview-config-summary"><Box><Typography variant="caption">0x0140 · PDI Control</Typography><Typography fontWeight={700}>{prefix.pdiType} · {prefix.pdiControl}</Typography></Box><Box><Typography variant="caption">0x0150 · PDI Configuration</Typography><Typography className="mono" fontWeight={700}>{prefix.pdiConfiguration}</Typography></Box></Box>
-          <Button size="small" aria-expanded={configExpanded} aria-controls="eeprom-config-details" onClick={() => setConfigExpanded((value) => !value)} endIcon={configExpanded ? <ExpandLessRounded /> : <ExpandMoreRounded />} sx={{ mt: 1, px: 0 }}>{configExpanded ? "收起配置解析" : "展开配置解析"}</Button>
-        </>}
-      </CardContent></Card>
-    </Box>
-    <Collapse in={statusExpanded && Boolean(status)} id="eeprom-status-details">
-      {status && <Card variant="outlined"><CardContent><Typography variant="h6" sx={{ mb: 1.5 }}>EEPROM 控制 / 状态 · 完整位域</Typography>
-        <Box className="overview-raw mono">Raw value: {status.raw}　 Binary: {status.binary}</Box>
-        <TableContainer><Table size="small" className="overview-data-table"><TableHead><TableRow>{["Bit", "Name", "Value", "Description"].map((name) => <TableCell key={name}>{name}</TableCell>)}</TableRow></TableHead><TableBody>
-          {status.fields.map((field) => <TableRow key={field.bits} sx={{ bgcolor: field.error ? "#fff8ed" : undefined }}><TableCell className="mono">{field.bits}</TableCell><TableCell>{field.name}</TableCell><TableCell className="mono">{field.value}</TableCell><TableCell>{field.description}</TableCell></TableRow>)}
-        </TableBody></Table></TableContainer>
-      </CardContent></Card>}
-    </Collapse>
-    <Collapse in={configExpanded && Boolean(prefix)} id="eeprom-config-details">
-      {prefix && <Card variant="outlined"><CardContent><Typography variant="h6" sx={{ mb: 1.5 }}>EEPROM 配置解析</Typography><TableContainer><Table size="small" className="overview-data-table"><TableHead><TableRow>{["Word", "原始字节", "16-bit 值", "含义"].map((name) => <TableCell key={name}>{name}</TableCell>)}</TableRow></TableHead><TableBody>{prefix.words.filter((word) => word.name !== "Reserved").map((word) => <TableRow key={word.address}><TableCell className="mono">{word.address}</TableCell><TableCell className="mono">{word.bytes}</TableCell><TableCell className="mono" sx={{ fontWeight: 650 }}>{word.value}</TableCell><TableCell>{word.name}</TableCell></TableRow>)}</TableBody></Table></TableContainer><Box className="overview-config-detail-grid"><Typography><span className="mono">0x0140</span> · PDI Control：{prefix.pdiType} · 原始值 {prefix.pdiControl}</Typography><Typography><span className="mono">0x0141</span> · ESC Configuration：原始值 {prefix.escConfiguration}</Typography><Typography><span className="mono">0x0150</span> · PDI Configuration：原始值 {prefix.pdiConfiguration}</Typography><Typography><span className="mono">0x0151</span> · SYNC/LATCH Configuration：原始值 {prefix.syncLatchConfiguration}</Typography></Box></CardContent></Card>}
-    </Collapse>
-  </>;
+  const prefix = decodeEepromPrefix(slave.eeprom_prefix, eepromFamily(profile));
+  const disclosure = useDisclosure("详细解析", "eeprom-details");
+
+  return (
+    // Two grid columns: side by side with the ESC hardware card, and wide enough that the four
+    // columns of the decoded bit tables never wrap.
+    <Card variant="outlined" sx={{ gridColumn: "span 2" }}>
+      <CardContent className="ov-card-body">
+        <CardHeading title="EEPROM 诊断" note="前 16 字节 · 0x0502–0x0503" action={disclosure.button} />
+        <div className="ov-eeprom-pair">
+          <section>
+            <Typography className="section-label">配置区 · 前 16 字节</Typography>
+            {!prefix ? <Alert severity={slave.eeprom_prefix_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_prefix_error || "无可用 EEPROM 数据"}</Alert> : <>
+              <Box className="ov-raw-row" sx={{ mt: 0.75 }}>
+                <Typography variant="caption" color="text.secondary">0000:</Typography>
+                <Typography variant="body2" className="mono ov-hexline">{prefix.raw}</Typography>
+              </Box>
+              <TableContainer sx={{ mt: 0.75 }}>
+                <Table size="small" className="overview-data-table ov-pair-table">
+                  <TableBody>
+                    {prefix.rows.map((row) => (
+                      <TableRow key={row.register} hover>
+                        <TableCell>{row.name}<Typography component="span" variant="caption" color="text.secondary" className="mono">（{row.register}）</Typography></TableCell>
+                        <TableCell className="ov-col-text">
+                          <Typography component="span" variant="body2" className="mono ov-strong">{row.value}</Typography>
+                          {row.headline ? <Typography component="span" variant="body2" color="text.secondary"> · {row.headline}</Typography> : null}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </>}
+          </section>
+          <section>
+            <Typography className="section-label">控制 / 状态寄存器 · 0x0502–0x0503</Typography>
+            {!status ? <Alert severity={slave.eeprom_status_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_status_error || "无可用寄存器数据"}</Alert> : <>
+              <Box className="ov-raw-row" sx={{ mt: 0.75 }}>
+                <Typography variant="caption" color="text.secondary">Raw value</Typography>
+                <Typography variant="body2" className="mono ov-strong">{status.raw}</Typography>
+                <Typography variant="caption" color="text.secondary">Binary</Typography>
+                <Typography variant="body2" className="mono ov-binary">{status.binary}</Typography>
+              </Box>
+              <TableContainer sx={{ mt: 0.75 }}>
+                <Table size="small" className="overview-data-table ov-pair-table">
+                  <HeadRow labels={["信号", "状态"]} />
+                  <TableBody>
+                    {status.summary.map((field) => (
+                      <TableRow key={field.bits} hover>
+                        <TableCell>{field.name}</TableCell>
+                        <TableCell className="ov-col-text">{field.description}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </>}
+          </section>
+        </div>
+        {/* Detail: the prefix word decode and the control/status bit fields. */}
+        <Collapse in={disclosure.expanded} id={disclosure.controls} unmountOnExit>
+          <div className="ov-eeprom-details">
+            {prefix && <section>
+              <Typography variant="caption" className="mono ov-group-title">配置区 · 前 16 字节解析</Typography>
+              <TableContainer>
+                <Table size="small" className="overview-data-table ov-word-table">
+                  <HeadRow labels={["Word", "16-bit 值", "解析"]} />
+                  <TableBody>
+                    {prefix.words.map((row) => (
+                      <TableRow key={row.word} hover>
+                        <TableCell className="mono ov-nowrap">{row.word}</TableCell>
+                        <TableCell className="mono ov-nowrap">{row.value}</TableCell>
+                        <TableCell className="ov-col-text">{row.parse}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <Typography variant="caption" color="text.secondary" className="ov-raw-hint">
+                按当前 ESC 型号解析；完全保留的 word 0x0006 不列出，校验和按读到的原值显示。
+              </Typography>
+            </section>}
+            {status && <section>
+              <Typography variant="caption" className="mono ov-group-title">控制 / 状态 · 完整位域 · <b>{status.raw}</b></Typography>
+              <TableContainer>
+                <Table size="small" className="overview-data-table">
+                  <HeadRow labels={BIT_TABLE_COLUMNS} />
+                  <TableBody>
+                    {status.fields.map((field) => (
+                      <TableRow key={field.bits} className={field.error ? "ov-row-error" : undefined}>
+                        <TableCell>{field.name}</TableCell>
+                        <TableCell className="mono ov-col-num">{field.binary}</TableCell>
+                        <TableCell className="mono ov-col-bit">{field.bits}</TableCell>
+                        <TableCell className="ov-col-text">
+                          {field.description}
+                          {field.detail ? <Typography component="span" variant="caption" color="text.secondary">（{field.detail}）</Typography> : null}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <Typography variant="caption" color="text.secondary" className="ov-raw-hint">
+                位定义来源：ESC 寄存器参考；保留位不列出。
+              </Typography>
+            </section>}
+          </div>
+        </Collapse>
+      </CardContent>
+    </Card>
+  );
 }
