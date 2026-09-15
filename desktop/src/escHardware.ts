@@ -46,6 +46,10 @@ export function decodeEscHardware(profile: string, raw: string) {
     }
   }
   const chip = bytes[2] | (bytes[3] << 8);
+  // Summary facts of the identification area, so the card can show them without decoding.
+  const revision = bytes[0] | (bytes[1] << 8);
+  const strap = family === "ET1100" ? bytes[0] : bytes[4] | (bytes[5] << 8);
   return { family, bytes: parts.slice(0, size).map((part) => part.toUpperCase()), fields, value,
+    revision: hex(revision), chipId: hex(chip), strap: hex(strap),
     mismatch: profile === family && family !== "ET1100" && chip !== (family === "LAN9252" ? 0x9252 : 0x9253) };
 }

@@ -21,7 +21,7 @@ describe("hardware scan snapshot card", () => {
     expect(html).not.toContain("非实测");
     expect(html).not.toContain("不作状态判断");
     expect(html).not.toContain("不是 EEPROM Revision");
-    expect(html).toContain("展开 bit 解析");
+    expect(html).toContain("展开bit 解析");
   });
   it("keeps failures and unavailable scan data distinct from zero", () => {
     const html = renderToStaticMarkup(<EscHardwareCard slave={{ ...slave, esc_hardware: null, esc_hardware_error: "timeout" }} profile="LAN9253" />);
