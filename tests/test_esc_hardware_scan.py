@@ -8,13 +8,15 @@ from ethercat_debug_tool.backends.pysoem_backend import DISCOVERY_FPRD_TIMEOUT_U
 from ethercat_debug_tool.models import EtherCatState, SlaveIdentity, SlaveInfo
 
 
-@pytest.mark.parametrize("model,size", [("ET1100", 2), ("E101", 2), ("LAN9252", 8), ("E252", 8), ("LAN9253", 8), ("E253", 8), ("Generic ESC", 0)])
+@pytest.mark.parametrize("model,size", [("ET1100", 8), ("E101", 8), ("LAN9252", 8), ("E252", 8), ("LAN9253", 8), ("E253", 8), ("Generic ESC", 0)])
 @pytest.mark.parametrize("failure", [None, "timeout", "short"])
 def test_hardware_is_read_only_once_per_scan(monkeypatch, model, size, failure):
     calls = []
     raw = bytearray(range(8))
 
     def read(address, length, timeout):
+        if address == 0x0502:
+            return b"\x00\x80"
         calls.append((address, length, timeout))
         if failure == "timeout":
             raise RuntimeError("optional read timed out")

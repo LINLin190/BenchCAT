@@ -259,10 +259,8 @@ class PysoemBackend:
             state = EtherCatState(int(slave.state) & 0x0F)
         except ValueError:
             state = EtherCatState.NONE
-        # Do not stream-read SII during discovery. LAN9252 firmware may retain
-        # EEPROM ownership after a direct read, causing its INIT->PREOP check
-        # to report AL 0x0050 (EEPROM no access). Sizes become authoritative
-        # after config_map() and are then published as mapped lengths.
+        # PDO sizes remain authoritative only after config_map(). The bounded
+        # configuration-prefix read in scan() restores EEPROM ownership.
         key = (int(slave.man), int(slave.id), int(slave.rev))
         input_size, output_size = self._pdo_size_cache.get(key, (None, None))
         return SlaveInfo(
@@ -283,6 +281,76 @@ class PysoemBackend:
             pdo_size_source="cache" if input_size is not None else "unknown",
         )
 
+    def _read_eeprom_status(self, slave: Any) -> int:
+        data = slave._fprd(0x0502, 2, DISCOVERY_FPRD_TIMEOUT_US)
+        if len(data) != 2:
+            raise CommunicationError("EEPROM 状态寄存器读取不完整")
+        return int.from_bytes(data, "little")
+
+    def _eeprom_status_info(self, info: SlaveInfo, slave: Any) -> SlaveInfo:
+        try:
+            return replace(info, eeprom_status=self._read_eeprom_status(slave), eeprom_status_error=None)
+        except Exception as exc:
+            return replace(info, eeprom_status=None, eeprom_status_error=str(exc))
+
+    def _read_eeprom_prefix(self, slave: Any, status: int) -> bytes:
+        """Read only words 0..7 without SOEM's cached EEPROM ownership.
+
+        pySOEM 1.1.13 eeprom_read() discards the low-level read result status.
+        Use checked FPRD/FPWR here and restore ECAT/PDI ownership in finally.
+        No EEPROM Write or Reload command is issued.
+        """
+        if status & 0x8000:
+            raise CommunicationError("EEPROM 接口忙，未读取配置区")
+        ownership = slave._fprd(0x0500, 2, DISCOVERY_FPRD_TIMEOUT_US)
+        if len(ownership) != 2:
+            raise CommunicationError("EEPROM 控制权读取不完整")
+        restore = ownership[0] & 3
+        if ownership[1] & 1:
+            restore = (restore | 1) & ~2  # Offer control back to the PDI owner.
+        size = 8 if status & 0x40 else 4
+        result = bytearray()
+
+        def wait_idle() -> int:
+            deadline = time.monotonic() + 0.02
+            while True:
+                current = self._read_eeprom_status(slave)
+                if not current & 0x8000:
+                    return current
+                if time.monotonic() >= deadline:
+                    raise CommunicationError("EEPROM 读取超时")
+
+        try:
+            # Force ECAT access, then release the force bit (SOEM sequence).
+            slave._fpwr(0x0500, b"\x02", DISCOVERY_FPRD_TIMEOUT_US)
+            slave._fpwr(0x0500, b"\x00", DISCOVERY_FPRD_TIMEOUT_US)
+            access = slave._fprd(0x0500, 2, DISCOVERY_FPRD_TIMEOUT_US)
+            if len(access) != 2 or access[0] & 1 or access[1] & 1:
+                raise CommunicationError("未取得 EEPROM 读取控制权")
+            if wait_idle() & 0x6000:
+                slave._fpwr(0x0502, b"\x00\x00", DISCOVERY_FPRD_TIMEOUT_US)
+                if self._read_eeprom_status(slave) & 0x6000:
+                    raise CommunicationError("EEPROM 命令错误未清除")
+            for offset in range(0, 16, size):
+                slave._fpwr(0x0504, (offset // 2).to_bytes(4, "little"), DISCOVERY_FPRD_TIMEOUT_US)
+                slave._fpwr(0x0502, b"\x00\x01", DISCOVERY_FPRD_TIMEOUT_US)
+                current = wait_idle()
+                if current & 0x6000:
+                    raise CommunicationError(f"EEPROM 读取失败，状态 0x{current:04X}")
+                chunk = slave._fprd(0x0508, size, DISCOVERY_FPRD_TIMEOUT_US)
+                if len(chunk) != size:
+                    raise CommunicationError("EEPROM 配置区读取不完整")
+                result.extend(chunk)
+        finally:
+            try:
+                slave._fpwr(0x0500, bytes([restore]), DISCOVERY_FPRD_TIMEOUT_US)
+                actual = slave._fprd(0x0500, 1, DISCOVERY_FPRD_TIMEOUT_US)
+                if len(actual) != 1 or actual[0] & 3 != restore:
+                    raise CommunicationError("EEPROM 控制权归还复核失败")
+            except Exception as exc:
+                raise CommunicationError(f"EEPROM 控制权归还失败：{exc}") from exc
+        return bytes(result)
+
     def scan(self) -> list[SlaveInfo]:
         master = self._require_master()
         self._mapped = False
@@ -298,7 +366,7 @@ class PysoemBackend:
         self._slaves = [self._info(i, slave) for i, slave in enumerate(master.slaves, 1)]
         # Keep a power-on information snapshot until the next scan, even after reset.
         for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
-            size = 2 if info.chip_model in {"ET1100", "E101"} else 8
+            size = 8
             if info.chip_model not in {"ET1100", "E101", "LAN9252", "E252", "LAN9253", "E253"}:
                 continue
             try:
@@ -308,6 +376,17 @@ class PysoemBackend:
                 self._slaves[index] = replace(info, esc_hardware=data.hex(" ").upper())
             except Exception as exc:
                 self._slaves[index] = replace(info, esc_hardware_error=str(exc))
+        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
+            # Preserve the status before read commands can clear error bits.
+            info = self._eeprom_status_info(info, slave)
+            try:
+                if info.eeprom_status is None:
+                    raise CommunicationError("EEPROM 状态不可用，未读取配置区")
+                data = self._read_eeprom_prefix(slave, info.eeprom_status)
+                info = replace(info, eeprom_prefix=data.hex(" ").upper(), eeprom_prefix_error=None)
+            except Exception as exc:
+                info = replace(info, eeprom_prefix=None, eeprom_prefix_error=str(exc))
+            self._slaves[index] = info
         # Establish fixed PDO widths once during discovery while the slave is in PREOP.
         try:
             self.map_process_data()
@@ -320,7 +399,7 @@ class PysoemBackend:
             self._mapped = False
         return list(self._slaves)
 
-    def read_states(self) -> list[SlaveInfo]:
+    def read_states(self, refresh_eeprom: bool = False) -> list[SlaveInfo]:
         master = self._require_master()
         master.read_state()
         if len(self._slaves) != len(master.slaves):
@@ -336,6 +415,11 @@ class PysoemBackend:
                     cached, state=state, al_status=int(slave.al_status), raw_state=int(slave.state)
                 ))
             self._slaves = refreshed
+        if refresh_eeprom:
+            self._slaves = [
+                self._eeprom_status_info(info, slave)
+                for info, slave in zip(self._slaves, master.slaves, strict=True)
+            ]
         return list(self._slaves)
 
     def request_state(self, position: int | None, state: EtherCatState, timeout_us: int) -> list[SlaveInfo]:

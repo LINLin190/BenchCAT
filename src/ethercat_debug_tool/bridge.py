@@ -711,7 +711,7 @@ class BridgeRuntime:
             return slaves
         if method == "read_states":
             try:
-                slaves = list(self._submit("read_states"))
+                slaves = list(self._submit("read_states", **({"refresh_eeprom": True} if params.get("refresh_eeprom") else {})))
             except BaseException as exc:
                 self.master_state.state_read_failed(str(exc))
                 self._publish_snapshot()

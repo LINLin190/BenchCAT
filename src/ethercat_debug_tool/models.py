@@ -68,6 +68,10 @@ class SlaveInfo:
     pdo_size_source: str = "mapped"
     esc_hardware: str | None = None
     esc_hardware_error: str | None = None
+    eeprom_status: int | None = None
+    eeprom_status_error: str | None = None
+    eeprom_prefix: str | None = None
+    eeprom_prefix_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
