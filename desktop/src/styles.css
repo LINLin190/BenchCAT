@@ -8,46 +8,78 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .kv-value { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section-label { color: #647087; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; text-transform: none !important; }
 .data-surface { background: #f6f8fc; border: 1px solid #e7ebf2; border-radius: 6px; }
-.overview-cards .MuiCardContent-root { padding: 16px 18px; min-width: 0; }
+.overview-cards .MuiCardContent-root { padding: 14px 16px; min-width: 0; }
 .overview-cards .MuiCard-root { border-radius: 9px; }
 .overview-cards .MuiTypography-h6 { font-size: 1rem; }
 .overview-cards .section-label { font-size: 0.72rem; }
-.overview-cards .kv-value, .overview-metric .mono { font-size: 0.85rem; }
-.overview-top-row { display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
-.overview-top-row > .MuiCardContent-root + .MuiCardContent-root { border-left: 1px solid #e7ebf2; }
-.overview-details-row { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
-.overview-hardware { border-left: 1px solid #e7ebf2; }
-.overview-summary-grid { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(130px, 1fr) minmax(185px, 1.5fr) minmax(110px, 1fr); gap: 12px; margin-top: 18px; }
-.overview-metric { min-width: 0; padding: 0 10px 0 0; border-right: 1px solid #e7ebf2; }
-.overview-metric:last-child { border: 0; }
-.overview-esc-selector { padding-top: 5px; }
-.overview-esc-selector .MuiTypography-caption { display: block; margin-top: 4px; line-height: 1.25; }
-.overview-identity-item { padding: 3px 0; }
-.kv-grid.overview-identity-grid { grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(0, 1fr)); gap: 12px; }
 
-.esc-raw-line { display: flex; align-items: baseline; gap: 12px; margin: 8px 0; }
-.esc-raw-bytes { letter-spacing: 0.08em; }
-.overview-control-row { display: grid; gap: 10px; }
-.overview-state-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.overview-repair-actions { justify-content: flex-end; }
+/* One equal-width track per column, so every card edge lands on a shared grid line. Rows size
+   to their own content (grid-auto-rows: auto) and cards of one row share that height. */
+.overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: auto; gap: 12px; align-items: stretch; }
+.overview-grid > .MuiCard-root { min-width: 0; height: 100%; }
+/* The ESC card is shorter than the EEPROM card beside it; keeping its own height avoids
+   stretching it into a tall empty column when the EEPROM detail tables expand. */
+.ov-self-start { align-self: start; height: auto !important; }
 
-@media (max-width: 1600px) {
-  .kv-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (max-width: 1280px) {
-  .overview-summary-grid, .kv-grid.overview-identity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Value cells size to their own content, so a chip or a number is never stretched. */
+.kv-compact { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 12px; align-items: center; }
+.kv-compact > * { min-width: 0; justify-self: start; }
+.kv-compact .section-label { align-self: center; }
+/* Identity lines read as one sentence: label right aligned, value left aligned beside it.
+   Every row keeps the same box; only the separator is dropped on the last one, so the rows
+   never differ in height. */
+.kv-identity { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: baseline; padding-bottom: 5px; border-bottom: 1px solid #f0f2f7; }
+.kv-identity:last-child { border-bottom: 0; }
+.kv-identity > .section-label { text-align: right; }
+.ov-strong { font-weight: 700; }
+.ov-state-flow { display: block; margin-top: 6px; line-height: 1.45; }
+.ov-card-head { margin-bottom: 10px; }
 
-}
-
-.overview-eeprom-grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 12px; align-items: start; }
-.overview-eeprom-grid > .MuiCard-root { min-width: 0; }
-.overview-raw { display: flex; align-items: center; gap: 16px; padding: 10px 12px; margin-bottom: 8px; background: #f5f7fb; border-radius: 5px; }
-.overview-prefix-raw { font-size: 12px; overflow-wrap: anywhere; }
-.overview-status-field { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #edf0f5; }
-.overview-status-field .MuiTypography-root { font-size: 12px; }
-.overview-data-table .MuiTableCell-root { font-size: 12px; padding: 9px 10px; }
+/* Register tables: fixed narrow bit/value tracks so digits always line up. */
+.overview-data-table .MuiTableCell-root { font-size: 12px; padding: 8px 10px; }
 .overview-data-table .MuiTableCell-head { background: #f6f8fb; color: #647087; }
+.ov-col-bit { width: 64px; white-space: nowrap; }
+.ov-col-num { width: 92px; text-align: right; font-variant-numeric: tabular-nums; }
+/* No width here: this is the column that must absorb the remaining space, otherwise the text
+   either wraps or the browser starts wrapping the Name column instead. */
+.ov-col-text { text-align: left; }
+.ov-nowrap { white-space: nowrap; }
+.ov-row-error { background: #fff8ed; }
+.ov-row-error .ov-col-num { color: #c4740a; font-weight: 700; }
+/* Per-word heading row inside the configuration decode keeps one consistent column layout. */
+.ov-group-row .ov-group-cell { padding: 6px 10px; background: #eef2fa; color: #647087; font-size: 11.5px; border-top: 1px solid #e2e6ef; }
+.ov-group-row .ov-group-cell b { color: #172033; }
+
+.ov-raw-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 6px 10px; background: #f5f7fb; border-radius: 5px; }
+.ov-hexline { letter-spacing: 0.06em; overflow-wrap: anywhere; }
+.ov-binary { letter-spacing: 0.08em; }
+.ov-raw-hint { display: block; margin-top: 6px; line-height: 1.5; }
+.ov-group-title { display: block; margin-bottom: 4px; color: #647087; }
+.ov-group-title b { color: #172033; }
+
+/* EEPROM summary table: the word and value columns hug their hex, the decode column takes the
+   rest. Without the fixed first column the middle column pinches to zero. The decode line is a
+   notch smaller so a fully documented word still fits on one line. */
+.ov-word-table .MuiTableCell-root { padding: 6px 10px; }
+.ov-word-table .MuiTableCell-root:first-of-type { width: 76px; }
+.ov-word-table .MuiTableCell-root:nth-of-type(2) { width: 92px; }
+.ov-word-table .ov-col-text { font-size: 12px; line-height: 1.5; }
+/* The default summaries are two-column tables without a fixed share; keep their label column
+   predictable so both sides of the card line up and the register suffix stays on one line. */
+.ov-pair-table .MuiTableCell-root { padding: 8px 10px; }
+.ov-pair-table .MuiTableCell-root:first-of-type { width: 40%; white-space: nowrap; }
+.ov-card-tail { margin-top: auto; }
+.ov-card-body { display: flex; flex-direction: column; height: 100%; }
+/* The card's two summaries sit side by side; the narrow one only carries short signal names. */
+.ov-eeprom-pair { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: 28px; row-gap: 12px; align-items: start; }
+.ov-eeprom-pair > section { min-width: 0; }
+.ov-eeprom-details { display: grid; gap: 12px; padding-top: 10px; margin-top: 12px; border-top: 1px solid #edf0f5; }
+
 .overview-state-buttons .MuiButton-root { min-height: 30px; padding: 4px 8px; font-size: 12px; }
 .workbench-toolbar .MuiButton-root { height: 30px; min-width: 54px; padding: 3px 10px; font-size: 12px; }
 .workbench-toolbar .MuiInputBase-root { height: 30px; font-size: 12px; }
 .workbench-toolbar .MuiSelect-select { padding-top: 5px; padding-bottom: 5px; }
+
+@media (max-width: 1180px) {
+  .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
