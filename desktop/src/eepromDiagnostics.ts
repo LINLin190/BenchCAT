@@ -21,9 +21,10 @@ export function decodeEepromStatus(value: number | null | undefined) {
   if (value == null || !Number.isInteger(value) || value < 0 || value > 0xFFFF) return undefined;
   const fields = statusFields.map(([shift, width, name, meanings]) => {
     const raw = (value >> shift) & ((1 << width) - 1);
+    const algorithm = shift === 7 ? (raw ? "32 Kbit ~ 4 Mbit EEPROM" : "1 Kbit ~ 16 Kbit EEPROM") : undefined;
     return { bits: width === 1 ? `${shift}` : `${shift + width - 1}:${shift}`, name,
       value: raw.toString(2).padStart(width, "0"), description: meanings[raw],
-      error: [14, 13, 12, 11, 3].includes(shift) && raw !== 0 };
+      detail: algorithm, error: [14, 13, 12, 11, 3].includes(shift) && raw !== 0 };
   });
   return { raw: hexWord(value), binary: value.toString(2).padStart(16, "0").match(/.{4}/g)!.join(" "), fields,
     summary: [7, 5, 3, 11, 12].map((bit) => fields.find((field) => field.bits === `${bit}`)!) };
@@ -39,8 +40,15 @@ export function decodeEepromPrefix(raw: string | null | undefined) {
   const parts = raw?.trim().split(/\s+/);
   if (!parts || parts.length !== 16 || parts.some((part) => !/^[\da-f]{2}$/i.test(part))) return undefined;
   const bytes = parts.map((part) => parseInt(part, 16));
-  return { raw: parts.join(" ").toUpperCase(), words: wordNames.map((name, index) => ({
+  const words = wordNames.map((name, index) => ({
     address: hexWord(index), bytes: parts.slice(index * 2, index * 2 + 2).join(" ").toUpperCase(),
     value: hexWord(bytes[index * 2] | (bytes[index * 2 + 1] << 8)), name,
-  })) };
+  }));
+  const pdiControl = bytes[0];
+  const pdiConfiguration = bytes[2];
+  const escConfiguration = bytes[1];
+  const syncLatchConfiguration = bytes[3];
+  return { raw: parts.join(" ").toUpperCase(), words, pdiControl: hexWord(pdiControl),
+    pdiConfiguration: hexWord(pdiConfiguration), escConfiguration: hexWord(escConfiguration),
+    syncLatchConfiguration: hexWord(syncLatchConfiguration), pdiType: pdiControl === 0x8D ? "HBI Index 16bit" : `PDI 0x${pdiControl.toString(16).toUpperCase().padStart(2, "0")}` };
 }

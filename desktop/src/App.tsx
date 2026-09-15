@@ -269,7 +269,6 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
                   <Typography variant="h6">设备身份</Typography>
                 </Stack>
                 <Box className="kv-grid overview-identity-grid">
-                  <Box className="kv-item overview-identity-item"><Typography className="section-label">PDI 类型</Typography><Typography className="kv-value" fontWeight={700} title={slave.pdi_type == null ? "—" : pdiMeaning(slave.pdi_type)}>{slave.pdi_type == null ? "—" : `${pdiMeaning(slave.pdi_type)} · ${hex(slave.pdi_type, 2)}`}</Typography></Box>
                   <Box className="kv-item overview-identity-item"><Typography className="section-label">配置地址</Typography><Typography className="kv-value mono" fontWeight={700}>{slave.configured_address === undefined ? "—" : hex(slave.configured_address)}</Typography></Box>
                   <Box className="kv-item overview-identity-item"><Typography className="section-label">厂商 ID</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.vendor_id, 8)}</Typography></Box>
                   <Box className="kv-item overview-identity-item"><Typography className="section-label">产品代码</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.product_code, 8)}</Typography></Box>
