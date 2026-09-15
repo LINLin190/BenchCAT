@@ -27,18 +27,56 @@ function Stop-ProjectTauriInstance {
     }
 }
 
+function Test-ProjectVite {
+    param(
+        [Parameter(Mandatory)]$ProcessInfo,
+        [Parameter(Mandatory)][string]$ProjectPath,
+        [Parameter(Mandatory)][array]$AllProcesses
+    )
+
+    if ($ProcessInfo.Name -ne 'node.exe') {
+        return $false
+    }
+
+    $commandLine = [string]$ProcessInfo.CommandLine
+    if ($commandLine.IndexOf($ProjectPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $commandLine -match '(?i)(vite|node_modules)') {
+        return $true
+    }
+
+    # Vite is commonly launched with a relative script path, so confirm its
+    # ownership from a descendant such as esbuild, whose command line is absolute.
+    $pendingProcessIds = @($ProcessInfo.ProcessId)
+    $visitedProcessIds = @{}
+    while ($pendingProcessIds.Count -gt 0) {
+        $processId = $pendingProcessIds[0]
+        $pendingProcessIds = @($pendingProcessIds | Select-Object -Skip 1)
+        if ($visitedProcessIds.ContainsKey($processId)) {
+            continue
+        }
+        $visitedProcessIds[$processId] = $true
+        foreach ($child in $AllProcesses | Where-Object { $_.ParentProcessId -eq $processId }) {
+            $childCommandLine = [string]$child.CommandLine
+            if ($childCommandLine.IndexOf($ProjectPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                $childCommandLine -match '(?i)node_modules') {
+                return $true
+            }
+            $pendingProcessIds += $child.ProcessId
+        }
+    }
+    return $false
+}
+
 function Stop-ProjectVite {
     param([switch]$RejectForeignListener)
 
     $devPort = 1420
     $projectPath = [System.IO.Path]::GetFullPath($desktopRoot).TrimEnd('\')
+    $allProcesses = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
     $listeners = @(Get-NetTCPConnection -LocalPort $devPort -State Listen -ErrorAction SilentlyContinue)
     foreach ($listener in $listeners) {
-        $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$($listener.OwningProcess)" -ErrorAction SilentlyContinue
-        $commandLine = [string]$processInfo.CommandLine
-        $isProjectVite = $processInfo.Name -eq 'node.exe' -and
-            $commandLine.IndexOf($projectPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-            $commandLine -match '(?i)(vite|node_modules)'
+        $processInfo = $allProcesses | Where-Object { $_.ProcessId -eq $listener.OwningProcess } | Select-Object -First 1
+        $isProjectVite = $processInfo -and (Test-ProjectVite $processInfo $projectPath $allProcesses)
         if ($isProjectVite) {
             Write-Host "清理本项目遗留的 Vite 开发服务器（PID $($listener.OwningProcess)）。" -ForegroundColor DarkGray
             Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue
