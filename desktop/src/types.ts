@@ -30,6 +30,10 @@ export interface SlaveInfo {
   pdo_size_source?: "mapped" | "cache" | "sii" | "unknown";
   esc_hardware?: string | null;
   esc_hardware_error?: string | null;
+  eeprom_status?: number | null;
+  eeprom_status_error?: string | null;
+  eeprom_prefix?: string | null;
+  eeprom_prefix_error?: string | null;
 }
 
 export interface WorkbenchStatus {

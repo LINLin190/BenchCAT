@@ -8,25 +8,46 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .kv-value { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .section-label { color: #647087; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.02em; text-transform: none !important; }
 .data-surface { background: #f6f8fc; border: 1px solid #e7ebf2; border-radius: 6px; }
-.overview-cards .MuiCardContent-root { padding: 12px 14px; }
+.overview-cards .MuiCardContent-root { padding: 16px 18px; min-width: 0; }
+.overview-cards .MuiCard-root { border-radius: 9px; }
 .overview-cards .MuiTypography-h6 { font-size: 1rem; }
 .overview-cards .section-label { font-size: 0.72rem; }
 .overview-cards .kv-value, .overview-metric .mono { font-size: 0.85rem; }
-.overview-summary-grid { display: grid; grid-template-columns: minmax(120px, .8fr) minmax(155px, 1fr) minmax(240px, 1.5fr) minmax(150px, 1fr); gap: 8px; margin-top: 8px; }
-.overview-metric { min-width: 0; padding: 8px 10px; border: 1px solid #e7ebf2; border-radius: 7px; background: #f8fafd; }
-.overview-esc-selector { padding-top: 10px; }
+.overview-top-row { display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+.overview-top-row > .MuiCardContent-root + .MuiCardContent-root { border-left: 1px solid #e7ebf2; }
+.overview-details-row { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
+.overview-hardware { border-left: 1px solid #e7ebf2; }
+.overview-summary-grid { display: grid; grid-template-columns: minmax(100px, .8fr) minmax(130px, 1fr) minmax(185px, 1.5fr) minmax(110px, 1fr); gap: 12px; margin-top: 18px; }
+.overview-metric { min-width: 0; padding: 0 10px 0 0; border-right: 1px solid #e7ebf2; }
+.overview-metric:last-child { border: 0; }
+.overview-esc-selector { padding-top: 5px; }
 .overview-esc-selector .MuiTypography-caption { display: block; margin-top: 4px; line-height: 1.25; }
-.overview-identity-item { padding: 7px 9px; border-left: 2px solid #e7ebf2; }
-.kv-grid.overview-identity-grid { grid-template-columns: minmax(190px, 1.5fr) repeat(4, minmax(125px, 1fr)); gap: 8px; }
+.overview-identity-item { padding: 3px 0; }
+.kv-grid.overview-identity-grid { grid-template-columns: minmax(180px, 1.2fr) repeat(2, minmax(0, 1fr)); gap: 12px; }
+
 .esc-raw-line { display: flex; align-items: baseline; gap: 12px; margin: 8px 0; }
 .esc-raw-bytes { letter-spacing: 0.08em; }
-.overview-control-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; }
-.overview-repair-actions { padding-left: 14px; border-left: 1px solid #e2e6ef; }
-.state-flow-arrow { color: #9aa4b7; font-size: 0.8rem !important; font-weight: 700 !important; }
+.overview-control-row { display: grid; gap: 10px; }
+.overview-state-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.overview-repair-actions { justify-content: flex-end; }
+
 @media (max-width: 1600px) {
   .kv-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 1280px) {
   .overview-summary-grid, .kv-grid.overview-identity-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .overview-identity-item:first-child { grid-column: 1 / -1; }
+
 }
+
+.overview-eeprom-grid { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: 12px; align-items: start; }
+.overview-eeprom-grid > .MuiCard-root { min-width: 0; }
+.overview-raw { display: flex; align-items: center; gap: 16px; padding: 10px 12px; margin-bottom: 8px; background: #f5f7fb; border-radius: 5px; }
+.overview-prefix-raw { font-size: 12px; overflow-wrap: anywhere; }
+.overview-status-field { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #edf0f5; }
+.overview-status-field .MuiTypography-root { font-size: 12px; }
+.overview-data-table .MuiTableCell-root { font-size: 12px; padding: 9px 10px; }
+.overview-data-table .MuiTableCell-head { background: #f6f8fb; color: #647087; }
+.overview-state-buttons .MuiButton-root { min-height: 30px; padding: 4px 8px; font-size: 12px; }
+.workbench-toolbar .MuiButton-root { height: 30px; min-width: 54px; padding: 3px 10px; font-size: 12px; }
+.workbench-toolbar .MuiInputBase-root { height: 30px; font-size: 12px; }
+.workbench-toolbar .MuiSelect-select { padding-top: 5px; padding-bottom: 5px; }

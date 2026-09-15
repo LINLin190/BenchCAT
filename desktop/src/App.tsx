@@ -20,6 +20,7 @@ import {
   Drawer,
   FormControl,
   InputLabel,
+  IconButton,
   LinearProgress,
   List,
   ListItemButton,
@@ -46,6 +47,8 @@ import {
 } from "@mui/material";
 import {
   BugReportRounded,
+  MenuRounded,
+  ChevronLeftRounded,
   CableRounded,
   DashboardRounded,
   DeveloperBoardRounded,
@@ -65,6 +68,7 @@ import {
   ExpandMoreRounded,
 } from "@mui/icons-material";
 import packageInfo from "../package.json";
+import { OverviewEeprom } from "./OverviewEeprom";
 import { EscHardwareCard } from "./EscHardwareCard";
 import { alStatusInfo, type AlStatusLanguage } from "./alStatus";
 import { BridgeRequestError, bridgeRequest, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
@@ -151,7 +155,7 @@ function PageTitle({ title, subtitle, actions }: { title: string; subtitle: stri
     <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2} sx={{ mb: 1.25 }}>
       <Box>
         <Typography variant="h5" fontWeight={750}>{title}</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.2 }}>{subtitle}</Typography>
+        {subtitle && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.2 }}>{subtitle}</Typography>}
       </Box>
       {actions && <Stack direction="row" gap={1}>{actions}</Stack>}
     </Stack>
@@ -203,7 +207,7 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
   const alInfo = alStatusInfo(slave?.al_status ?? 0, alLanguage);
   return (
     <>
-      <PageTitle title="设备概览" subtitle={slave ? `从站 ${slave.position} · ${slave.name}` : "总线状态与设备信息"} actions={<Button disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refresh)}>刷新状态</Button>} />
+      {!slave && <PageTitle title="设备概览" subtitle="总线状态与设备信息" actions={<Button disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refresh)}>刷新状态</Button>} />}
       {status.last_error && <Alert severity={status.phase === "faulted" ? "error" : "warning"} sx={{ mb: 1.25 }}>
         <Typography fontWeight={700}>最近通信问题</Typography>
         <Typography variant="body2">{status.last_error}</Typography>
@@ -211,75 +215,72 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
       </Alert>}
       {!slave ? <EmptyState text="连接并扫描后，在左侧选择一个从站" /> : (
         <Stack spacing={1.25} className="overview-cards">
-          <Card sx={cardSx}>
-            <CardContent>
-              <Typography variant="h6">运行摘要</Typography>
-              <Box className="overview-summary-grid">
-                <Box className="overview-metric">
-                  <Typography className="section-label">当前状态</Typography>
-                  <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 0.45 }}>
-                    <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />
-                    <Typography variant="body2" color="text.secondary">从站 {slave.position}</Typography>
+          <Card sx={cardSx} className="overview-top-row">
+              <CardContent>
+                <Typography variant="h6">运行摘要</Typography>
+                <Box className="overview-summary-grid">
+                  <Box className="overview-metric">
+                    <Typography className="section-label">当前状态</Typography>
+                    <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 0.45 }}>
+                      <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />
+                    </Stack>
+                  </Box>
+                  <Box className="overview-metric">
+                    <Typography className="section-label">过程数据{slave.pdo_size_source === "unknown" ? "" : ` · ${slave.pdo_size_source === "sii" ? "SII 声明" : slave.pdo_size_source === "cache" ? "已缓存" : "已映射"}`}</Typography>
+                    <Stack direction="row" divider={<Divider orientation="vertical" flexItem />} spacing={2} sx={{ mt: 0.4 }}>
+                      <Box><Typography variant="caption" color="text.secondary">输入</Typography><Typography className="mono" fontWeight={750}>{slave.input_size == null ? "—" : `${slave.input_size} B`}</Typography></Box>
+                      <Box><Typography variant="caption" color="text.secondary">输出</Typography><Typography className="mono" fontWeight={750}>{slave.output_size == null ? "—" : `${slave.output_size} B`}</Typography></Box>
+                    </Stack>
+                  </Box>
+                  <Box className="overview-metric overview-esc-selector">
+                    <FormControl size="small" fullWidth disabled={busy || status.cycle_running || Boolean(switchingProfile)}>
+                      <InputLabel>ESC 型号</InputLabel>
+                      <Select label="ESC 型号" value={registerProfile} onChange={(event) => void changeEscModel(String(event.target.value))}>
+                        {registerProfiles.map((profile) => <MenuItem key={profile} value={profile}>{profile}</MenuItem>)}
+                      </Select>
+                    </FormControl>
+                    {(status.cycle_running || switchingProfile) && <Typography variant="caption" color={status.cycle_running ? "warning.main" : "text.secondary"}>
+                      {status.cycle_running ? "停止周期通信后可切换" : `正在应用 ${switchingProfile} 并重配置从站…`}
+                    </Typography>}
+                  </Box>
+                  <Box className="overview-metric"><Typography className="section-label">AL 状态码</Typography><Typography className="kv-value mono" fontWeight={750}>{hex(slave.al_status)}</Typography><Typography variant="caption" color={slave.al_status ? "warning.main" : "text.secondary"}>{alInfo.name}</Typography></Box>
+                </Box>
+                {slave.al_status !== 0 && <Alert severity={alInfo.known ? "warning" : "error"} sx={{ mt: 1.5 }}><Typography fontWeight={700}>{hex(slave.al_status)} · {alInfo.name}</Typography><Typography variant="body2">说明：{alInfo.detail}</Typography><Typography variant="body2">排查：{alInfo.action}</Typography></Alert>}
+              </CardContent>
+              <CardContent>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
+                  <Typography variant="h6">状态控制</Typography>
+                </Stack>
+                <Box className="overview-control-row">
+                  <Box className="overview-state-buttons">
+                    {[1, 2, 4, 8].map((state) => <Button key={state} disabled={busy} variant={slave.state === state ? "contained" : "outlined"} onClick={() => requestState(state)}>{stateLabel(state)}</Button>)}
+                  </Box>
+                  <Stack direction="row" gap={0.5} flexWrap="wrap" className="overview-repair-actions">
+                    {status.cycle_running && <Button disabled={busy} size="small" color="error" variant="outlined" startIcon={<StopRounded />} onClick={() => run(() => bridgeRequest("stop_cycle"), "周期通信已停止，全部从站回到 SAFEOP")}>停止周期</Button>}
+                    <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("reconfig", "重配置完成")}>重配置</Button>
+                    <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("recover", "恢复并通过状态复核")}>故障恢复</Button>
                   </Stack>
                 </Box>
-                <Box className="overview-metric">
-                  <Typography className="section-label">过程数据 · {slave.pdo_size_source === "sii" ? "SII 声明" : slave.pdo_size_source === "cache" ? "已缓存" : slave.pdo_size_source === "unknown" ? "未获取" : "已映射"}</Typography>
-                  <Stack direction="row" divider={<Divider orientation="vertical" flexItem />} spacing={2} sx={{ mt: 0.4 }}>
-                    <Box><Typography variant="caption" color="text.secondary">输入</Typography><Typography className="mono" fontWeight={750}>{slave.input_size == null ? "未获取" : `${slave.input_size} B`}</Typography></Box>
-                    <Box><Typography variant="caption" color="text.secondary">输出</Typography><Typography className="mono" fontWeight={750}>{slave.output_size == null ? "未获取" : `${slave.output_size} B`}</Typography></Box>
-                  </Stack>
-                </Box>
-                <Box className="overview-metric overview-esc-selector">
-                  <FormControl size="small" fullWidth disabled={busy || status.cycle_running || Boolean(switchingProfile)}>
-                    <InputLabel>ESC 型号</InputLabel>
-                    <Select label="ESC 型号" value={registerProfile} onChange={(event) => void changeEscModel(String(event.target.value))}>
-                      {registerProfiles.map((profile) => <MenuItem key={profile} value={profile}>{profile}</MenuItem>)}
-                    </Select>
-                  </FormControl>
-                  <Typography variant="caption" color={status.cycle_running ? "warning.main" : "text.secondary"}>
-                    {status.cycle_running ? "停止周期通信后可切换" : switchingProfile ? `正在应用 ${switchingProfile} 并重配置从站…` : "切换后自动重配置；不会改写 EEPROM"}
-                  </Typography>
-                </Box>
-                <Box className="overview-metric"><Typography className="section-label">AL 状态码</Typography><Typography className="kv-value mono" fontWeight={750}>{hex(slave.al_status)}</Typography><Typography variant="caption" color={slave.al_status ? "warning.main" : "text.secondary"}>{alInfo.name}</Typography></Box>
-              </Box>
-              {slave.al_status !== 0 && <Alert severity={alInfo.known ? "warning" : "error"} sx={{ mt: 1.5 }}><Typography fontWeight={700}>{hex(slave.al_status)} · {alInfo.name}</Typography><Typography variant="body2">说明：{alInfo.detail}</Typography><Typography variant="body2">排查：{alInfo.action}</Typography></Alert>}
-            </CardContent>
+              </CardContent>
           </Card>
-          <Card sx={cardSx}>
-            <CardContent>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.25 }}>
-                <Typography variant="h6">设备身份</Typography>
-                <Chip size="small" variant="outlined" label={slave.configured_address === undefined ? "配置地址：未知" : `配置地址：${hex(slave.configured_address)}`} />
-              </Stack>
-              <Box className="kv-grid overview-identity-grid">
-                <Box className="kv-item overview-identity-item"><Typography className="section-label">PDI 类型（当前生效）</Typography><Typography className="kv-value" fontWeight={700} title={slave.pdi_type == null ? "未获取" : pdiMeaning(slave.pdi_type)}>{slave.pdi_type == null ? "未获取" : `${pdiMeaning(slave.pdi_type)} · ${hex(slave.pdi_type, 2)}`}</Typography></Box>
-                <Box className="kv-item overview-identity-item"><Typography className="section-label">厂商 ID / Vendor ID</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.vendor_id, 8)}</Typography></Box>
-                <Box className="kv-item overview-identity-item"><Typography className="section-label">产品代码 / Product Code</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.product_code, 8)}</Typography></Box>
-                <Box className="kv-item overview-identity-item"><Typography className="section-label">修订版本 / Revision</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.revision, 8)}</Typography></Box>
-                <Box className="kv-item overview-identity-item"><Typography className="section-label">序列号 / Serial Number</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.serial_number, 8)}</Typography></Box>
-              </Box>
-            </CardContent>
-          </Card>
-          <EscHardwareCard key={`${slave.position}-${registerProfile}`} slave={slave} profile={registerProfile} />
-          <Card sx={cardSx}>
-            <CardContent>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1 }}>
-                <Box><Typography variant="h6">状态控制</Typography><Typography variant="caption" color="text.secondary">OP 自动维持 5 ms 总线周期；切换状态会先停止已有周期并让全部从站回到 SAFEOP。</Typography></Box>
-                <Chip size="small" variant="outlined" label={allOp ? "总线已就绪" : `${slaves.length} 个从站`} />
-              </Stack>
-              <Box className="overview-control-row">
-                <Stack direction="row" gap={0.45} flexWrap="wrap" alignItems="center">
-                  {[1, 2, 4, 8].map((state, index) => <Stack direction="row" alignItems="center" gap={0.45} key={state}>{index > 0 && <Typography className="state-flow-arrow">→</Typography>}<Button disabled={busy} variant={slave.state === state ? "contained" : "outlined"} onClick={() => requestState(state)}>{stateLabel(state)}</Button></Stack>)}
+          <Card sx={cardSx} className="overview-details-row">
+              <CardContent>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.25 }}>
+                  <Typography variant="h6">设备身份</Typography>
                 </Stack>
-                <Stack direction="row" gap={0.5} className="overview-repair-actions">
-                  {status.cycle_running && <Button disabled={busy} size="small" color="error" variant="outlined" startIcon={<StopRounded />} onClick={() => run(() => bridgeRequest("stop_cycle"), "周期通信已停止，全部从站回到 SAFEOP")}>停止周期</Button>}
-                  <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("reconfig", "重配置完成")}>重配置</Button>
-                  <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("recover", "恢复并通过状态复核")}>故障恢复</Button>
-                </Stack>
-              </Box>
-            </CardContent>
+                <Box className="kv-grid overview-identity-grid">
+                  <Box className="kv-item overview-identity-item"><Typography className="section-label">PDI 类型</Typography><Typography className="kv-value" fontWeight={700} title={slave.pdi_type == null ? "—" : pdiMeaning(slave.pdi_type)}>{slave.pdi_type == null ? "—" : `${pdiMeaning(slave.pdi_type)} · ${hex(slave.pdi_type, 2)}`}</Typography></Box>
+                  <Box className="kv-item overview-identity-item"><Typography className="section-label">配置地址</Typography><Typography className="kv-value mono" fontWeight={700}>{slave.configured_address === undefined ? "—" : hex(slave.configured_address)}</Typography></Box>
+                  <Box className="kv-item overview-identity-item"><Typography className="section-label">厂商 ID</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.vendor_id, 8)}</Typography></Box>
+                  <Box className="kv-item overview-identity-item"><Typography className="section-label">产品代码</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.product_code, 8)}</Typography></Box>
+                  <Box className="kv-item overview-identity-item"><Typography className="section-label">修订版本</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.revision, 8)}</Typography></Box>
+                  <Box className="kv-item overview-identity-item"><Typography className="section-label">序列号</Typography><Typography className="kv-value mono" fontWeight={700}>{hex(slave.identity.serial_number, 8)}</Typography></Box>
+                </Box>
+              </CardContent>
+            <EscHardwareCard key={`${slave.position}-${registerProfile}`} slave={slave} profile={registerProfile} />
           </Card>
-          <Alert severity={allOp ? "success" : slave.al_status ? "warning" : "info"}>{allOp ? "全部从站处于 OP，总线已就绪。" : slave.al_status ? `当前从站报告 AL 状态码 ${hex(slave.al_status)}：${alInfo.name}。` : `已发现 ${slaves.length} 个从站；可在概览中逐站控制状态。`}</Alert>
+          <OverviewEeprom key={slave.position} slave={slave} />
+          {(allOp || Boolean(slave.al_status)) && <Alert severity={allOp ? "success" : "warning"}>{allOp ? "全部从站处于 OP，总线已就绪。" : `当前从站报告 AL 状态码 ${hex(slave.al_status)}：${alInfo.name}。`}</Alert>}
         </Stack>
       )}
     </>
@@ -823,6 +824,7 @@ export default function App() {
   const requestedPage = new URLSearchParams(window.location.search).get("page") as PageKey | null;
   const [page, setPage] = useState<PageKey>(pages.some((item) => item.key === requestedPage) ? requestedPage! : "overview");
   const [status, setStatus] = useState<WorkbenchStatus>({ host_generation: 0, mode: "real", phase: "disconnected", connected: false, cycle_running: false, slaves: [], session_id: 0, revision: 0 });
+  const [slaveListExpanded, setSlaveListExpanded] = useState(true);
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapter, setAdapter] = useState("");
   const [selectedPosition, setSelectedPosition] = useState<number>();
@@ -908,7 +910,7 @@ export default function App() {
       await refresh();
       return;
     }
-    await bridgeRequest<SlaveInfo[]>("read_states");
+    await bridgeRequest<SlaveInfo[]>("read_states", { refresh_eeprom: true });
   }, [refresh, status.connected, status.slaves.length]);
 
   const applyAdapters = useCallback((items: AdapterInfo[]) => {
@@ -1141,20 +1143,18 @@ export default function App() {
   }, [page, registerProfile, selectedSlaveKey, selectedPosition, slave, status, snapshot, progress, refreshStates, run, busy, alLanguage, eepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
 
   return <Box sx={{ display: "flex", height: "100vh", bgcolor: "background.default" }}>
-    <Drawer variant="permanent" PaperProps={{ sx: { width: 148, borderRight: 1, borderColor: "divider", bgcolor: "#FBFCFE", overflow: "hidden" } }}>
+    <Drawer variant="permanent" PaperProps={{ sx: { width: 56, borderRight: 1, borderColor: "divider", bgcolor: "#FBFCFE", overflow: "hidden" } }}>
       <Toolbar sx={{ minHeight: "54px !important", px: "10px !important", gap: 0.75 }}>
         <Box sx={{ width: 34, height: 34, borderRadius: 1.2, bgcolor: "primary.main", color: "white", display: "grid", placeItems: "center", flexShrink: 0 }}><CableRounded fontSize="small" /></Box>
-        <Box minWidth={0}><Typography fontWeight={760} fontSize={13} lineHeight={1.1}>EtherCAT</Typography><Typography variant="caption" fontSize={10.5} color="text.secondary">Workbench</Typography></Box>
       </Toolbar>
       <Divider />
-      <Typography variant="overline" color="text.secondary" sx={{ px: 1.25, pt: 1.1 }}>工作区</Typography>
-      <List sx={{ px: 0.6, pt: 0.3 }}>{pages.map((item) => <ListItemButton disabled={eepromExclusive && item.key !== "eeprom"} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}>{item.icon}</ListItemIcon><ListItemText primary={item.label} primaryTypographyProps={{ fontWeight: 650, fontSize: 13 }} /></ListItemButton>)}</List>
+      <List sx={{ px: 0.6, pt: 0.3 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={eepromExclusive && item.key !== "eeprom"} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
-      <List sx={{ p: 0.6 }}><ListItemButton onClick={() => { setSettingsTab(0); setSettings(true); }} sx={{ minHeight: 36, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}><SettingsRounded /></ListItemIcon><ListItemText primary="设置" primaryTypographyProps={{ fontWeight: 650, fontSize: 13 }} /></ListItemButton></List>
+      <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettingsTab(0); setSettings(true); }} sx={{ minHeight: 36, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
     </Drawer>
-    <Box sx={{ ml: "148px", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-      <AppBar position="static" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "rgba(255,255,255,.96)" }}>
+    <Box sx={{ ml: "56px", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+      <AppBar className="workbench-toolbar" position="static" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "rgba(255,255,255,.96)" }}>
         <Toolbar sx={{ minHeight: "54px !important", columnGap: 0.65, rowGap: 0.65, px: "10px !important", py: 0.45, flexWrap: "wrap", alignContent: "center" }}>
           <Stack sx={{ width: 170, minWidth: 0, flexShrink: 0 }} spacing={0.15}>
             <Stack direction="row" gap={0.6} alignItems="center" flexWrap="wrap">
@@ -1164,7 +1164,7 @@ export default function App() {
             </Stack>
             <Typography variant="caption" color="text.secondary" noWrap>{!bridgeAvailable ? "通信核心正在恢复" : status.connected ? `已发现 ${status.slaves.length} 个从站` : "检测网卡并自动扫描 EtherCAT 从站"}</Typography>
           </Stack>
-          <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
+          {status.slaves.length !== 1 && <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
             <Tooltip title={busStateBlockedReason || `全部从站状态控制 · 当前 ${busState === undefined ? "无状态" : stateLabel(busState)}`}>
               <span>
                 <ButtonGroup size="small" aria-label="全部从站状态控制" disabled={Boolean(busStateBlockedReason)} sx={{ height: 28 }}>
@@ -1172,10 +1172,9 @@ export default function App() {
                 </ButtonGroup>
               </span>
             </Tooltip>
-          </Box>
-          <Box sx={{ display: "flex", alignItems: "center", alignContent: "center", justifyContent: "flex-end", flex: "0 1 650px", minWidth: 0, ml: "auto", flexWrap: "wrap", gap: 0.65 }}>
-            <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || status.connected} onClick={autoScan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>检测并扫描</Button>
-            <FormControl size="small" sx={{ flex: "1 1 190px", minWidth: 170, maxWidth: 280 }}><InputLabel>网卡</InputLabel><Select label="网卡" value={adapter} disabled={!bridgeAvailable || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
+          </Box>}
+          <Box sx={{ display: "flex", alignItems: "center", alignContent: "center", justifyContent: "flex-end", flex: "0 1 auto", minWidth: 0, ml: "auto", flexWrap: "wrap", gap: 0.65 }}>
+            <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} value={adapter} disabled={!bridgeAvailable || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
             <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={<UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
             <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
             {busy && <CircularProgress size={20} sx={{ mx: 0.5 }} />}
@@ -1183,8 +1182,18 @@ export default function App() {
         </Toolbar>
       </AppBar>
       <Box sx={{ display: "flex", minHeight: 0, flex: 1 }}>
-        {status.slaves.length > 0 && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><Tooltip title="总线状态取全部从站的最低状态"><span><StateChip state={busState!} /></span></Tooltip><Chip size="small" variant="outlined" label={status.cycle_running ? "周期运行" : "周期停止"} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 30 }}><DeveloperBoardRounded fontSize="small" color={item.state === 8 ? "success" : "action"} /></ListItemIcon><ListItemText primary={`${item.position}. ${item.name}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
+        {status.slaves.length > 1 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><StateChip state={busState!} /><Chip size="small" variant="outlined" label={status.cycle_running ? "周期运行" : "周期停止"} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 30 }}><DeveloperBoardRounded fontSize="small" color={item.state === 8 ? "success" : "action"} /></ListItemIcon><ListItemText primary={`${item.position}. ${item.name}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
+        <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, py: page === "overview" ? 1.5 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
+            {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
+            {status.slaves.length > 1 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
+            <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slave.name}>从站 {slave.position} · {slave.name}</Typography>
+            <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />
+            <Chip size="small" variant="outlined" label={status.cycle_running ? "周期运行" : "周期停止"} />
+            {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refreshStates)}>刷新状态</Button>}
+          </Stack>}
         <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto", p: { xs: 1.5, xl: 2 } }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto" }}>{bridgeExit && <Alert severity="error" action={bridgeExit.log_path ? <Button color="inherit" size="small" onClick={() => revealPath(bridgeExit.log_path!)}>打开日志</Button> : undefined} sx={{ mb: 1.25 }}><Typography fontWeight={700}>通信核心已退出</Typography><Typography variant="body2">{bridgeExit.message}</Typography>{bridgeExit.log_path && <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>日志：{bridgeExit.log_path}</Typography>}</Alert>}{content}</Box></Box>
+        </Box>
       </Box>
     </Box>
     <Menu
