@@ -181,7 +181,7 @@ function StateChip({ state, error = false }: { state: number; error?: boolean })
   return <Chip size="small" color={color} variant={state === 8 ? "filled" : "outlined"} label={`${stateLabel(state)}${error ? " + ERROR" : ""}`} />;
 }
 
-function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfile, onRegisterProfileChange, alLanguage }: { slave?: SlaveInfo; slaves: SlaveInfo[]; status: WorkbenchStatus; busy: boolean; run: Run; refresh: () => Promise<void>; registerProfile: string; onRegisterProfileChange: (profile: string) => void; alLanguage: AlStatusLanguage }) {
+function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRegisterProfileChange, alLanguage }: { slave?: SlaveInfo; status: WorkbenchStatus; busy: boolean; run: Run; refresh: () => Promise<void>; registerProfile: string; onRegisterProfileChange: (profile: string) => void; alLanguage: AlStatusLanguage }) {
   const [switchingProfile, setSwitchingProfile] = useState<string>();
   const requestState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: slave?.position ?? 0, state }),
@@ -204,7 +204,6 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
       setSwitchingProfile(undefined);
     }
   };
-  const opCount = slaves.filter((item) => item.state === 8 && !((item.raw_state ?? item.state) & 0x10) && !item.al_status).length;
   const alInfo = alStatusInfo(slave?.al_status ?? 0, alLanguage);
   return (
     <>
@@ -218,17 +217,17 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
         <Stack spacing={1.25} className="overview-cards">
           <Box className="overview-grid">
             <Card sx={cardSx} className="ov-runtime"><CardContent className="ov-card-body">
-              <CardHeading title="运行与控制" note={slaves.length > 1 ? `总线 OP：${opCount}/${slaves.length}` : undefined} />
+              <CardHeading title="运行与控制" />
               <Box className="ov-runtime-facts">
                 <Typography className="section-label">当前状态</Typography>
                 <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />
                 <Typography className="section-label">AL 状态码</Typography>
                 <Typography className="mono ov-strong">{hex(slave.al_status)} · {alInfo.name}</Typography>
-                <Typography className="section-label">过程数据{slave.pdo_size_source === "unknown" ? "" : ` · ${slave.pdo_size_source === "sii" ? "SII 声明" : slave.pdo_size_source === "cache" ? "已缓存" : "已映射"}`}</Typography>
-                <Typography variant="body2">
-                  <Typography component="span" variant="caption" color="text.secondary">输入 </Typography><Typography component="span" className="mono ov-strong">{slave.input_size == null ? "—" : `${slave.input_size} B`}</Typography>
-                  <Typography component="span" variant="caption" color="text.secondary">　输出 </Typography><Typography component="span" className="mono ov-strong">{slave.output_size == null ? "—" : `${slave.output_size} B`}</Typography>
-                </Typography>
+                <Typography className="ov-pdo-label">过程数据</Typography>
+                <Box className="ov-pdo-values">
+                  <Typography component="span">输入 <b className="mono">{slave.input_size == null ? "—" : `${slave.input_size} B`}</b></Typography>
+                  <Typography component="span">输出 <b className="mono">{slave.output_size == null ? "—" : `${slave.output_size} B`}</b></Typography>
+                </Box>
               </Box>
               <Box className="ov-runtime-actions">
                 <Typography className="section-label">状态请求</Typography>
@@ -1134,7 +1133,7 @@ export default function App() {
 
   const content = useMemo(() => {
     const props = { slave, run };
-    if (page === "overview") return <OverviewPage {...props} status={status} busy={busy} slaves={status.slaves} refresh={refreshStates} registerProfile={registerProfile} alLanguage={alLanguage} onRegisterProfileChange={(profile) => slave && setRegisterProfileOverrides((current) => ({ ...current, [selectedSlaveKey]: profile }))} />;
+    if (page === "overview") return <OverviewPage {...props} status={status} busy={busy} refresh={refreshStates} registerProfile={registerProfile} alLanguage={alLanguage} onRegisterProfileChange={(profile) => slave && setRegisterProfileOverrides((current) => ({ ...current, [selectedSlaveKey]: profile }))} />;
     if (page === "registers") return <RegistersPage {...props} registerProfile={registerProfile} />;
     return <EepromPage {...props} status={status} progress={progress} setProgress={setProgress} readResult={eepromReadCache[eepromReadCacheKey]} setReadResult={setSelectedEepromReadResult} initialSelection={eepromDetailSelection} onInitialSelectionConsumed={consumeEepromDetailSelection} autoResetEsc={eepromAutoReset} fileDropEnabled={!quickFlashOpen} />;
   }, [page, registerProfile, selectedSlaveKey, selectedPosition, slave, status, snapshot, progress, refreshStates, run, busy, alLanguage, eepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
@@ -1145,7 +1144,7 @@ export default function App() {
         <Box sx={{ width: 34, height: 34, borderRadius: 1.2, bgcolor: "primary.main", color: "white", display: "grid", placeItems: "center", flexShrink: 0 }}><CableRounded fontSize="small" /></Box>
       </Toolbar>
       <Divider />
-      <List sx={{ px: 0.6, pt: 0.3 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={eepromExclusive && item.key !== "eeprom"} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
+      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={eepromExclusive && item.key !== "eeprom"} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
       <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettingsTab(0); setSettings(true); }} sx={{ minHeight: 36, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
@@ -1179,11 +1178,11 @@ export default function App() {
         </Toolbar>
       </AppBar>
       <Box sx={{ display: "flex", minHeight: 0, flex: 1 }}>
-        {status.slaves.length > 1 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><StateChip state={busState!} /><Chip size="small" variant="outlined" label={status.cycle_running ? "周期运行" : "周期停止"} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 30 }}><DeveloperBoardRounded fontSize="small" color={item.state === 8 ? "success" : "action"} /></ListItemIcon><ListItemText primary={`${item.position}. ${item.name}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
+        {status.slaves.length > 0 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><StateChip state={busState!} /><Chip size="small" variant="outlined" label={status.cycle_running ? "周期运行" : "周期停止"} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 30 }}><DeveloperBoardRounded fontSize="small" color={item.state === 8 ? "success" : "action"} /></ListItemIcon><ListItemText primary={`${item.position}. ${item.name}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, py: page === "overview" ? 1.5 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
-            {status.slaves.length > 1 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
+            {status.slaves.length > 0 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
             <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slave.name}>从站 {slave.position} · {slave.name}</Typography>
             {page !== "overview" && <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />}
             {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refreshStates)}>刷新状态</Button>}

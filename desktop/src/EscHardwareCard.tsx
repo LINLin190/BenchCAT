@@ -11,7 +11,7 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
   const decoded = slave.esc_hardware ? decodeEscHardware(profile, slave.esc_hardware) : undefined;
   const eepromSize = decoded?.fields.find((field) => field.name === "EEPROM_SIZE_STRAP" || field.name === "E2PSIZE");
   return (
-    <Card variant="outlined" className={disclosure.expanded ? "ov-expanded" : undefined}>
+    <Card variant="outlined">
     <CardContent className="ov-card-body">
       <CardHeading title="设备与硬件" />
       {identity}

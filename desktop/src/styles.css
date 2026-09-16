@@ -24,7 +24,13 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .ov-runtime-actions .overview-state-buttons .MuiButton-root { flex: 1; }
 .ov-repair-actions { margin-left: auto; }
 .ov-section-title { font-size: 13px !important; font-weight: 700 !important; color: #42536d; margin-bottom: 8px !important; }
-.overview-grid:has(.ov-expanded) { align-items: start; }
+/* Keep cards independent until Collapse has completed its exit animation. */
+.overview-grid:has(.MuiCollapse-root:not(.MuiCollapse-hidden)) { align-items: start; }
+.ov-pdo-label { font-size: 14px !important; font-weight: 600 !important; }
+.ov-pdo-values { display: flex; align-items: center; gap: 20px; }
+.ov-pdo-values .MuiTypography-root { font-size: 14px; }
+.ov-pdo-values b { margin-left: 6px; font-size: 16px; color: #244caa; }
+.ov-pdi-name { display: inline-block; min-width: 132px; }
 
 /* Value cells size to their own content, so a chip or a number is never stretched. */
 .kv-compact { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 0 16px; align-items: center; }

@@ -33,7 +33,7 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
   const disclosure = useDisclosure("详情", "eeprom-details");
 
   return (
-    <Card variant="outlined" className={disclosure.expanded ? "ov-expanded" : undefined}>
+    <Card variant="outlined">
       <CardContent className="ov-card-body">
         <CardHeading title="EEPROM 诊断" />
         <div className="ov-eeprom-pair">
@@ -49,7 +49,7 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
                   <TableBody>
                     {prefix.rows.map((row) => (
                       <TableRow key={row.register} hover>
-                        <TableCell>{row.name}<Typography component="span" variant="caption" color="text.secondary" className="mono">（{row.register}）</Typography></TableCell>
+                        <TableCell><span className="ov-pdi-name">{row.name}</span><Typography component="span" variant="caption" color="text.secondary" className="mono">（{row.register}）</Typography></TableCell>
                         <TableCell className="ov-col-text">
                           <Typography component="span" variant="body2" className="mono ov-strong">{row.value}</Typography>
                           {row.headline ? <Typography component="span" variant="body2" color="text.secondary"> · {row.headline}</Typography> : null}
