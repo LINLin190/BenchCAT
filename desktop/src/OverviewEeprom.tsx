@@ -30,17 +30,15 @@ function HeadRow({ labels }: { labels: string[] }) {
 export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: string }) {
   const status = decodeEepromStatus(slave.eeprom_status);
   const prefix = decodeEepromPrefix(slave.eeprom_prefix, eepromFamily(profile));
-  const disclosure = useDisclosure("详细解析", "eeprom-details");
+  const disclosure = useDisclosure("详情", "eeprom-details");
 
   return (
-    // Two grid columns: side by side with the ESC hardware card, and wide enough that the four
-    // columns of the decoded bit tables never wrap.
-    <Card variant="outlined" sx={{ gridColumn: "span 2" }}>
+    <Card variant="outlined" className={disclosure.expanded ? "ov-expanded" : undefined}>
       <CardContent className="ov-card-body">
-        <CardHeading title="EEPROM 诊断" note="前 16 字节 · 0x0502–0x0503" action={disclosure.button} />
+        <CardHeading title="EEPROM 诊断" />
         <div className="ov-eeprom-pair">
           <section>
-            <Typography className="section-label">配置区 · 前 16 字节</Typography>
+            <Typography className="ov-section-title">配置区 · 前 16 字节</Typography>
             {!prefix ? <Alert severity={slave.eeprom_prefix_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_prefix_error || "无可用 EEPROM 数据"}</Alert> : <>
               <Box className="ov-raw-row" sx={{ mt: 0.75 }}>
                 <Typography variant="caption" color="text.secondary">0000:</Typography>
@@ -64,7 +62,7 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
             </>}
           </section>
           <section>
-            <Typography className="section-label">控制 / 状态寄存器 · 0x0502–0x0503</Typography>
+            <Typography className="ov-section-title">控制 / 状态 · 0x0502–0x0503</Typography>
             {!status ? <Alert severity={slave.eeprom_status_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_status_error || "无可用寄存器数据"}</Alert> : <>
               <Box className="ov-raw-row" sx={{ mt: 0.75 }}>
                 <Typography variant="caption" color="text.secondary">Raw value</Typography>
@@ -74,10 +72,9 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
               </Box>
               <TableContainer sx={{ mt: 0.75 }}>
                 <Table size="small" className="overview-data-table ov-pair-table">
-                  <HeadRow labels={["信号", "状态"]} />
                   <TableBody>
                     {status.summary.map((field) => (
-                      <TableRow key={field.bits} hover>
+                      <TableRow key={field.bits} hover className={field.error ? "ov-row-error" : undefined}>
                         <TableCell>{field.name}</TableCell>
                         <TableCell className="ov-col-text">{field.description}</TableCell>
                       </TableRow>
@@ -88,6 +85,7 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
             </>}
           </section>
         </div>
+        <span className="ov-card-tail">{disclosure.button}</span>
         {/* Detail: the prefix word decode and the control/status bit fields. */}
         <Collapse in={disclosure.expanded} id={disclosure.controls} unmountOnExit>
           <div className="ov-eeprom-details">
@@ -107,12 +105,9 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
                   </TableBody>
                 </Table>
               </TableContainer>
-              <Typography variant="caption" color="text.secondary" className="ov-raw-hint">
-                按当前 ESC 型号解析；完全保留的 word 0x0006 不列出，校验和按读到的原值显示。
-              </Typography>
             </section>}
             {status && <section>
-              <Typography variant="caption" className="mono ov-group-title">控制 / 状态 · 完整位域 · <b>{status.raw}</b></Typography>
+              <Typography variant="caption" className="mono ov-group-title">控制 / 状态 · 0x0502–0x0503 · <b>{status.raw}</b></Typography>
               <TableContainer>
                 <Table size="small" className="overview-data-table">
                   <HeadRow labels={BIT_TABLE_COLUMNS} />
@@ -131,9 +126,6 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
                   </TableBody>
                 </Table>
               </TableContainer>
-              <Typography variant="caption" color="text.secondary" className="ov-raw-hint">
-                位定义来源：ESC 寄存器参考；保留位不列出。
-              </Typography>
             </section>}
           </div>
         </Collapse>

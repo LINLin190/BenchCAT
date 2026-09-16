@@ -204,7 +204,7 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
       setSwitchingProfile(undefined);
     }
   };
-  const allOp = slaves.length > 0 && slaves.every((item) => item.state === 8 && !((item.raw_state ?? item.state) & 0x10) && !item.al_status);
+  const opCount = slaves.filter((item) => item.state === 8 && !((item.raw_state ?? item.state) & 0x10) && !item.al_status).length;
   const alInfo = alStatusInfo(slave?.al_status ?? 0, alLanguage);
   return (
     <>
@@ -217,9 +217,9 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
       {!slave ? <EmptyState text="连接并扫描后，在左侧选择一个从站" /> : (
         <Stack spacing={1.25} className="overview-cards">
           <Box className="overview-grid">
-            <Card sx={cardSx}><CardContent className="ov-card-body">
-              <CardHeading title="运行摘要" />
-              <Box className="kv-compact">
+            <Card sx={cardSx} className="ov-runtime"><CardContent className="ov-card-body">
+              <CardHeading title="运行与控制" note={slaves.length > 1 ? `总线 OP：${opCount}/${slaves.length}` : undefined} />
+              <Box className="ov-runtime-facts">
                 <Typography className="section-label">当前状态</Typography>
                 <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />
                 <Typography className="section-label">AL 状态码</Typography>
@@ -230,31 +230,19 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
                   <Typography component="span" variant="caption" color="text.secondary">　输出 </Typography><Typography component="span" className="mono ov-strong">{slave.output_size == null ? "—" : `${slave.output_size} B`}</Typography>
                 </Typography>
               </Box>
-            </CardContent></Card>
-
-            <Card sx={cardSx}><CardContent className="ov-card-body">
-              <Typography className="section-label">状态请求</Typography>
-              <ButtonGroup size="small" fullWidth className="overview-state-buttons" sx={{ mt: 0.5 }}>
-                {controllableStates.map((state) => (
-                  <Button key={state} disabled={busy} variant={slave.state === state ? "contained" : "outlined"} onClick={() => requestState(state)}>{stateLabel(state)}</Button>
-                ))}
-              </ButtonGroup>
-              <Divider sx={{ my: 1.25 }} />
-              <Typography className="section-label">诊断与恢复</Typography>
-              <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mt: 0.75 }}>
-                {status.cycle_running && <Button disabled={busy} size="small" color="error" variant="outlined" startIcon={<StopRounded />} onClick={() => run(() => bridgeRequest("stop_cycle"), "周期通信已停止，全部从站回到 SAFEOP")}>停止周期</Button>}
-                <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("reconfig", "重配置完成")}>重配置</Button>
-                <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("recover", "恢复并通过状态复核")}>故障恢复</Button>
-              </Stack>
-            </CardContent></Card>
-
-            <Card sx={cardSx}><CardContent className="ov-card-body">
-              <CardHeading title="设备身份" note={`从站 ${slave.position}`} />
-              <Box>
-                <Box className="kv-identity"><Typography className="section-label">配置地址</Typography><Typography className="mono ov-strong">{slave.configured_address === undefined ? "—" : hex(slave.configured_address)}</Typography></Box>
-                <Box className="kv-identity"><Typography className="section-label">厂商 ID</Typography><Typography className="mono ov-strong">{hex(slave.identity.vendor_id, 8)}</Typography></Box>
-                <Box className="kv-identity"><Typography className="section-label">产品代码</Typography><Typography className="mono ov-strong">{hex(slave.identity.product_code, 8)}</Typography></Box>
-                <Box className="kv-identity"><Typography className="section-label">修订版本</Typography><Typography className="mono ov-strong">{hex(slave.identity.revision, 8)}</Typography></Box>
+              <Box className="ov-runtime-actions">
+                <Typography className="section-label">状态请求</Typography>
+                <ButtonGroup size="small" className="overview-state-buttons">
+                  {controllableStates.map((state) => (
+                    <Button key={state} disabled={busy} variant={slave.state === state ? "contained" : "outlined"} onClick={() => requestState(state)}>{stateLabel(state)}</Button>
+                  ))}
+                </ButtonGroup>
+                <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP；停止周期通信将影响整条总线。" : busy ? "操作进行中" : ""}>
+                <Stack direction="row" gap={0.75} className="ov-repair-actions">
+                  <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("reconfig", "重配置完成")}>重配置</Button>
+                  <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("recover", "恢复并通过状态复核")}>故障恢复</Button>
+                </Stack>
+                </Tooltip>
               </Box>
             </CardContent></Card>
 
@@ -262,14 +250,24 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
               key={`${slave.position}-${registerProfile}`}
               slave={slave}
               profile={registerProfile}
-              modelControl={<FormControl size="small" fullWidth>
+              identity={<>
+                <Typography className="ov-section-title">设备身份</Typography>
+              <Box>
+                <Box className="kv-identity"><Typography className="section-label">配置地址</Typography><Typography className="mono ov-strong">{slave.configured_address === undefined ? "—" : hex(slave.configured_address)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">厂商 ID</Typography><Typography className="mono ov-strong">{hex(slave.identity.vendor_id, 8)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">产品代码</Typography><Typography className="mono ov-strong">{hex(slave.identity.product_code, 8)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">修订版本</Typography><Typography className="mono ov-strong">{hex(slave.identity.revision, 8)}</Typography></Box>
+              </Box>
+                <Divider sx={{ my: 1.5 }} />
+              </>}
+              modelControl={<Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再切换 ESC 型号；停止周期通信将影响整条总线。" : ""}><FormControl size="small" fullWidth>
                 <InputLabel>ESC 型号</InputLabel>
                 <Select label="ESC 型号" value={registerProfile} onChange={(event) => void changeEscModel(String(event.target.value))} disabled={busy || status.cycle_running || Boolean(switchingProfile)}>
                   {registerProfiles.map((profile) => <MenuItem key={profile} value={profile}>{profile}</MenuItem>)}
                 </Select>
-              </FormControl>}
-              modelNote={(status.cycle_running || switchingProfile) && <Typography variant="caption" color={status.cycle_running ? "warning.main" : "text.secondary"} className="ov-state-flow">
-                {status.cycle_running ? "停止周期通信后可切换" : `正在应用 ${switchingProfile} 并重配置从站…`}
+              </FormControl></Tooltip>}
+              modelNote={switchingProfile && <Typography variant="caption" color="text.secondary" className="ov-state-flow">
+                {`正在应用 ${switchingProfile} 并重配置从站…`}
               </Typography>}
             />
             <OverviewEeprom key={`eeprom-${slave.position}`} slave={slave} profile={registerProfile} />
@@ -280,7 +278,6 @@ function OverviewPage({ slave, slaves, status, busy, run, refresh, registerProfi
             <Typography variant="body2">排查：{alInfo.action}</Typography>
           </Alert>}
 
-          {allOp && <Alert severity="success">全部从站处于 OP，总线已就绪。</Alert>}
         </Stack>
       )}
     </>
@@ -1188,7 +1185,7 @@ export default function App() {
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
             {status.slaves.length > 1 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
             <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slave.name}>从站 {slave.position} · {slave.name}</Typography>
-            <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />
+            {page !== "overview" && <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />}
             {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refreshStates)}>刷新状态</Button>}
           </Stack>}
         <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto", p: { xs: 1.5, xl: 2 } }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto" }}>{bridgeExit && <Alert severity="error" action={bridgeExit.log_path ? <Button color="inherit" size="small" onClick={() => revealPath(bridgeExit.log_path!)}>打开日志</Button> : undefined} sx={{ mb: 1.25 }}><Typography fontWeight={700}>通信核心已退出</Typography><Typography variant="body2">{bridgeExit.message}</Typography>{bridgeExit.log_path && <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>日志：{bridgeExit.log_path}</Typography>}</Alert>}{content}</Box></Box>

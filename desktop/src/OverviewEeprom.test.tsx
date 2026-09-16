@@ -36,7 +36,7 @@ describe("overview EEPROM card", () => {
 
   it("renders collapsed by default with a single card-level disclosure", () => {
     const html = renderToStaticMarkup(<OverviewEeprom slave={slave} profile="LAN9252" />);
-    expect(html).toContain("展开详细解析");
+    expect(html).toContain("展开详情");
     expect(html).not.toContain("16-bit 值");
     expect(html.match(/aria-expanded="false"/g)).toHaveLength(1);
   });

@@ -13,24 +13,27 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .overview-cards .MuiTypography-h6 { font-size: 1rem; }
 .overview-cards .section-label { font-size: 0.72rem; }
 
-/* One equal-width track per column, so every card edge lands on a shared grid line. Rows size
-   to their own content (grid-auto-rows: auto) and cards of one row share that height. */
-.overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: auto; gap: 12px; align-items: stretch; }
-.overview-grid > .MuiCard-root { min-width: 0; height: 100%; }
-/* The ESC card is shorter than the EEPROM card beside it; keeping its own height avoids
-   stretching it into a tall empty column when the EEPROM detail tables expand. */
-.ov-self-start { align-self: start; height: auto !important; }
+/* The compact runtime strip spans both diagnostic columns. Expanded cards size independently. */
+.overview-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; align-items: stretch; }
+.overview-grid > .MuiCard-root { min-width: 0; }
+.ov-runtime { grid-column: 1 / -1; }
+.ov-runtime-facts { display: grid; grid-template-columns: max-content max-content max-content minmax(0, 1fr) max-content max-content; align-items: center; gap: 10px 16px; }
+.ov-runtime-facts > :nth-child(3), .ov-runtime-facts > :nth-child(5) { border-left: 1px solid #e7ebf2; padding-left: 20px; }
+.ov-runtime-actions { display: flex; align-items: center; gap: 16px; border-top: 1px solid #edf0f5; padding-top: 12px; margin-top: 12px; }
+.ov-runtime-actions .overview-state-buttons { width: 420px; }
+.ov-runtime-actions .overview-state-buttons .MuiButton-root { flex: 1; }
+.ov-repair-actions { margin-left: auto; }
+.ov-section-title { font-size: 13px !important; font-weight: 700 !important; color: #42536d; margin-bottom: 8px !important; }
+.overview-grid:has(.ov-expanded) { align-items: start; }
 
 /* Value cells size to their own content, so a chip or a number is never stretched. */
-.kv-compact { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 12px; align-items: center; }
-.kv-compact > * { min-width: 0; justify-self: start; }
+.kv-compact { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 0 16px; align-items: center; }
+.kv-compact > * { min-width: 0; justify-self: start; min-height: 32px; display: flex; align-items: center; }
 .kv-compact .section-label { align-self: center; }
-/* Identity lines read as one sentence: label right aligned, value left aligned beside it.
-   Every row keeps the same box; only the separator is dropped on the last one, so the rows
-   never differ in height. */
-.kv-identity { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: baseline; padding-bottom: 5px; border-bottom: 1px solid #f0f2f7; }
+/* Identity and hardware facts share one value-column origin and row height. */
+.kv-identity { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 6px 16px; align-items: center; min-height: 32px; border-bottom: 1px solid #f0f2f7; }
 .kv-identity:last-child { border-bottom: 0; }
-.kv-identity > .section-label { text-align: right; }
+.kv-identity > .section-label { text-align: left; }
 .ov-strong { font-weight: 700; }
 .ov-state-flow { display: block; margin-top: 6px; line-height: 1.45; }
 .ov-card-head { margin-bottom: 10px; }
@@ -53,7 +56,6 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .ov-raw-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 6px 10px; background: #f5f7fb; border-radius: 5px; }
 .ov-hexline { letter-spacing: 0.06em; overflow-wrap: anywhere; }
 .ov-binary { letter-spacing: 0.08em; }
-.ov-raw-hint { display: block; margin-top: 6px; line-height: 1.5; }
 .ov-group-title { display: block; margin-bottom: 4px; color: #647087; }
 .ov-group-title b { color: #172033; }
 
@@ -68,11 +70,12 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
    predictable so both sides of the card line up and the register suffix stays on one line. */
 .ov-pair-table .MuiTableCell-root { padding: 8px 10px; }
 .ov-pair-table .MuiTableCell-root:first-of-type { width: 40%; white-space: nowrap; }
-.ov-card-tail { margin-top: auto; }
+.ov-card-tail { margin-top: auto; padding-top: 12px; }
 .ov-card-body { display: flex; flex-direction: column; height: 100%; }
-/* The card's two summaries sit side by side; the narrow one only carries short signal names. */
-.ov-eeprom-pair { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); column-gap: 28px; row-gap: 12px; align-items: start; }
+/* Stack unequal summary groups to avoid an empty half-card beside the PDI rows. */
+.ov-eeprom-pair { display: grid; gap: 16px; }
 .ov-eeprom-pair > section { min-width: 0; }
+.ov-eeprom-pair > section + section { border-top: 1px solid #edf0f5; padding-top: 14px; }
 .ov-eeprom-details { display: grid; gap: 12px; padding-top: 10px; margin-top: 12px; border-top: 1px solid #edf0f5; }
 
 .overview-state-buttons .MuiButton-root { min-height: 30px; padding: 4px 8px; font-size: 12px; }

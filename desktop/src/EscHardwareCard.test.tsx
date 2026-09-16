@@ -21,8 +21,20 @@ describe("hardware scan snapshot card", () => {
     expect(html).not.toContain("非实测");
     expect(html).not.toContain("不作状态判断");
     expect(html).not.toContain("不是 EEPROM Revision");
-    expect(html).toContain("展开bit 解析");
+    expect(html).toContain("展开详情");
   });
+  it.each([
+    ["LAN9252", "01 00 52 92 3C 00 00 00", "4–512 KiB"],
+    ["LAN9252", "01 00 52 92 00 00 00 00", "128 B–2 KiB"],
+    ["LAN9253", "01 00 53 92 08 00 00 00", "4–512 KiB"],
+    ["LAN9253", "01 00 53 92 00 00 00 00", "128 B–2 KiB"],
+  ])("shows the scanned %s EEPROM capacity range", (profile, raw, capacity) => {
+    const html = renderToStaticMarkup(<EscHardwareCard slave={{ ...slave, esc_hardware: raw }} profile={profile} />);
+    expect(html).toContain("EEPROM size strap");
+    expect(html).toContain(capacity);
+    expect(html.indexOf(">Chip ID<")).toBeLessThan(html.indexOf(">硅版本<"));
+  });
+
   it("keeps failures and unavailable scan data distinct from zero", () => {
     const html = renderToStaticMarkup(<EscHardwareCard slave={{ ...slave, esc_hardware: null, esc_hardware_error: "timeout" }} profile="LAN9253" />);
     expect(html).toContain("读取失败");
@@ -36,6 +48,7 @@ describe("hardware scan snapshot card", () => {
     expect(etHtml).toContain("0x0E00–0x0E07");
     expect(etHtml).toContain("4C 24");
     expect(etHtml).not.toContain("Reserved");
+    expect(etHtml).not.toContain("EEPROM size strap");
     expect(renderToStaticMarkup(<EscHardwareCard slave={{ ...et, esc_hardware: "4C 24" }} profile="LAN9253" />)).toContain("当前扫描无可用数据");
   });
 });
