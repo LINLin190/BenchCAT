@@ -72,7 +72,7 @@ import { OverviewEeprom } from "./OverviewEeprom";
 import { CardHeading } from "./OverviewDisclosure";
 import { EscHardwareCard } from "./EscHardwareCard";
 import { alStatusInfo, type AlStatusLanguage } from "./alStatus";
-import { BridgeRequestError, bridgeRequest, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
+import { BridgeRequestError, bridgeRequest, demoModeAvailable, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
 import { minimumBusState } from "./busState";
 import { operationStore } from "./operationStore";
 import { decodeConfigData, loadEepromAutoReset, normalizeConfigData, saveEepromAutoReset } from "./eepromConfig";
@@ -1213,10 +1213,10 @@ export default function App() {
       <Divider />
       <DialogContent sx={{ minHeight: 360 }}>
         {settingsTab === 0 ? <Stack spacing={2} sx={{ pt: 0.5 }}>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}>
+          {demoModeAvailable && <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}>
             <Box><Typography fontWeight={700}>Demo 模式</Typography><Typography variant="body2" color="text.secondary">使用模拟从站，不访问实际 EtherCAT 网卡。</Typography></Box>
             <Switch checked={status.mode === "demo"} disabled={!bridgeAvailable || eepromExclusive || status.connected} onChange={(e) => switchMode(e.target.checked)} />
-          </Box>
+          </Box>}
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>AL 状态码语言</Typography><Typography variant="body2" color="text.secondary">切换概览页 AL 状态名称、说明与排查建议。</Typography></Box><FormControl size="small" sx={{ width: 150 }}><InputLabel>Language</InputLabel><Select label="Language" value={alLanguage} onChange={(event) => { const value = event.target.value as AlStatusLanguage; setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }}><MenuItem value="zh">中文</MenuItem><MenuItem value="en">English</MenuItem></Select></FormControl></Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>EEPROM 写入后复位 ESC</Typography><Typography variant="body2" color="text.secondary">用于 XML 烧录和 BIN 恢复；关闭后仍会完整回读校验，但不执行 ESC RES 复位、重新发现和重新加载复核。</Typography></Box><Switch checked={eepromAutoReset} disabled={eepromExclusive} onChange={(event) => setEepromAutoReset(saveEepromAutoReset(event.target.checked))} /></Box>
           {status.connected && <Alert severity="info">切换模式前请停止周期通信并断开网卡。</Alert>}

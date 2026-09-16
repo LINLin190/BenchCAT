@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --mode browser",
+    "dev:tauri": "vite --mode tauri",
     "test": "vitest run",
     "build": "tsc --noEmit && vite build",
     "build:bridge": "pwsh -NoLogo -NoProfile -File ../packaging/build-bridge.ps1",
