@@ -14,7 +14,7 @@ from ..models import (
     SlaveIdentity,
     SlaveInfo,
 )
-from .base import CommunicationError
+from .base import CommunicationError, EepromReadback
 
 
 def _demo_eeprom(identity: SlaveIdentity, size: int = 2048) -> bytearray:
@@ -235,6 +235,9 @@ class MockBackend:
         self._check(position)
         start = word_address * 2
         return bytes(self._eeprom[position - 1][start : start + 4]).ljust(4, b"\xff")
+
+    def eeprom_read_checked(self, position: int, word_address: int) -> EepromReadback:
+        return EepromReadback(self.eeprom_read(position, word_address), 1, 0)
 
     def eeprom_write(self, position: int, word_address: int, data: bytes) -> None:
         self._check(position)

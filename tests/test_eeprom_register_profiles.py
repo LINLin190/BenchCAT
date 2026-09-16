@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import pytest
 
+from ethercat_debug_tool.backends.base import CommunicationError, EepromReadback
 from ethercat_debug_tool.backends.mock import MockBackend
 from ethercat_debug_tool.backends.pysoem_backend import (
     _chip_from_identification_registers,
@@ -57,6 +58,73 @@ def test_mock_flash_does_not_create_backup_and_fully_verifies(sample_esi) -> Non
             "reset",
             "reload-verify",
         } <= stages
+    finally:
+        backend.disconnect()
+
+
+@pytest.mark.parametrize("first_read", ["mismatch", "wkc_error"])
+def test_flash_recovers_when_second_word_read_is_correct(sample_esi, monkeypatch, first_read) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        slave = backend.scan()[0]
+        device = replace(sample_esi.devices[0], vendor_id=slave.identity.vendor_id,
+                         product_code=slave.identity.product_code, revision=slave.identity.revision)
+        target = SiiGenerator().generate(device).image
+        backend._eeprom[0][0:2] = b"\x00\x00"
+        original_read = backend.eeprom_read_checked
+        calls = 0
+        sleeps = []
+
+        def transient_read(position, word):
+            nonlocal calls
+            result = original_read(position, word)
+            if word == 0:
+                calls += 1
+                if calls == 1:
+                    if first_read == "wkc_error":
+                        raise CommunicationError("FPRD WKC != 1")
+                    return EepromReadback(b"\x00\x00" + result.data[2:], 1, 0x00C0)
+            return result
+
+        monkeypatch.setattr(backend, "eeprom_read_checked", transient_read)
+        result = EepromService(backend, stability_wait_s=0, sleep=sleeps.append).flash(
+            1, target, device, auto_reset=False
+        )
+        assert result.image_success
+        assert calls == 2
+        assert sleeps == [0.02, 0]
+    finally:
+        backend.disconnect()
+
+
+def test_flash_persistent_mismatch_finishes_writes_then_reports_diagnostics(sample_esi, monkeypatch) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        slave = backend.scan()[0]
+        device = replace(sample_esi.devices[0], vendor_id=slave.identity.vendor_id,
+                         product_code=slave.identity.product_code, revision=slave.identity.revision)
+        target = SiiGenerator().generate(device).image
+        backend._eeprom[0][0:4] = b"\x00\x00\x00\x00"
+        original_write = backend.eeprom_write
+        writes = []
+
+        def failed_first_write(position, word, data):
+            writes.append(word)
+            if word != 0:
+                original_write(position, word, data)
+
+        monkeypatch.setattr(backend, "eeprom_write", failed_first_write)
+        result = EepromService(backend, stability_wait_s=0, sleep=lambda _: None).flash(
+            1, target, device, auto_reset=False
+        )
+        assert writes[:2] == [0, 1]
+        assert len(writes) > 2
+        assert not result.image_success
+        assert result.comparison.differing_bytes > 0
+        for field in ("expected=", "actual=", "WKC=1", "word_retries=3", "full_retries=2", "0x0502="):
+            assert field in result.image_verification
     finally:
         backend.disconnect()
 

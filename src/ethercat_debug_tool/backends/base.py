@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from ..models import (
@@ -25,6 +26,13 @@ class CommunicationError(BackendError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class EepromReadback:
+    data: bytes
+    wkc: int
+    status: int
+
+
 @runtime_checkable
 class EtherCatBackend(Protocol):
     @property
@@ -48,6 +56,7 @@ class EtherCatBackend(Protocol):
     def exchange_process_data(self, timeout_us: int) -> ProcessDataSnapshot: ...
     def set_output(self, position: int, data: bytes) -> None: ...
     def eeprom_read(self, position: int, word_address: int) -> bytes: ...
+    def eeprom_read_checked(self, position: int, word_address: int) -> EepromReadback: ...
     def eeprom_write(self, position: int, word_address: int, data: bytes) -> None: ...
     def register_read(self, position: int, address: int, size: int, timeout_us: int) -> bytes: ...
     def register_write(self, position: int, address: int, data: bytes, timeout_us: int) -> None: ...

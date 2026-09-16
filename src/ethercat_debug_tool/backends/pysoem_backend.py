@@ -17,7 +17,7 @@ from ..models import (
     SlaveIdentity,
     SlaveInfo,
 )
-from .base import CommunicationError, EnvironmentError
+from .base import CommunicationError, EepromReadback, EnvironmentError
 
 # Discovery must remain bounded when a slave does not implement an optional
 # ESC register.  EtherCAT round trips are normally below 1 ms; 2 ms leaves
@@ -281,8 +281,10 @@ class PysoemBackend:
             pdo_size_source="cache" if input_size is not None else "unknown",
         )
 
-    def _read_eeprom_status(self, slave: Any) -> int:
-        data = slave._fprd(0x0502, 2, DISCOVERY_FPRD_TIMEOUT_US)
+    def _read_eeprom_status(
+        self, slave: Any, timeout_us: int = DISCOVERY_FPRD_TIMEOUT_US
+    ) -> int:
+        data = slave._fprd(0x0502, 2, timeout_us)
         if len(data) != 2:
             raise CommunicationError("EEPROM 状态寄存器读取不完整")
         return int.from_bytes(data, "little")
@@ -652,11 +654,69 @@ class PysoemBackend:
             raise ValueError(f"Output must be exactly {expected} bytes")
         slave.output = bytes(data)
 
-    def eeprom_read(self, position: int, word_address: int) -> bytes:
+    def eeprom_read_checked(self, position: int, word_address: int) -> EepromReadback:
+        slave = self._slave(position)
+        timeout_us = 20_000
+        status: int | None = None
+        restore: int | None = None
         try:
-            return self._slave(position).eeprom_read(word_address)
+            status = self._read_eeprom_status(slave, timeout_us)
+            ownership = slave._fprd(0x0500, 2, timeout_us)
+            if len(ownership) != 2:
+                raise CommunicationError("EEPROM 控制权读取不完整")
+            restore = ownership[0] & 3
+            if ownership[1] & 1:
+                restore = (restore | 1) & ~2
+            slave._fpwr(0x0500, b"\x02", timeout_us)
+            slave._fpwr(0x0500, b"\x00", timeout_us)
+            access = slave._fprd(0x0500, 2, timeout_us)
+            if len(access) != 2 or access[0] & 1 or access[1] & 1:
+                raise CommunicationError("未取得 EEPROM 读取控制权")
+            status = self._read_eeprom_status(slave, timeout_us)
+            deadline = time.monotonic() + 0.02
+            while status & 0x8000:
+                if time.monotonic() >= deadline:
+                    raise CommunicationError("EEPROM Busy 超时")
+                status = self._read_eeprom_status(slave, timeout_us)
+            if status & 0x6000:
+                slave._fpwr(0x0502, b"\x00\x00", timeout_us)
+                status = self._read_eeprom_status(slave, timeout_us)
+                if status & 0x6000:
+                    raise CommunicationError("EEPROM 错误位未清除")
+            slave._fpwr(0x0504, word_address.to_bytes(4, "little"), timeout_us)
+            slave._fpwr(0x0502, b"\x00\x01", timeout_us)
+            deadline = time.monotonic() + 0.02
+            while True:
+                status = self._read_eeprom_status(slave, timeout_us)
+                if not status & 0x8000:
+                    break
+                if time.monotonic() >= deadline:
+                    raise CommunicationError("EEPROM Busy 超时")
+            if status & 0x6000:
+                raise CommunicationError("EEPROM 命令或写保护错误")
+            data = slave._fprd(0x0508, 4, timeout_us)
+            if len(data) != 4:
+                raise CommunicationError("EEPROM 数据回读不完整")
+            # pySOEM _fprd/_fpwr raise WkcError unless the actual WKC is exactly 1.
+            return EepromReadback(data, 1, status)
         except Exception as exc:
-            raise self._normalize_error(exc, f"EEPROM read word 0x{word_address:04X}") from exc
+            raise self._normalize_error(
+                exc,
+                f"EEPROM read word 0x{word_address:04X} (FPRD/FPWR WKC must equal 1; "
+                f"0x0502={f'0x{status:04X}' if status is not None else 'unavailable'})",
+            ) from exc
+        finally:
+            if restore is not None:
+                try:
+                    slave._fpwr(0x0500, bytes([restore]), timeout_us)
+                    actual = slave._fprd(0x0500, 1, timeout_us)
+                    if len(actual) != 1 or actual[0] & 3 != restore:
+                        raise CommunicationError("EEPROM 控制权归还复核失败")
+                except Exception as exc:
+                    raise CommunicationError(f"EEPROM 控制权归还失败：{exc}") from exc
+
+    def eeprom_read(self, position: int, word_address: int) -> bytes:
+        return self.eeprom_read_checked(position, word_address).data
 
     def eeprom_write(self, position: int, word_address: int, data: bytes) -> None:
         if len(data) != 2:

@@ -64,6 +64,29 @@ def test_prefix_reads_words_and_restores_owner(size, owner):
     assert slave.events[-1] == ("read", 0x500, 1)
 
 
+def test_checked_read_uses_esc_command_and_restores_owner():
+    slave = EepromSlave(owner=b"\x01\x01")
+    backend = PysoemBackend()
+    backend._master = SimpleNamespace(slaves=[slave])
+    backend._connected = True
+    readback = backend.eeprom_read_checked(1, 2)
+    assert readback.data == slave.data[4:8]
+    assert readback.wkc == 1
+    assert readback.status & 0x8000 == 0
+    assert slave.owner[0] == 1
+    assert ("write", 0x504, (2).to_bytes(4, "little")) in slave.events
+
+
+def test_checked_read_reports_command_error_and_status():
+    slave = EepromSlave(failure="command")
+    backend = PysoemBackend()
+    backend._master = SimpleNamespace(slaves=[slave])
+    backend._connected = True
+    with pytest.raises(RuntimeError, match="0x0502=0x20C0"):
+        backend.eeprom_read_checked(1, 0)
+    assert slave.owner[0] == 1
+
+
 @pytest.mark.parametrize("failure", ["read", "short", "command", "busy"])
 def test_read_failures_still_restore_owner(failure):
     slave = EepromSlave(failure=failure)

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ..backends.base import EtherCatBackend
+from ..backends.base import CommunicationError, EtherCatBackend
 from ..esi.parser import EsiDevice
 from ..models import EepromBackup, OperationProgress, SlaveInfo
 from ..sii.parser import SiiImage, SiiParser
@@ -110,7 +110,7 @@ class EepromService:
         return capacity
 
     def read_capacity(self, position: int) -> int:
-        size_and_version = self.backend.eeprom_read(position, 0x3E)
+        size_and_version = self._read_chunk(position, 0x3E)
         if len(size_and_version) < 2:
             raise RuntimeError("EEPROM size word could not be read")
         return self.capacity_from_size_word(int.from_bytes(size_and_version[:2], "little"))
@@ -119,11 +119,21 @@ class EepromService:
         """Read the eight-word ESC configuration area without scanning the full EEPROM."""
         result = bytearray()
         for word_address in range(0, 8, 2):
-            chunk = self.backend.eeprom_read(position, word_address)
+            chunk = self._read_chunk(position, word_address)
             if len(chunk) != 4:
                 raise RuntimeError(f"EEPROM returned {len(chunk)} bytes; expected four")
             result.extend(chunk)
         return bytes(result)
+
+    def _read_chunk(self, position: int, word_address: int) -> bytes:
+        for attempt in range(3):
+            try:
+                return self.backend.eeprom_read(position, word_address)
+            except CommunicationError:
+                if attempt == 2:
+                    raise
+                self.sleep(0.02)
+        raise AssertionError("unreachable")
 
     def read_full(
         self,
@@ -139,7 +149,7 @@ class EepromService:
         result = bytearray()
         for byte_offset in range(0, capacity, 4):
             self._check_cancel(cancel)
-            chunk = self.backend.eeprom_read(position, byte_offset // 2)
+            chunk = self._read_chunk(position, byte_offset // 2)
             if len(chunk) != 4:
                 raise RuntimeError(f"EEPROM returned {len(chunk)} bytes; expected four")
             result.extend(chunk)
@@ -251,11 +261,22 @@ class EepromService:
                     cancellable=False,
                 )
             )
+        word_retry_counts: dict[int, int] = {}
         for completed, word in enumerate(words, 1):
             expected = target[word * 2 : word * 2 + 2]
             self.backend.eeprom_write(position, word, expected)
-            if self.backend.eeprom_read(position, word)[:2] != expected:
-                raise RuntimeError(f"EEPROM batch verification failed at word 0x{word:04X}")
+            for retry in range(4):
+                try:
+                    readback_word = self.backend.eeprom_read_checked(position, word)
+                except CommunicationError:
+                    pass  # The final full-image read decides whether programming succeeded.
+                else:
+                    if readback_word.data[:2] == expected:
+                        break
+                if retry < 3:
+                    self.sleep(0.02)
+            if retry:
+                word_retry_counts[word] = retry
             progress(
                 OperationProgress(
                     "eeprom-flash",
@@ -284,22 +305,49 @@ class EepromService:
                 "eeprom-flash", "stability-wait", 1, 1, "EEPROM 已稳定", cancellable=False
             )
         )
-        readback = self.read_full(
-            position,
-            progress=progress,
-            cancel=lambda: False,
-            progress_operation="eeprom-flash",
-            progress_stage="full-verify",
-            cancellable=False,
-        )
-        comparison = compare_images(target, readback)
-        readback_parsed = self.parser.parse(readback)
-        semantic_valid = self.semantic_matches(readback_parsed, device)
+        for attempt in range(3):
+            if attempt:
+                self.sleep(0.02)
+            readback = self.read_full(
+                position,
+                progress=progress,
+                cancel=lambda: False,
+                progress_operation="eeprom-flash",
+                progress_stage="full-verify",
+                cancellable=False,
+            )
+            comparison = compare_images(target, readback)
+            if comparison.equal:
+                break
+        try:
+            readback_parsed = self.parser.parse(readback)
+        except ValueError:
+            readback_parsed = None
+        sii_valid = readback_parsed is not None
+        semantic_valid = readback_parsed is not None and self.semantic_matches(readback_parsed, device)
         verification = (
             "逐字节、SHA-256、SII 结构与 XML 身份语义均通过"
             if (comparison.equal and semantic_valid)
             else "镜像验证失败"
         )
+        if not comparison.equal and comparison.first_difference is not None:
+            word = comparison.first_difference // 2
+            expected = target[word * 2 : word * 2 + 2]
+            actual = readback[word * 2 : word * 2 + 2]
+            try:
+                diagnostic = self.backend.eeprom_read_checked(position, word)
+                wkc = str(diagnostic.wkc)
+                status = f"0x{diagnostic.status:04X}"
+            except Exception:
+                wkc, status = "unavailable", "unavailable"
+            verification = (
+                f"EEPROM full verification failed at word 0x{word:04X}: "
+                f"expected={expected.hex().upper()} actual={actual.hex().upper()} "
+                f"WKC={wkc} word_retries={word_retry_counts.get(word, 0)} "
+                f"full_retries=2 0x0502={status}; "
+                f"target_sha256={comparison.target_sha256} "
+                f"readback_sha256={comparison.readback_sha256}"
+            )
         reset: tuple[bool, bool, bool] | None = None
         rediscovered: bool | None = None
         reload_verified: bool | None = None
@@ -343,7 +391,7 @@ class EepromService:
             len(readback),
             total,
             comparison,
-            True,
+            sii_valid,
             semantic_valid,
             verification,
             reset,
