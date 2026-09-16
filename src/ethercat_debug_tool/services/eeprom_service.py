@@ -70,7 +70,7 @@ class EepromService:
         self,
         backend: EtherCatBackend,
         *,
-        stability_wait_s: float = 1.0,
+        stability_wait_s: float = 0.5,
         rediscovery_timeout_s: float = 3.0,
         rediscovery_poll_s: float = 0.1,
         sleep: Callable[[float], None] = time.sleep,
@@ -125,10 +125,10 @@ class EepromService:
             result.extend(chunk)
         return bytes(result)
 
-    def _read_chunk(self, position: int, word_address: int) -> bytes:
+    def _read_chunk(self, position: int, word_address: int, byte_count: int = 4) -> bytes:
         for attempt in range(3):
             try:
-                return self.backend.eeprom_read(position, word_address)
+                return self.backend.eeprom_read_block(position, word_address, byte_count).data
             except CommunicationError:
                 if attempt == 2:
                     raise
@@ -147,17 +147,18 @@ class EepromService:
     ) -> bytes:
         capacity = self.read_capacity(position)
         result = bytearray()
-        for byte_offset in range(0, capacity, 4):
+        for byte_offset in range(0, capacity, 128):
             self._check_cancel(cancel)
-            chunk = self._read_chunk(position, byte_offset // 2)
-            if len(chunk) != 4:
-                raise RuntimeError(f"EEPROM returned {len(chunk)} bytes; expected four")
+            byte_count = min(128, capacity - byte_offset)
+            chunk = self._read_chunk(position, byte_offset // 2, byte_count)
+            if len(chunk) != byte_count:
+                raise RuntimeError(f"EEPROM returned {len(chunk)} bytes; expected {byte_count}")
             result.extend(chunk)
             progress(
                 OperationProgress(
                     progress_operation,
                     progress_stage,
-                    min(byte_offset + 4, capacity),
+                    byte_offset + byte_count,
                     capacity,
                     f"0x{byte_offset:04X}",
                     cancellable,
@@ -250,6 +251,20 @@ class EepromService:
                     "eeprom-flash", "write-verify", 1, 1, "无需写入差异 Word", cancellable=False
                 )
             )
+            comparison = compare_images(target, current)
+            current_image = self.parser.parse(current)
+            semantic_valid = self.semantic_matches(current_image, device)
+            return EepromFlashResult(
+                len(current),
+                0,
+                comparison,
+                True,
+                semantic_valid,
+                "逐字节、SHA-256、SII 结构与 XML 身份语义均通过" if semantic_valid else "镜像验证失败",
+                None,
+                None,
+                None,
+            )
         else:
             progress(
                 OperationProgress(
@@ -288,7 +303,7 @@ class EepromService:
                 )
             )
 
-        # This wait is intentionally not cancellable: it is a mandatory stability stage.
+        # After writes, allow the EEPROM to settle before full-image verification.
         progress(
             OperationProgress(
                 "eeprom-flash",

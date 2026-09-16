@@ -253,7 +253,7 @@ class BridgeRuntime:
         mode: BackendMode = BackendMode.REAL,
         *,
         audit_path: Path | None = None,
-        stability_wait_s: float = 1.0,
+        stability_wait_s: float = 0.5,
         rediscovery_timeout_s: float = 3.0,
         rediscovery_poll_s: float = 0.1,
     ) -> None:

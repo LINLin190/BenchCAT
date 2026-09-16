@@ -654,11 +654,16 @@ class PysoemBackend:
             raise ValueError(f"Output must be exactly {expected} bytes")
         slave.output = bytes(data)
 
-    def eeprom_read_checked(self, position: int, word_address: int) -> EepromReadback:
+    def eeprom_read_block(
+        self, position: int, word_address: int, byte_count: int
+    ) -> EepromReadback:
+        if byte_count <= 0 or byte_count % 2:
+            raise ValueError("EEPROM read length must be a positive whole-word size")
         slave = self._slave(position)
         timeout_us = 20_000
         status: int | None = None
         restore: int | None = None
+        active_word = word_address
         try:
             status = self._read_eeprom_status(slave, timeout_us)
             ownership = slave._fprd(0x0500, 2, timeout_us)
@@ -683,26 +688,32 @@ class PysoemBackend:
                 status = self._read_eeprom_status(slave, timeout_us)
                 if status & 0x6000:
                     raise CommunicationError("EEPROM 错误位未清除")
-            slave._fpwr(0x0504, word_address.to_bytes(4, "little"), timeout_us)
-            slave._fpwr(0x0502, b"\x00\x01", timeout_us)
-            deadline = time.monotonic() + 0.02
-            while True:
-                status = self._read_eeprom_status(slave, timeout_us)
-                if not status & 0x8000:
-                    break
-                if time.monotonic() >= deadline:
-                    raise CommunicationError("EEPROM Busy 超时")
-            if status & 0x6000:
-                raise CommunicationError("EEPROM 命令或写保护错误")
-            data = slave._fprd(0x0508, 4, timeout_us)
-            if len(data) != 4:
-                raise CommunicationError("EEPROM 数据回读不完整")
+            read_size = 8 if status & 0x40 else 4
+            result = bytearray()
+            while len(result) < byte_count:
+                active_word = word_address + len(result) // 2
+                slave._fpwr(0x0504, active_word.to_bytes(4, "little"), timeout_us)
+                slave._fpwr(0x0502, b"\x00\x01", timeout_us)
+                deadline = time.monotonic() + 0.02
+                while True:
+                    status = self._read_eeprom_status(slave, timeout_us)
+                    if not status & 0x8000:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise CommunicationError("EEPROM Busy 超时")
+                if status & 0x6000:
+                    raise CommunicationError("EEPROM 命令或写保护错误")
+                chunk_size = min(read_size, byte_count - len(result))
+                chunk = slave._fprd(0x0508, chunk_size, timeout_us)
+                if len(chunk) != chunk_size:
+                    raise CommunicationError("EEPROM 数据回读不完整")
+                result.extend(chunk)
             # pySOEM _fprd/_fpwr raise WkcError unless the actual WKC is exactly 1.
-            return EepromReadback(data, 1, status)
+            return EepromReadback(bytes(result), 1, status)
         except Exception as exc:
             raise self._normalize_error(
                 exc,
-                f"EEPROM read word 0x{word_address:04X} (FPRD/FPWR WKC must equal 1; "
+                f"EEPROM read word 0x{active_word:04X} (FPRD/FPWR WKC must equal 1; "
                 f"0x0502={f'0x{status:04X}' if status is not None else 'unavailable'})",
             ) from exc
         finally:
@@ -714,6 +725,9 @@ class PysoemBackend:
                         raise CommunicationError("EEPROM 控制权归还复核失败")
                 except Exception as exc:
                     raise CommunicationError(f"EEPROM 控制权归还失败：{exc}") from exc
+
+    def eeprom_read_checked(self, position: int, word_address: int) -> EepromReadback:
+        return self.eeprom_read_block(position, word_address, 4)
 
     def eeprom_read(self, position: int, word_address: int) -> bytes:
         return self.eeprom_read_checked(position, word_address).data

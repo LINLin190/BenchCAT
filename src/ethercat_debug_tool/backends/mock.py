@@ -239,6 +239,13 @@ class MockBackend:
     def eeprom_read_checked(self, position: int, word_address: int) -> EepromReadback:
         return EepromReadback(self.eeprom_read(position, word_address), 1, 0)
 
+    def eeprom_read_block(
+        self, position: int, word_address: int, byte_count: int
+    ) -> EepromReadback:
+        self._check(position)
+        start = word_address * 2
+        return EepromReadback(bytes(self._eeprom[position - 1][start : start + byte_count]), 1, 0)
+
     def eeprom_write(self, position: int, word_address: int, data: bytes) -> None:
         self._check(position)
         if len(data) != 2:

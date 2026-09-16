@@ -666,6 +666,15 @@ def test_esi_full_flash_flow_auto_init_and_config_override(tmp_path, workspace) 
         assert flash.reset_sequence == (True, True, True)
         assert flash.rediscovered is True and flash.reload_verified is True
 
+        repeated = runtime.dispatch(
+            "eeprom_flash",
+            {"position": 1, "target_id": target["target_id"], "auto_reset": True},
+        )
+        assert repeated["success"] is True
+        assert repeated["result"].words_written == 0
+        assert repeated["result"].reset_sequence is None
+        assert repeated["result"].reload_verified is None
+
         read = runtime.dispatch("eeprom_read", {"position": 1, "target_id": target["target_id"]})
         assert read["sii_valid"] is True
         assert read["comparison"].equal is True
@@ -674,7 +683,8 @@ def test_esi_full_flash_flow_auto_init_and_config_override(tmp_path, workspace) 
         assert audit[-1]["action"] == "eeprom_flash"
         assert audit[-1]["outcome"] == "succeeded"
         assert audit[-1]["details"]["vendor_id"] == loaded["vendor_id"]
-        assert audit[-1]["details"]["auto_init"] is True
+        assert audit[-2]["details"]["auto_init"] is True
+        assert audit[-1]["details"]["auto_init"] is False
     finally:
         runtime.shutdown()
 

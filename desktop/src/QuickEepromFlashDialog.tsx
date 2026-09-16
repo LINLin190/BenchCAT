@@ -57,7 +57,7 @@ interface LibraryResult {
 
 interface FlashPayload {
   success: boolean;
-  result: { image_verification: string; reload_verified?: boolean };
+  result: { image_verification: string; reload_verified?: boolean; words_written: number };
 }
 
 export interface EepromDetailSelection {
@@ -275,6 +275,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
       const reloadFailed = payload.result.reload_verified === false;
       const text = reloadFailed
         ? "镜像校验完成；复位后的重新加载复核未通过。"
+        : payload.result.words_written === 0 ? "烧录校验已完成。"
         : autoResetEsc ? "烧录、完整回读和校验已完成。" : "烧录与完整回读校验已完成；未复位 ESC。";
       setResult({ severity: reloadFailed ? "warning" : "success", text });
       setProgress({ operation: "eeprom-flash", stage: reloadFailed ? "烧录完成，重新加载复核未通过" : "烧录并校验完成", completed: 100, total: 100, percent: 100, detail: text, tone: reloadFailed ? "info" : "success", cancellable: false });
@@ -436,7 +437,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     <Divider />
     <DialogActions sx={{ px: 2, py: 1.25, justifyContent: "space-between" }}>
       <Button disabled={!esi || operationInProgress} onClick={() => esi && onOpenDetails({ path: esi.path, ordinal, configData: parsedConfig.formatted ?? configData })}>进入 EEPROM 详情</Button>
-      <Stack direction="row" gap={1} alignItems="center"><Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420, textAlign: "right" }}>{blocker || (autoResetEsc ? "烧录后已自动复位 ESC" : "烧录后不复位 ESC")}</Typography><Button disabled={operationInProgress} onClick={() => handleClose()}>取消</Button><Button variant="contained" color="error" startIcon={operationInProgress ? <CircularProgress size={16} color="inherit" /> : <MemoryRounded />} disabled={Boolean(blocker)} onClick={flash}>烧录</Button></Stack>
+      <Stack direction="row" gap={1} alignItems="center"><Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420, textAlign: "right" }}>{blocker || (autoResetEsc ? "有写入时自动复位 ESC" : "烧录后不复位 ESC")}</Typography><Button disabled={operationInProgress} onClick={() => handleClose()}>取消</Button><Button variant="contained" color="error" startIcon={operationInProgress ? <CircularProgress size={16} color="inherit" /> : <MemoryRounded />} disabled={Boolean(blocker)} onClick={flash}>烧录</Button></Stack>
     </DialogActions>
   </Dialog>;
 }

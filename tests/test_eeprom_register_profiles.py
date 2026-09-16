@@ -27,6 +27,25 @@ def test_eeprom_rediscovery_defaults_are_bounded_for_quick_recovery() -> None:
     assert service.rediscovery_poll_s == 0.1
 
 
+def test_full_read_uses_bounded_blocks(monkeypatch) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        backend.scan()
+        original_read = backend.eeprom_read_block
+        requests = []
+
+        def tracked_read(position, word, byte_count):
+            requests.append((word, byte_count))
+            return original_read(position, word, byte_count)
+
+        monkeypatch.setattr(backend, "eeprom_read_block", tracked_read)
+        assert len(EepromService(backend).read_full(1)) == 2048
+        assert requests == [(0x3E, 4)] + [(word, 128) for word in range(0, 1024, 64)]
+    finally:
+        backend.disconnect()
+
+
 def test_mock_flash_does_not_create_backup_and_fully_verifies(sample_esi) -> None:
     backend = MockBackend()
     backend.connect("demo0")
@@ -58,6 +77,73 @@ def test_mock_flash_does_not_create_backup_and_fully_verifies(sample_esi) -> Non
             "reset",
             "reload-verify",
         } <= stages
+    finally:
+        backend.disconnect()
+
+
+def test_unchanged_flash_skips_wait_reset_and_duplicate_read(sample_esi, monkeypatch) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        slave = backend.scan()[0]
+        device = replace(
+            sample_esi.devices[0],
+            vendor_id=slave.identity.vendor_id,
+            product_code=slave.identity.product_code,
+            revision=slave.identity.revision,
+        )
+        target = SiiGenerator().generate(device).image
+        backend._eeprom[0][:] = target
+        reads = []
+        sleeps = []
+        progress = []
+        original_read = backend.eeprom_read_block
+
+        def tracked_read(position, word, byte_count):
+            reads.append((word, byte_count))
+            return original_read(position, word, byte_count)
+
+        def unexpected_write(*args):
+            pytest.fail("An unchanged image must not be written or reset")
+
+        monkeypatch.setattr(backend, "eeprom_read_block", tracked_read)
+        monkeypatch.setattr(backend, "eeprom_write", unexpected_write)
+        monkeypatch.setattr(backend, "register_write", unexpected_write)
+        result = EepromService(backend, sleep=sleeps.append).flash(
+            1, target, device, auto_reset=True, progress=progress.append
+        )
+        assert result.image_success and result.words_written == 0
+        assert result.comparison.target_sha256 == result.comparison.readback_sha256
+        assert result.reset_sequence is None and result.reload_verified is None
+        assert len(reads) == 18  # Two capacity probes plus one complete 2 KiB read.
+        assert sleeps == []
+        assert {item.stage for item in progress} == {"read-current", "write-verify"}
+        assert "镜像已一致" not in result.image_verification
+    finally:
+        backend.disconnect()
+
+
+def test_changed_flash_waits_half_second_before_full_verification(sample_esi) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        slave = backend.scan()[0]
+        device = replace(
+            sample_esi.devices[0],
+            vendor_id=slave.identity.vendor_id,
+            product_code=slave.identity.product_code,
+            revision=slave.identity.revision,
+        )
+        target = SiiGenerator().generate(device).image
+        backend._eeprom[0][:] = target
+        backend._eeprom[0][0] ^= 0xFF
+        sleeps = []
+        result = EepromService(backend, sleep=sleeps.append).flash(
+            1, target, device, auto_reset=False
+        )
+        assert result.image_success and result.words_written == 1
+        assert sleeps == [0.5]
+        assert result.reset_sequence is None
     finally:
         backend.disconnect()
 

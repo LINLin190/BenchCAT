@@ -77,6 +77,22 @@ def test_checked_read_uses_esc_command_and_restores_owner():
     assert ("write", 0x504, (2).to_bytes(4, "little")) in slave.events
 
 
+@pytest.mark.parametrize("read_size", [4, 8])
+def test_block_read_uses_supported_width_and_one_ownership_cycle(read_size):
+    slave = EepromSlave(size=read_size, owner=b"\x01\x01")
+    backend = PysoemBackend()
+    backend._master = SimpleNamespace(slaves=[slave])
+    backend._connected = True
+    readback = backend.eeprom_read_block(1, 0, 16)
+    assert readback.data == slave.data
+    assert readback.wkc == 1
+    addresses = [int.from_bytes(data, "little") for op, address, data in slave.events
+                 if op == "write" and address == 0x504]
+    assert addresses == list(range(0, 8, read_size // 2))
+    assert sum(op == "write" and address == 0x500 for op, address, _ in slave.events) == 3
+    assert slave.owner[0] == 1
+
+
 def test_checked_read_reports_command_error_and_status():
     slave = EepromSlave(failure="command")
     backend = PysoemBackend()
