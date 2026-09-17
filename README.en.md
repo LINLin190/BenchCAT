@@ -1,4 +1,4 @@
-# EtherCAT Workbench
+# BenchCAT
 
 [简体中文](README.md) | [English](README.en.md)
 
@@ -9,9 +9,9 @@ This project uses [pySOEM](https://github.com/bnjmnp/pysoem) for EtherCAT master
 > [!WARNING]
 > The application defaults to **Real** mode. Startup enumerates adapters and attempts connection and bus scanning. Discovery configures slaves to PRE-OP and maps PDOs to read fixed I/O widths; it does not enter OP or start cyclic communication. Demo/Mock is enabled only in Settings and remains visibly marked. Real-mode state transitions, register writes, and EEPROM operations can affect machinery or make a slave temporarily unavailable. Use an isolated, recoverable test setup.
 
-## Why EtherCAT Workbench
+## Why BenchCAT
 
-EtherCAT Workbench brings bus discovery, state diagnostics, ESC register inspection, and EEPROM maintenance into one desktop workflow while isolating hardware requests in one communication Worker. CoE, PDO mapping, and online I/O code remains in the repository but those pages are hidden from the current public navigation.
+BenchCAT brings bus discovery, state diagnostics, ESC register inspection, and EEPROM maintenance into one desktop workflow while isolating hardware requests in one communication Worker. CoE, PDO mapping, and online I/O code remains in the repository but those pages are hidden from the current public navigation.
 
 | Concern | Implementation |
 | --- | --- |
@@ -42,15 +42,15 @@ The application reports actionable errors when Npcap/wpcap is missing, permissio
 Release builds use the Tauri 2 Windows bundle flow and produce only an NSIS (`.exe`) installer with a Simplified Chinese installer and uninstaller UI; MSI packages are no longer built or published. The installer includes a standalone Python bridge, the Python runtime, and `pysoem==1.1.13`, so target computers do not need a separate Python installation. Npcap is not bundled; Real mode still requires a separate Npcap installation with WinPcap API-compatible Mode enabled. Run in PowerShell:
 
 ```powershell
-git clone https://github.com/LINLin190/EtherCAT-Workbench.git
-Set-Location "EtherCAT-Workbench\apps\EtherCAT Workbench"
+git clone https://github.com/LINLin190/BenchCAT.git
+Set-Location "BenchCAT"
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 .\start-desktop.ps1
 ```
 
-You can also double-click `Start-EtherCAT-Workbench.cmd`. The launcher prefers global pnpm, a locally cached Corepack version, or Corepack, and removes only project-owned stale Vite processes before startup. Vite uses port `1420`; an unrelated process holding it is reported and left untouched.
+You can also double-click `Start-BenchCAT.cmd`. The launcher prefers global pnpm, a locally cached Corepack version, or Corepack, and removes only project-owned stale Vite processes before startup. Vite uses port `1420`; an unrelated process holding it is reported and left untouched.
 
 Browser-only layout preview:
 
@@ -78,7 +78,7 @@ The public workflow is `1. Automatic or manual scan -> 2. Select slave -> 3. Rea
 - ESI XML selection, drag and drop, five recent files, multiple Device entries, SII generation, Smart View, and capacity checks;
 - complete EEPROM reads, BIN backups, changed-word writes, per-word readback, settling wait, full reread, byte/SHA-256/structure/identity-semantic validation, and BIN restore;
 - exclusive three-frame ESC ECAT reset using `0x0040 <- 0x52/0x45/0x53`, bounded rediscovery polling, and separate rediscovery/reload results;
-- persistent JSONL logs under `%LOCALAPPDATA%\EtherCATWorkbench\logs`; every write operation is recorded as `AUDIT`.
+- persistent JSONL logs under `%LOCALAPPDATA%\BenchCAT\logs`; every write operation is recorded as `AUDIT`.
 
 ## AL status codes
 
@@ -167,8 +167,8 @@ EtherCAT state, register, and EEPROM writes can affect machinery or make a slave
 
 ## License
 
-EtherCAT Workbench is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). It is **source-available software**, not open-source software as defined by the OSI. Personal, educational, research, and other noncommercial use is permitted; commercial products, paid services, commercial internal operations, and paid support require separate written permission. Distributions must retain the complete license, Required Notice, copyright notice, project URL, and a clear description of modifications. Third-party components remain under their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+BenchCAT is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). It is **source-available software**, not open-source software as defined by the OSI. Personal, educational, research, and other noncommercial use is permitted; commercial products, paid services, commercial internal operations, and paid support require separate written permission. Distributions must retain the complete license, Required Notice, copyright notice, project URL, and a clear description of modifications. Third-party components remain under their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Contributing
 
-[GitHub Issues](https://github.com/LINLin190/EtherCAT-Workbench/issues) are welcome for bug reports, feature requests, and clearly labeled physical-hardware read-only validation results. Include reproduction steps, expected/actual behavior, the slave and ESC model, ESI file, environment, and verification method. Do not submit tests that automatically write real EEPROM, PDO outputs, or registers, and do not publish serial numbers, production configuration, or private ESI files.
+[GitHub Issues](https://github.com/LINLin190/BenchCAT/issues) are welcome for bug reports, feature requests, and clearly labeled physical-hardware read-only validation results. Include reproduction steps, expected/actual behavior, the slave and ESC model, ESI file, environment, and verification method. Do not submit tests that automatically write real EEPROM, PDO outputs, or registers, and do not publish serial numbers, production configuration, or private ESI files.

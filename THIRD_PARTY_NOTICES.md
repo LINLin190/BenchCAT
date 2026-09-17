@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-EtherCAT Workbench depends on third-party software whose own licenses continue to apply.
+BenchCAT depends on third-party software whose own licenses continue to apply.
 
 | Component | Project | License |
 | --- | --- | --- |

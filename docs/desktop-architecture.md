@@ -1,6 +1,6 @@
 # Desktop architecture
 
-EtherCAT Workbench uses Tauri 2, React, TypeScript, Material UI, and Emotion for its only desktop interface. The Python package is a headless EtherCAT hardware core.
+BenchCAT uses Tauri 2, React, TypeScript, Material UI, and Emotion for its only desktop interface. The Python package is a headless EtherCAT hardware core.
 
 ## Runtime
 

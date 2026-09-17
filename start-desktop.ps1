@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $desktopRoot = Join-Path $PSScriptRoot 'desktop'
 $tauriRoot = Join-Path $desktopRoot 'src-tauri'
-$tauriExecutable = Join-Path $tauriRoot 'target\debug\ethercat-workbench-desktop.exe'
+$tauriExecutable = Join-Path $tauriRoot 'target\debug\benchcat-desktop.exe'
 $cargoBin = Join-Path $env:USERPROFILE '.cargo\bin'
 
 function Stop-ProjectTauriInstance {
@@ -93,7 +93,7 @@ function Stop-ProjectDevProcesses {
         $commandLine = [string]$_.CommandLine
         $_.ProcessId -ne $PID -and
         $commandLine.IndexOf($projectPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        ($commandLine -match '(?i)(tauri(\.js)?\s+dev|vite(\.js)?|cargo\s+run|ethercat-workbench-desktop\.exe)')
+        ($commandLine -match '(?i)(tauri(\.js)?\s+dev|vite(\.js)?|cargo\s+run|benchcat-desktop\.exe)')
     })
     if (-not $projectRoots) {
         return
@@ -123,7 +123,7 @@ function Stop-ProjectDevProcesses {
 
 if (-not $Check) {
     $expectedTauriPath = [System.IO.Path]::GetFullPath($tauriExecutable)
-    $projectInstances = @(Get-CimInstance Win32_Process -Filter "Name='ethercat-workbench-desktop.exe'" -ErrorAction SilentlyContinue | Where-Object {
+    $projectInstances = @(Get-CimInstance Win32_Process -Filter "Name='benchcat-desktop.exe'" -ErrorAction SilentlyContinue | Where-Object {
         $_.ExecutablePath -and
         [System.IO.Path]::GetFullPath($_.ExecutablePath).Equals($expectedTauriPath, [System.StringComparison]::OrdinalIgnoreCase)
     })
@@ -151,7 +151,7 @@ if (-not $Check) {
     }
 
     if ($keeper) {
-        Write-Host "EtherCAT Workbench 已在运行（PID $($keeper.ProcessId)），不会启动第二个实例。" -ForegroundColor Cyan
+        Write-Host "BenchCAT 已在运行（PID $($keeper.ProcessId)），不会启动第二个实例。" -ForegroundColor Cyan
         exit 0
     }
 }
@@ -183,7 +183,7 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
 }
 
 if (-not $pnpmCommand) {
-    $pnpmShimRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'EtherCATWorkbench\bin'
+    $pnpmShimRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'BenchCAT\bin'
     $pnpmShimPath = Join-Path $pnpmShimRoot 'pnpm.cmd'
     [System.IO.Directory]::CreateDirectory($pnpmShimRoot) | Out-Null
     if ($cachedPnpm) {

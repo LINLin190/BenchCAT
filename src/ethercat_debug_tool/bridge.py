@@ -38,7 +38,7 @@ AUTO_SCAN_ADAPTER_TIMEOUT_S = 4.0
 
 
 def _default_esi_library_path() -> Path | None:
-    configured = os.environ.get("ETHERCAT_WORKBENCH_ESI_LIBRARY")
+    configured = os.environ.get("BENCHCAT_ESI_LIBRARY")
     if configured:
         return Path(configured).resolve()
     for parent in Path(__file__).resolve().parents:
@@ -1378,11 +1378,11 @@ def _heartbeat(runtime: BridgeRuntime, writer: JsonWriter, stopped: threading.Ev
 
 
 def main() -> int:
-    request_pipe_name = os.environ.get("ETHERCAT_WORKBENCH_REQUEST_PIPE")
-    response_pipe_name = os.environ.get("ETHERCAT_WORKBENCH_RESPONSE_PIPE")
+    request_pipe_name = os.environ.get("BENCHCAT_REQUEST_PIPE")
+    response_pipe_name = os.environ.get("BENCHCAT_RESPONSE_PIPE")
     if not request_pipe_name or not response_pipe_name:
         print(
-            "ETHERCAT_WORKBENCH_REQUEST_PIPE and ETHERCAT_WORKBENCH_RESPONSE_PIPE are required",
+            "BENCHCAT_REQUEST_PIPE and BENCHCAT_RESPONSE_PIPE are required",
             file=sys.stderr,
             flush=True,
         )
@@ -1392,7 +1392,7 @@ def main() -> int:
     response_stream = _open_pipe(response_pipe_name, mode="wb")
     reader = IncrementalFrameReader(registry.max_frame_bytes)
     writer = JsonWriter(response_stream, registry.max_frame_bytes)
-    mode = BackendMode(os.environ.get("ETHERCAT_WORKBENCH_MODE", BackendMode.REAL.value))
+    mode = BackendMode(os.environ.get("BENCHCAT_MODE", BackendMode.REAL.value))
     runtime = BridgeRuntime(writer, mode, audit_path=default_audit_path())
     stopped = threading.Event()
     heartbeat = threading.Thread(target=_heartbeat, args=(runtime, writer, stopped), daemon=True)

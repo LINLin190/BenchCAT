@@ -1,8 +1,8 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title EtherCAT Workbench
-echo Starting EtherCAT Workbench...
+title BenchCAT
+echo Starting BenchCAT...
 echo Project: %CD%
 echo.
 
@@ -15,7 +15,7 @@ if %errorlevel% equ 0 (
 
 if errorlevel 1 (
     echo.
-    echo EtherCAT Workbench failed to start. See the error above.
+    echo BenchCAT failed to start. See the error above.
     pause
 )
 endlocal

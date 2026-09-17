@@ -276,7 +276,7 @@ def _reveal_path(path: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="EtherCAT Workbench standalone browser bridge")
+    parser = argparse.ArgumentParser(description="BenchCAT standalone browser bridge")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=1421)
     args = parser.parse_args()
@@ -285,7 +285,7 @@ def main() -> int:
     events = EventHub()
     service = WebBridgeService(events)
     server = WebBridgeServer((args.host, args.port), service)
-    print(f"EtherCAT Workbench real bridge listening on http://{args.host}:{args.port}", flush=True)
+    print(f"BenchCAT real bridge listening on http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever(poll_interval=0.2)
     except KeyboardInterrupt:

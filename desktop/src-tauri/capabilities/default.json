@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the EtherCAT Workbench main window",
+  "description": "Default capability for the BenchCAT main window",
   "windows": ["main"],
   "permissions": ["core:default", "dialog:default"]
 }

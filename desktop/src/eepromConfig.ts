@@ -107,10 +107,10 @@ export interface FixedEsiState {
   hidden: string[];
 }
 
-export const FLASH_HISTORY_KEY = "ethercat-workbench.eeprom-flash-history-v1";
-export const FIXED_ESI_STATE_KEY = "ethercat-workbench.eeprom-fixed-list-v1";
-export const QUICK_FLASH_TAB_KEY = "ethercat-workbench.eeprom-quick-tab-v1";
-export const EEPROM_AUTO_RESET_KEY = "ethercat-workbench.eeprom-auto-reset-v1";
+export const FLASH_HISTORY_KEY = "benchcat.eeprom-flash-history-v1";
+export const FIXED_ESI_STATE_KEY = "benchcat.eeprom-fixed-list-v1";
+export const QUICK_FLASH_TAB_KEY = "benchcat.eeprom-quick-tab-v1";
+export const EEPROM_AUTO_RESET_KEY = "benchcat.eeprom-auto-reset-v1";
 export const FLASH_HISTORY_LIMIT = 20;
 
 export function fixedEsiKey(entry: Pick<FixedEsiEntry, "path" | "ordinal">): string {

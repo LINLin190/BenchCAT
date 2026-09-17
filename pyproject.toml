@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ethercat-workbench"
+name = "benchcat"
 version = "1.1.0"
-description = "EtherCAT Workbench - Windows pySOEM EtherCAT slave debugging application"
+description = "BenchCAT - Windows pySOEM EtherCAT slave debugging application"
 requires-python = ">=3.11"
 readme = "README.md"
 license = {file = "LICENSE.md"}
@@ -17,11 +17,11 @@ dependencies = [
 dev = ["pyinstaller>=6.21,<7", "pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
-ethercat-workbench-bridge = "ethercat_debug_tool.bridge:main"
+benchcat-bridge = "ethercat_debug_tool.bridge:main"
 
 [project.urls]
-Repository = "https://github.com/LINLin190/EtherCAT-Workbench"
-Issues = "https://github.com/LINLin190/EtherCAT-Workbench/issues"
+Repository = "https://github.com/LINLin190/BenchCAT"
+Issues = "https://github.com/LINLin190/BenchCAT/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

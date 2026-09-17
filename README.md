@@ -1,4 +1,4 @@
-<h1 align="center">EtherCAT Workbench</h1>
+<h1 align="center">BenchCAT</h1>
 
 <p align="center"><strong>面向 Windows 的 pySOEM EtherCAT 从站调试与诊断工作台</strong></p>
 
@@ -26,9 +26,9 @@
 > [!IMPORTANT]
 > 应用默认选择 **Real** 模式，启动会枚举网卡并自动尝试连接、扫描从站。扫描会将从站配置到 PRE-OP 并映射 PDO 以读取固定 I/O 长度；它不会自动进入 OP 或启动周期通信。Demo / Mock 仅可在“设置”中启用，并会在界面中明确标识。Real 模式下的状态切换、ESC 寄存器和 EEPROM 写入可能影响机械设备或使从站暂时不可用，请只在隔离、安全的测试环境使用。
 
-## 为什么使用 EtherCAT Workbench
+## 为什么使用 BenchCAT
 
-EtherCAT Workbench 是一款基于 **Tauri 2、Rust、React、TypeScript、Material UI 和 Emotion** 的桌面 EtherCAT 从站调试工具，支持从站扫描与状态控制、ESC 寄存器、ESI/SII 和 EEPROM 诊断与维护。Python 通过持久 JSON Bridge 承载 pySOEM 硬件核心，WebView 不直接调用 pySOEM。
+BenchCAT 是一款基于 **Tauri 2、Rust、React、TypeScript、Material UI 和 Emotion** 的桌面 EtherCAT 从站调试工具，支持从站扫描与状态控制、ESC 寄存器、ESI/SII 和 EEPROM 诊断与维护。Python 通过持久 JSON Bridge 承载 pySOEM 硬件核心，WebView 不直接调用 pySOEM。
 
 它将常见的从站调试任务集中在一个明确的操作动线中，并把 pySOEM 请求隔离到唯一的通信 Worker：
 
@@ -65,15 +65,15 @@ EtherCAT Workbench 是一款基于 **Tauri 2、Rust、React、TypeScript、Mater
 在 PowerShell 中执行：
 
 ```powershell
-git clone https://github.com/LINLin190/EtherCAT-Workbench.git
-Set-Location "EtherCAT-Workbench\apps\EtherCAT Workbench"
+git clone https://github.com/LINLin190/BenchCAT.git
+Set-Location "BenchCAT"
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
 .\start-desktop.ps1
 ```
 
-也可以双击 `Start-EtherCAT-Workbench.cmd`。启动器会优先使用全局 pnpm、本机缓存的 Corepack 版本或 Corepack，并只清理项目所属的旧 Vite 进程。Vite 使用端口 `1420`；若被无关进程占用，启动器会报告冲突而不会终止该进程。
+也可以双击 `Start-BenchCAT.cmd`。启动器会优先使用全局 pnpm、本机缓存的 Corepack 版本或 Corepack，并只清理项目所属的旧 Vite 进程。Vite 使用端口 `1420`；若被无关进程占用，启动器会报告冲突而不会终止该进程。
 
 仅预览浏览器界面：
 
@@ -240,7 +240,7 @@ pnpm build:bridge
 | 内容 | 位置 |
 | --- | --- |
 | UI 日志与进度 | 应用窗口内 |
-| Bridge JSONL 日志 | `%LOCALAPPDATA%\EtherCATWorkbench\logs` |
+| Bridge JSONL 日志 | `%LOCALAPPDATA%\BenchCAT\logs` |
 | 写入审计 | 同一日志目录，标记为 `AUDIT` |
 | EEPROM BIN 备份 | EEPROM 页面显示完整路径 |
 | Bridge 异常退出 | 页面显示 stderr 与 `log_path`，可打开日志位置 |
@@ -272,8 +272,8 @@ pnpm test
 
 ## 许可证
 
-EtherCAT Workbench 按 [PolyForm Noncommercial License 1.0.0](LICENSE.md) 发布，属于**源代码可用软件**，不属于 OSI 定义的开源软件。个人、教育、研究及其他非商业用途可按许可证使用、修改和分发；商业产品、收费服务、商业内部运营和付费支持需另行书面许可。分发时请保留完整许可证、Required Notice、版权声明、项目链接并说明修改内容。第三方组件遵循各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+BenchCAT 按 [PolyForm Noncommercial License 1.0.0](LICENSE.md) 发布，属于**源代码可用软件**，不属于 OSI 定义的开源软件。个人、教育、研究及其他非商业用途可按许可证使用、修改和分发；商业产品、收费服务、商业内部运营和付费支持需另行书面许可。分发时请保留完整许可证、Required Notice、版权声明、项目链接并说明修改内容。第三方组件遵循各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ## 参与贡献
 
-欢迎通过 [GitHub Issues](https://github.com/LINLin190/EtherCAT-Workbench/issues) 报告缺陷、提出建议或补充明确标注的真机只读验证结果。请提供复现步骤、期望/实际行为、从站与 ESC 型号、ESI 文件、系统环境和验证方式；不要提交会自动写入真实 EEPROM、PDO 输出或寄存器的测试，也不要公开设备序列号、生产配置或私有 ESI。
+欢迎通过 [GitHub Issues](https://github.com/LINLin190/BenchCAT/issues) 报告缺陷、提出建议或补充明确标注的真机只读验证结果。请提供复现步骤、期望/实际行为、从站与 ESC 型号、ESI 文件、系统环境和验证方式；不要提交会自动写入真实 EEPROM、PDO 输出或寄存器的测试，也不要公开设备序列号、生产配置或私有 ESI。

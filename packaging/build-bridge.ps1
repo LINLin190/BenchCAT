@@ -6,7 +6,7 @@ $resourceRoot = Join-Path $tauriRoot 'resources\bridge'
 $workRoot = Join-Path $tauriRoot 'target\pyinstaller'
 $distRoot = Join-Path $workRoot 'dist'
 $entryPoint = Join-Path $PSScriptRoot 'bridge_entry.py'
-$builtBridge = Join-Path $distRoot 'ethercat-workbench-bridge'
+$builtBridge = Join-Path $distRoot 'benchcat-bridge'
 $resourceRoot = [System.IO.Path]::GetFullPath($resourceRoot)
 $expectedResourceParent = [System.IO.Path]::GetFullPath((Join-Path $tauriRoot 'resources'))
 if (-not $resourceRoot.StartsWith("$expectedResourceParent\", [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -28,7 +28,7 @@ python -m PyInstaller `
     --noconfirm `
     --clean `
     --onedir `
-    --name ethercat-workbench-bridge `
+    --name benchcat-bridge `
     --distpath $distRoot `
     --workpath (Join-Path $workRoot 'work') `
     --specpath $workRoot `

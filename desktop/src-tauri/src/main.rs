@@ -214,7 +214,7 @@ fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>, String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
 
-    let name: Vec<u16> = "Local\\EtherCATWorkbench.com.ethercat.workbench"
+    let name: Vec<u16> = "Local\\BenchCAT.com.benchcat.app"
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
@@ -238,7 +238,7 @@ fn bring_existing_instance_to_front() -> bool {
         FindWindowW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
 
-    let title: Vec<u16> = "EtherCAT Workbench"
+    let title: Vec<u16> = "BenchCAT"
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
@@ -284,7 +284,7 @@ fn acquire_single_instance_or_activate() -> Result<Option<SingleInstanceGuard>, 
 fn show_startup_error(message: &str) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
-    let title: Vec<u16> = "EtherCAT Workbench"
+    let title: Vec<u16> = "BenchCAT"
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
@@ -305,7 +305,7 @@ fn show_startup_error(message: &str) {
 }
 
 fn bridge_process_command(_app: &tauri::AppHandle) -> Result<Command, String> {
-    if let Some(executable) = std::env::var_os("ETHERCAT_WORKBENCH_BRIDGE_EXECUTABLE") {
+    if let Some(executable) = std::env::var_os("BENCHCAT_BRIDGE_EXECUTABLE") {
         let executable = PathBuf::from(executable);
         if !executable.is_file() {
             return Err(format!("指定的通信核心不存在：{}", executable.display()));
@@ -315,7 +315,7 @@ fn bridge_process_command(_app: &tauri::AppHandle) -> Result<Command, String> {
 
     #[cfg(debug_assertions)]
     {
-        let python = std::env::var("ETHERCAT_WORKBENCH_PYTHON").unwrap_or_else(|_| "python".into());
+        let python = std::env::var("BENCHCAT_PYTHON").unwrap_or_else(|_| "python".into());
         let mut command = Command::new(python);
         let mut paths = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../src")];
         if let Some(existing) = std::env::var_os("PYTHONPATH") {
@@ -333,7 +333,7 @@ fn bridge_process_command(_app: &tauri::AppHandle) -> Result<Command, String> {
         let executable = _app
             .path()
             .resolve(
-                "bridge/ethercat-workbench-bridge.exe",
+                "bridge/benchcat-bridge.exe",
                 tauri::path::BaseDirectory::Resource,
             )
             .map_err(|error| format!("无法定位随包通信核心：{error}"))?;
@@ -675,11 +675,11 @@ impl Bridge {
                 .unwrap_or_default()
                 .as_nanos();
             let request_pipe_name = format!(
-                r"\\.\pipe\ethercat-workbench-request-{}-{nonce}",
+                r"\\.\pipe\benchcat-request-{}-{nonce}",
                 std::process::id()
             );
             let response_pipe_name = format!(
-                r"\\.\pipe\ethercat-workbench-response-{}-{nonce}",
+                r"\\.\pipe\benchcat-response-{}-{nonce}",
                 std::process::id()
             );
             let mut command = bridge_process_command(&app)?;
@@ -692,8 +692,8 @@ impl Bridge {
                 }
             };
             command
-                .env("ETHERCAT_WORKBENCH_REQUEST_PIPE", &request_pipe_name)
-                .env("ETHERCAT_WORKBENCH_RESPONSE_PIPE", &response_pipe_name)
+                .env("BENCHCAT_REQUEST_PIPE", &request_pipe_name)
+                .env("BENCHCAT_RESPONSE_PIPE", &response_pipe_name)
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -1441,8 +1441,8 @@ fn reveal_path(path: String) -> Result<(), String> {
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
     const ALLOWED: [&str; 2] = [
-        "https://github.com/LINLin190/EtherCAT-Workbench",
-        "https://github.com/LINLin190/EtherCAT-Workbench/issues",
+        "https://github.com/LINLin190/BenchCAT",
+        "https://github.com/LINLin190/BenchCAT/issues",
     ];
     if !ALLOWED.contains(&url.as_str()) {
         return Err("不允许打开该外部链接".into());
@@ -1539,7 +1539,7 @@ fn main() {
             open_external
         ])
         .build(tauri::generate_context!())
-        .expect("failed to build EtherCAT Workbench")
+        .expect("failed to build BenchCAT")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<BridgeState>() {

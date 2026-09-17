@@ -74,4 +74,4 @@ The **licensor** is the individual or entity offering these terms, and the **sof
 
 Required Notice: Copyright (c) 2026 LINLin190.
 
-Required Notice: Original project: https://github.com/LINLin190/EtherCAT-Workbench
+Required Notice: Original project: https://github.com/LINLin190/BenchCAT

@@ -1,3 +1,3 @@
-"""EtherCAT Workbench application package."""
+"""BenchCAT application package."""
 
 __version__ = "1.0.1"

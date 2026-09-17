@@ -92,10 +92,10 @@ import { hex, stateLabel } from "./types";
 
 type PageKey = "overview" | "registers" | "eeprom";
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
-const PREFERRED_ADAPTER_KEY = "ethercat-workbench.preferred-adapter";
-const RECENT_ESI_KEY = "ethercat-workbench.recent-esi";
-const AL_LANGUAGE_KEY = "ethercat-workbench.al-language";
-const PROJECT_URL = "https://github.com/LINLin190/EtherCAT-Workbench";
+const PREFERRED_ADAPTER_KEY = "benchcat.preferred-adapter";
+const RECENT_ESI_KEY = "benchcat.recent-esi";
+const AL_LANGUAGE_KEY = "benchcat.al-language";
+const PROJECT_URL = "https://github.com/LINLin190/BenchCAT";
 const ISSUES_URL = `${PROJECT_URL}/issues`;
 
 function orderAdapters(items: AdapterInfo[]): AdapterInfo[] {
@@ -1223,7 +1223,7 @@ export default function App() {
         </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#F8FAFF" }}>
             <Box sx={{ width: 52, height: 52, borderRadius: 1.5, bgcolor: "primary.main", color: "white", display: "grid", placeItems: "center", flexShrink: 0 }}><CableRounded /></Box>
-            <Box sx={{ minWidth: 0, flex: 1 }}><Stack direction="row" alignItems="center" gap={1}><Typography variant="h6">EtherCAT Workbench</Typography><Chip size="small" variant="outlined" label={`v${packageInfo.version}`} /></Stack><Typography variant="body2" color="text.secondary">面向 Windows 的 EtherCAT 从站调试与诊断工作台</Typography></Box>
+            <Box sx={{ minWidth: 0, flex: 1 }}><Stack direction="row" alignItems="center" gap={1}><Typography variant="h6">BenchCAT</Typography><Chip size="small" variant="outlined" label={`v${packageInfo.version}`} /></Stack><Typography variant="body2" color="text.secondary">面向 Windows 的 EtherCAT 从站调试与诊断工作台</Typography></Box>
           </Box>
           <Typography variant="body2" color="text.secondary">聚焦从站概览、ESC 标准寄存器诊断与 EEPROM 安全读取、备份、烧录和恢复。硬件通信由独立 Python Bridge 与 Worker 串行执行。</Typography>
           <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1.2 }}>
@@ -1234,7 +1234,7 @@ export default function App() {
             <Button variant="contained" startIcon={<GitHubIcon />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(PROJECT_URL)}>GitHub 项目</Button>
             <Button variant="outlined" startIcon={<BugReportRounded />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(ISSUES_URL)}>问题反馈</Button>
           </Stack>
-          <Typography variant="caption" color="text.secondary">Copyright © EtherCAT Workbench contributors</Typography>
+          <Typography variant="caption" color="text.secondary">Copyright © BenchCAT contributors</Typography>
         </Stack>}
       </DialogContent>
       <DialogActions><Button onClick={() => setSettings(false)}>完成</Button></DialogActions>

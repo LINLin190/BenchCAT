@@ -1,4 +1,4 @@
-# EtherCAT Workbench Desktop
+# BenchCAT Desktop
 
 新的主界面使用 Tauri 2、React、TypeScript、Material UI 和 Emotion。EtherCAT Master、Worker、EEPROM 与寄存器安全逻辑继续由 Python 核心唯一持有，Rust 宿主通过持久化 JSON 通道与 Python 桥接进程通信。
 

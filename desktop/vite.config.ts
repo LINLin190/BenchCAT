@@ -16,7 +16,7 @@ function browserBridgePlugin() {
   return {
     name: "ethercat-browser-bridge",
     configureServer(server: { httpServer?: { once: (event: string, listener: () => void) => void } | null }) {
-      const python = process.env.ETHERCAT_WORKBENCH_PYTHON || "python";
+      const python = process.env.BENCHCAT_PYTHON || "python";
       const pythonPath = [resolve(repositoryRoot, "src"), process.env.PYTHONPATH]
         .filter(Boolean)
         .join(delimiter);

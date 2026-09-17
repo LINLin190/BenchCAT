@@ -60,4 +60,4 @@ def default_audit_path() -> Path:
 
     root = os.environ.get("LOCALAPPDATA")
     base = Path(root) if root else Path.cwd()
-    return base / "EtherCAT Workbench" / "logs" / "audit.jsonl"
+    return base / "BenchCAT" / "logs" / "audit.jsonl"
