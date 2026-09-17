@@ -252,7 +252,7 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
               identity={<>
                 <Typography className="ov-section-title">设备身份</Typography>
               <Box>
-                <Box className="kv-identity"><Typography className="section-label">配置地址</Typography><Typography className="mono ov-strong">{slave.configured_address === undefined ? "—" : hex(slave.configured_address)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">配置地址</Typography><Typography className="mono ov-strong">{slave.configured_address == null ? "—" : hex(slave.configured_address)}</Typography></Box>
                 <Box className="kv-identity"><Typography className="section-label">厂商 ID</Typography><Typography className="mono ov-strong">{hex(slave.identity.vendor_id, 8)}</Typography></Box>
                 <Box className="kv-identity"><Typography className="section-label">产品代码</Typography><Typography className="mono ov-strong">{hex(slave.identity.product_code, 8)}</Typography></Box>
                 <Box className="kv-identity"><Typography className="section-label">修订版本</Typography><Typography className="mono ov-strong">{hex(slave.identity.revision, 8)}</Typography></Box>
@@ -1073,7 +1073,7 @@ export default function App() {
 
   const connect = async () => {
     if (status.connected) await run(() => bridgeRequest("disconnect"), "已断开网卡");
-    else await run(() => bridgeRequest("connect", { adapter }), "网卡已连接");
+    else if (await run(() => bridgeRequest("connect", { adapter }))) await scan();
   };
   const scan = async () => {
     const found = await run(() => bridgeRequest<SlaveInfo[]>("scan"));
@@ -1160,7 +1160,7 @@ export default function App() {
             </Stack>
             <Typography variant="caption" color="text.secondary" noWrap>{!bridgeAvailable ? "通信核心正在恢复" : status.connected ? `已发现 ${status.slaves.length} 个从站` : "检测网卡并自动扫描 EtherCAT 从站"}</Typography>
           </Stack>
-          {status.slaves.length !== 1 && <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
+          {status.connected && status.slaves.length > 0 && status.slaves.length !== 1 && <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
             <Tooltip title={busStateBlockedReason || `全部从站状态控制 · 当前 ${busState === undefined ? "无状态" : stateLabel(busState)}`}>
               <span>
                 <ButtonGroup size="small" aria-label="全部从站状态控制" disabled={Boolean(busStateBlockedReason)} sx={{ height: 28 }}>
@@ -1170,7 +1170,7 @@ export default function App() {
             </Tooltip>
           </Box>}
           <Box sx={{ display: "flex", alignItems: "center", alignContent: "center", justifyContent: "flex-end", flex: "0 1 auto", minWidth: 0, ml: "auto", flexWrap: "wrap", gap: 0.65 }}>
-            <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} value={adapter} disabled={!bridgeAvailable || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
+            <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} MenuProps={{ PaperProps: { sx: { width: 270, maxWidth: 270 } } }} value={adapter} disabled={!bridgeAvailable || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name} title={item.description || item.name} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
             <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={<UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
             <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
             {busy && <CircularProgress size={20} sx={{ mx: 0.5 }} />}
