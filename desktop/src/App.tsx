@@ -377,8 +377,7 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
   const [writeOpen, setWriteOpen] = useState(false);
   const [writeContext, setWriteContext] = useState<RegisterWriteContext>();
   const [writeData, setWriteData] = useState("");
-  const [plan, setPlan] = useState<{ plan_id: string; plan: Record<string, unknown>; expiresAt: number }>();
-  const [planNow, setPlanNow] = useState(Date.now());
+  const [writing, setWriting] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [rawAddress, setRawAddress] = useState("0x0000");
   const [rawSize, setRawSize] = useState(1);
@@ -399,14 +398,8 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
     return () => { active = false; };
   }, [identityKey, registerProfile]);
   useEffect(() => {
-    if (!plan) return;
-    setPlanNow(Date.now());
-    const timer = window.setInterval(() => setPlanNow(Date.now()), 250);
-    return () => window.clearInterval(timer);
-  }, [plan?.plan_id]);
-  useEffect(() => {
     setSelected(undefined); setResult(undefined); setPinned([]); setWatchValues({}); setWatching(false);
-    setWatchError(""); setPlan(undefined); setWriteOpen(false); setResetConfirm(false); setRawResult(undefined); setGroup("全部类别");
+    setWatchError(""); setWriteOpen(false); setResetConfirm(false); setRawResult(undefined); setGroup("全部类别");
   }, [identityKey, registerProfile]);
 
   const groups = useMemo(() => ["全部类别", ...Array.from(new Set(catalog.map((definition) => definition.group))).sort()], [catalog]);
@@ -418,6 +411,7 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
     if (operationStore.active("register_read")) return;
     const requestedContext = registerContextRef.current;
     setSelected(definition);
+    setResult(undefined);
     if (!slave) return;
     setReadingDefinitionId(definition.definition_id);
     try {
@@ -445,6 +439,7 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
     if (!slave) return;
     const address = parseHexInput(rawAddress);
     if (address === undefined) return;
+    setRawResult(undefined);
     await run(() => bridgeRequest<RegisterValue>("register_read", {
       position: slave.position, address, size: rawSize,
     }).then((value) => { setRawResult(value); return value; }), "原始寄存器读取完成");
@@ -493,22 +488,28 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
     if (pinned.length === 1) setWatching(false);
   };
   const openWrite = (context: RegisterWriteContext) => {
-    setWriteContext(context); setWriteData(""); setPlan(undefined); setWriteOpen(true);
-  };
-  const prepareWrite = async () => {
-    if (!slave || !writeContext) return;
-    const value = await run(() => bridgeRequest<{ plan_id: string; plan: Record<string, unknown>; expires_in_seconds: number }>(
-      "register_prepare_write",
-      { position: slave.position, address: writeContext.address, size: writeContext.width, data: writeData, semantics: writeContext.access, known_register: writeContext.known, definition_id: selected?.definition_id, profile: registerProfile },
-    ));
-    if (value) setPlan({ plan_id: value.plan_id, plan: value.plan, expiresAt: Date.now() + value.expires_in_seconds * 1000 });
+    setWriteContext(context);
+    setWriteData(context.access === "RW" && context.known ? result?.data ?? "" : "");
+    setWriteOpen(true);
   };
   const executeWrite = async () => {
-    if (!plan) return;
-    const value = await run(() => bridgeRequest("register_execute_write", { plan_id: plan.plan_id }), "寄存器写入并验证完成");
-    if (value) {
-      setPlan(undefined); setWriteOpen(false);
-      if (writeContext?.known && selected) await read(selected); else await readRaw();
+    if (!slave || !writeContext || writing) return;
+    setWriting(true);
+    try {
+      const value = await run(async () => {
+        const prepared = await bridgeRequest<{ plan_id: string }>("register_prepare_write", {
+          position: slave.position, address: writeContext.address, size: writeContext.width,
+          data: writeHex, semantics: writeContext.access,
+          known_register: writeContext.known, definition_id: selected?.definition_id, profile: registerProfile,
+        });
+        return bridgeRequest("register_execute_write", { plan_id: prepared.plan_id });
+      }, "寄存器写入完成");
+      if (value) {
+        setWriteOpen(false);
+        if (writeContext.known && selected) await read(selected); else await readRaw();
+      }
+    } finally {
+      setWriting(false);
     }
   };
   const decodedFields = useMemo(() => {
@@ -519,12 +520,12 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
       value: (value >> BigInt(field.shift)) & ((1n << BigInt(field.bits)) - 1n),
     }));
   }, [selected, result]);
-  const planRemaining = plan ? Math.max(0, Math.ceil((plan.expiresAt - planNow) / 1000)) : 0;
-  const planExpired = Boolean(plan && planRemaining === 0);
+  const writeHex = writeData.replace(/\s+/g, "");
+  const writeDataValid = Boolean(writeContext && new RegExp(`^[0-9A-Fa-f]{${writeContext.width * 2}}$`).test(writeHex));
 
-  return <><PageTitle title="寄存器" subtitle={slave ? `从站 ${slave.position} · ESC 型号 ${registerProfile}` : "标准 ESC 寄存器读取与诊断"} actions={<Stack direction="row" gap={1} alignItems="center">{readingDefinitionId && <><CircularProgress size={18} /><Typography variant="caption">正在读取寄存器…</Typography></>}{result?.data && <Button size="small" variant="outlined" onClick={() => void copyReadValue()}>{copied ? "已复制" : "复制读取值"}</Button>}</Stack>} />
+  return <><PageTitle title="寄存器" subtitle={slave ? `从站 ${slave.position} · ESC 型号 ${registerProfile}` : "标准 ESC 寄存器读取与诊断"} />
     {!slave ? <EmptyState text="请先选择从站" /> : <Stack spacing={1.5}>
-      <Alert severity="info">目标：从站 {slave.position} · 配置地址 {slave.configured_address === undefined ? "未知" : hex(slave.configured_address)} · 默认只读；所有写入均记录 AUDIT。</Alert>
+      <Typography variant="body2" color="text.secondary">从站 {slave.position} · 配置地址 {slave.configured_address === undefined ? "未知" : hex(slave.configured_address)}。选择寄存器后可读取、写入或固定监视。</Typography>
       <Box sx={{ display: "grid", gridTemplateColumns: { xs: "minmax(250px, .78fr) minmax(0, 1.22fr)", xl: "minmax(270px, .78fr) minmax(0, 1.22fr)" }, gap: 1.25, minHeight: 0 }}>
         <Card sx={cardSx}>
           <CardContent sx={{ pb: "10px !important" }}>
@@ -537,12 +538,54 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
           </CardContent>
           <Divider />
           <List dense sx={{ overflow: "auto", maxHeight: "calc(100vh - 350px)", p: 0.6 }}>
-            {filtered.map((definition) => <ListItemButton disabled={Boolean(readingDefinitionId)} selected={selected?.definition_id === definition.definition_id} key={definition.definition_id ?? `${definition.address}-${definition.name}`} onClick={() => void read(definition)} sx={{ py: 0.55, px: 0.8 }}><ListItemText primary={definition.name} secondary={`${definition.address_text ?? hex(definition.address)} · ${definition.group} · ${definition.address_space_label ?? "ESC"}`} primaryTypographyProps={{ fontSize: 13 }} secondaryTypographyProps={{ fontSize: 11.5 }} /><Stack alignItems="flex-end" gap={0.35}>{readingDefinitionId === definition.definition_id ? <CircularProgress size={18} /> : <Chip size="small" variant="outlined" label={definition.access} />}{definition.direct_read_allowed === false && <Chip size="small" color="warning" variant="outlined" label="本地访问" />}</Stack></ListItemButton>)}
+            {filtered.map((definition) => <ListItemButton disabled={Boolean(readingDefinitionId)} selected={selected?.definition_id === definition.definition_id} key={definition.definition_id ?? `${definition.address}-${definition.name}`} onClick={() => void read(definition)} sx={{ py: 0.55, px: 0.8 }}><ListItemText primary={definition.name} secondary={`${definition.address_text ?? hex(definition.address)} · ${definition.group} · ${definition.address_space_label ?? "ESC"}`} primaryTypographyProps={{ fontSize: 13 }} secondaryTypographyProps={{ fontSize: 11.5 }} /><Stack alignItems="flex-end" gap={0.35}>{readingDefinitionId === definition.definition_id ? <CircularProgress size={18} /> : <Chip size="small" variant="outlined" label={definition.access} />}{definition.direct_read_allowed === false && <Chip size="small" variant="outlined" label="本地访问" />}</Stack></ListItemButton>)}
             {!catalogError && catalog.length > 0 && filtered.length === 0 && <Box sx={{ py: 6, px: 2, textAlign: "center", color: "text.secondary" }}><Typography fontWeight={700}>没有匹配的寄存器</Typography><Typography variant="caption">请调整搜索词或类别筛选。</Typography></Box>}
           </List>
         </Card>
-        <Card sx={cardSx}><CardContent>{selected ? <Stack spacing={1.25}><Stack direction="row" justifyContent="space-between" gap={1}><Box minWidth={0}><Typography variant="h6" noWrap title={selected.name}>{selected.name}</Typography><Typography variant="body2" color="text.secondary" noWrap title={selected.description}>{selected.description}</Typography></Box><Chip label={selected.access} size="small" /></Stack><Divider /><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1.25 }}><Box><Typography className="section-label">地址 / 空间</Typography><Typography className="mono kv-value">{selected.address_text ?? hex(selected.address)}</Typography><Typography variant="caption" color="text.secondary">{selected.address_space_label ?? "ESC Core"}</Typography></Box><Box><Typography className="section-label">宽度 / 主站权限</Typography><Typography className="kv-value">{selected.width ?? selected.size} byte</Typography><Typography variant="caption" color="text.secondary">{selected.master_access ?? selected.access}</Typography></Box><Box><Typography className="section-label">WKC / 可信度</Typography><Typography className="kv-value">{result ? result.wkc : "—"}</Typography><Typography variant="caption" color="text.secondary">{selected.confidence ?? "—"}</Typography></Box></Box>{selected.direct_read_allowed === false ? <Alert severity="warning">此项属于 {selected.address_space_label}，或未声明允许 EtherCAT 主站访问；当前桥接不会发送 FPRD/FPWR。</Alert> : <Box><Typography className="section-label">读取值</Typography><Typography className="mono data-surface" sx={{ mt: 0.6, p: 1.25, fontSize: 17, minHeight: 42, display: "flex", alignItems: "center" }}>{result?.data ?? "选择即读取"}</Typography></Box>}<Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 0.8 }}><Box><Typography className="section-label">复位 / 上电默认值</Typography><Typography variant="body2">{selected.reset_value ?? "未记录"} / {selected.power_on_default ?? "未记录"}</Typography></Box><Box><Typography className="section-label">状态限制</Typography><Typography variant="body2">{selected.state_restriction ?? "未记录"}</Typography></Box><Box><Typography className="section-label">保留位规则</Typography><Typography variant="body2">{selected.reserved_bits_rule ?? "未记录"}</Typography></Box></Box>{selected.fields && <Box><Typography className="section-label">位字段与 EtherCAT 访问权限</Typography><TableContainer sx={{ mt: 0.6, maxHeight: 180 }}><Table size="small" stickyHeader><TableHead><TableRow><TableCell>Bits</TableCell><TableCell>字段</TableCell><TableCell>访问</TableCell><TableCell>说明</TableCell></TableRow></TableHead><TableBody>{selected.fields.map((field, index) => <TableRow key={`${field.bits}-${field.name}-${index}`}><TableCell className="mono">{field.bits}</TableCell><TableCell>{field.name}{field.reserved && "（保留）"}</TableCell><TableCell>{field.ecat_access ?? field.access ?? "—"}</TableCell><TableCell title={field.description}>{field.description || "—"}</TableCell></TableRow>)}</TableBody></Table></TableContainer></Box>}{decodedFields.length > 0 && <Box><Typography className="section-label">当前值解码</Typography><Stack direction="row" gap={0.6} flexWrap="wrap" sx={{ mt: 0.6 }}>{decodedFields.map((field) => <Chip key={field.name} size="small" label={`${field.name}: ${field.value}`} />)}</Stack></Box>}<Stack direction="row" gap={0.75} alignItems="center" flexWrap="wrap">{selected.direct_read_allowed !== false && <Button size="small" variant={pinned.some((item) => item.definition_id === selected.definition_id) ? "contained" : "outlined"} onClick={() => togglePinned(selected)}>{pinned.some((item) => item.definition_id === selected.definition_id) ? "取消固定" : "固定监视"}</Button>}{selected.address === 0x0040 && selected.direct_read_allowed !== false ? <Button size="small" color="error" onClick={() => setResetConfirm(true)}>发送三帧 RES</Button> : selected.direct_write_allowed && <Button size="small" color="warning" onClick={() => openWrite({ address: selected.address, width: selected.width ?? selected.size ?? 1, name: selected.name, access: selected.access, known: true })}>{selected.access === "W1C" || selected.access === "W1S" ? "操作掩码" : selected.access === "WAC" ? "清零操作" : "进入写入模式"}</Button>}</Stack><Alert sx={{ py: 0.35 }} severity={selected.direct_write_allowed ? "warning" : "info"}>{selected.direct_write_allowed ? `${selected.access} 写入严格使用定义宽度，并在第二次确认后执行。` : selected.dangerous ? "该项含混合权限、保留位、状态限制或副作用；普通整寄存器写入已禁用。" : "只读寄存器，不提供写入操作。"}</Alert></Stack> : <Box sx={{ minHeight: 240, display: "grid", placeItems: "center", color: "text.secondary" }}>从左侧选择寄存器即可读取</Box>}</CardContent></Card>
+        <Card sx={cardSx}>
+          <CardContent>
+            {selected ? <Stack spacing={1.5}>
+              <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
+                <Box minWidth={0}>
+                  <Typography variant="h6">{selected.name}</Typography>
+                  <Typography variant="body2" color="text.secondary" noWrap title={selected.description}>{selected.description}</Typography>
+                </Box>
+                <Chip label={selected.access} size="small" />
+              </Stack>
+              <Stack direction="row" gap={2.5} flexWrap="wrap">
+                <Box><Typography className="section-label">地址</Typography><Typography className="mono kv-value">{selected.address_text ?? hex(selected.address)}</Typography><Typography variant="caption" color="text.secondary">{selected.address_space_label ?? "ESC Core"}</Typography></Box>
+                <Box><Typography className="section-label">宽度</Typography><Typography className="kv-value">{selected.width ?? selected.size} byte</Typography><Typography variant="caption" color="text.secondary">主站权限 {selected.master_access ?? selected.access}</Typography></Box>
+              </Stack>
+              {selected.direct_read_allowed === false
+                ? <Alert severity="info">此项属于 {selected.address_space_label}，或未声明允许 EtherCAT 主站访问，无法从当前连接读取或写入。</Alert>
+                : <>
+                  <Box>
+                    <Typography className="section-label">当前读取值</Typography>
+                    <Typography className="mono data-surface" sx={{ mt: 0.6, p: 1.5, fontSize: 20, minHeight: 56, display: "flex", alignItems: "center", overflowWrap: "anywhere" }}>{readingDefinitionId === selected.definition_id ? "读取中…" : result?.data ?? "尚未读取"}</Typography>
+                  </Box>
+                  <Stack direction="row" gap={0.75} flexWrap="wrap" alignItems="center">
+                    <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={Boolean(readingDefinitionId)} onClick={() => void read(selected)}>重新读取</Button>
+                    <Button size="small" disabled={!result?.data} onClick={() => void copyReadValue()}>{copied ? "已复制" : "复制值"}</Button>
+                    <Tooltip title={selected.address === 0x0040 ? "复位寄存器请使用 RES 操作" : selected.direct_write_allowed ? "" : "此寄存器不支持整寄存器写入"}>
+                      <span><Button size="small" variant="contained" disabled={!selected.direct_write_allowed || selected.address === 0x0040} onClick={() => openWrite({ address: selected.address, width: selected.width ?? selected.size ?? 1, name: selected.name, access: selected.access, known: true })}>写入寄存器值</Button></span>
+                    </Tooltip>
+                    <Button size="small" variant={pinned.some((item) => item.definition_id === selected.definition_id) ? "contained" : "text"} onClick={() => togglePinned(selected)}>{pinned.some((item) => item.definition_id === selected.definition_id) ? "取消固定" : "固定监视"}</Button>
+                    {selected.address === 0x0040 && <Button size="small" color="error" onClick={() => setResetConfirm(true)}>发送三帧 RES</Button>}
+                  </Stack>
+                </>}
+              <Divider />
+              <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1 }}>
+                <Box><Typography className="section-label">复位 / 上电默认值</Typography><Typography variant="body2">{selected.reset_value ?? "未记录"} / {selected.power_on_default ?? "未记录"}</Typography></Box>
+                <Box><Typography className="section-label">状态限制</Typography><Typography variant="body2">{selected.state_restriction ?? "未记录"}</Typography></Box>
+                <Box><Typography className="section-label">保留位规则</Typography><Typography variant="body2">{selected.reserved_bits_rule ?? "未记录"}</Typography></Box>
+              </Box>
+              {selected.fields && <Box><Typography className="section-label">位字段与 EtherCAT 访问权限</Typography><TableContainer sx={{ mt: 0.6, maxHeight: 260 }}><Table size="small" stickyHeader><TableHead><TableRow><TableCell>Bits</TableCell><TableCell>字段</TableCell><TableCell>访问</TableCell><TableCell>说明</TableCell></TableRow></TableHead><TableBody>{selected.fields.map((field, index) => <TableRow key={`${field.bits}-${field.name}-${index}`}><TableCell className="mono">{field.bits}</TableCell><TableCell>{field.name}{field.reserved && "（保留）"}</TableCell><TableCell>{field.ecat_access ?? field.access ?? "—"}</TableCell><TableCell title={field.description}>{field.description || "—"}</TableCell></TableRow>)}</TableBody></Table></TableContainer></Box>}
+              {decodedFields.length > 0 && <Box><Typography className="section-label">当前值解码</Typography><Stack direction="row" gap={0.6} flexWrap="wrap" sx={{ mt: 0.6 }}>{decodedFields.map((field) => <Chip key={field.name} size="small" label={`${field.name}: ${field.value}`} />)}</Stack></Box>}
+            </Stack> : <Box sx={{ minHeight: 240, display: "grid", placeItems: "center", color: "text.secondary" }}>从左侧选择寄存器即可读取</Box>}
+          </CardContent>
+        </Card>
       </Box>
+        <Accordion disableGutters defaultExpanded><AccordionSummary expandIcon={<ExpandMoreRounded />}><Box><Typography fontWeight={700}>原始地址读写</Typography><Typography variant="caption" color="text.secondary">用于未收录地址；宽度同时约束读取长度和写入 HEX 字节数。</Typography></Box></AccordionSummary><AccordionDetails><Stack direction="row" gap={1} alignItems="center" flexWrap="wrap"><TextField size="small" label="地址" value={rawAddress} onChange={(e) => { setRawAddress(e.target.value); setRawResult(undefined); }} inputProps={{ className: "mono" }} sx={{ width: 150 }} /><TextField size="small" type="number" label="读写宽度（byte）" value={rawSize} onChange={(e) => { setRawSize(Number(e.target.value)); setRawResult(undefined); }} inputProps={{ min: 1, max: 256 }} sx={{ width: 150 }} /><Button variant="outlined" disabled={parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={readRaw}>读取</Button><FormControl size="small" sx={{ width: 150 }}><InputLabel>写入语义</InputLabel><Select label="写入语义" value={rawAccess} onChange={(e) => setRawAccess(e.target.value)}>{["RW", "WO", "W1C", "W1S", "WAC", "SELF_CLEARING", "VOLATILE"].map((item) => <MenuItem value={item} key={item}>{item}</MenuItem>)}</Select></FormControl><Button variant="contained" disabled={parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={() => openWrite({ address: parseHexInput(rawAddress) ?? 0, width: rawSize, name: `原始地址 ${rawAddress}`, access: rawAccess, known: false })}>写入</Button><Typography className="mono">{rawResult?.data ? `读取值：${rawResult.data}` : ""}</Typography></Stack></AccordionDetails></Accordion>
       <Card sx={cardSx}>
         <CardContent>
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
@@ -553,9 +596,30 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
           <TableContainer sx={{ mt: 1 }}><Table size="small"><TableHead><TableRow>{["地址", "名称", "值", "耗时", "操作"].map((item) => <TableCell key={item}>{item}</TableCell>)}</TableRow></TableHead><TableBody>{pinned.map((definition) => { const width = definition.width ?? definition.size ?? 1; const key = registerKey(definition.address, width); const value = watchValues[key]; const changed = changedWatchKeys.has(key); return <TableRow key={key} sx={{ bgcolor: changed ? "warning.light" : "transparent", transition: "background-color .35s ease" }}><TableCell className="mono">{hex(definition.address)}</TableCell><TableCell>{definition.name}</TableCell><TableCell className="mono"><Stack direction="row" alignItems="center" gap={0.75}>{value?.data ?? "—"}{changed && <Chip size="small" color="warning" label="变化" />}</Stack></TableCell><TableCell>{value ? `${value.duration_ms.toFixed(2)} ms` : "—"}</TableCell><TableCell><Button size="small" onClick={() => removePinned(definition)}>移除</Button></TableCell></TableRow>; })}{!pinned.length && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 2.5, color: "text.secondary" }}>从标准寄存器详情中固定需要监视的项目</TableCell></TableRow>}</TableBody></Table></TableContainer>
         </CardContent>
       </Card>
-        <Accordion disableGutters><AccordionSummary expandIcon={<ExpandMoreRounded />}><Box><Typography fontWeight={700}>原始地址工具</Typography><Typography variant="caption" color="text.secondary">用于未收录地址；宽度同时约束读取长度和写入 HEX 字节数。</Typography></Box></AccordionSummary><AccordionDetails><Alert severity="warning" sx={{ mb: 1.5 }}>未知地址写入可能破坏链路、状态机或 EEPROM 控制状态；写入数据必须与“宽度”完全一致，仍会生成计划、二次确认并记录 AUDIT。</Alert><Stack direction="row" gap={1} alignItems="center" flexWrap="wrap"><TextField size="small" label="地址" value={rawAddress} onChange={(e) => setRawAddress(e.target.value)} inputProps={{ className: "mono" }} sx={{ width: 150 }} /><TextField size="small" type="number" label="读写宽度（byte）" value={rawSize} onChange={(e) => setRawSize(Number(e.target.value))} inputProps={{ min: 1, max: 256 }} sx={{ width: 150 }} /><Button variant="outlined" disabled={parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={readRaw}>读取</Button><FormControl size="small" sx={{ width: 150 }}><InputLabel>写入语义</InputLabel><Select label="写入语义" value={rawAccess} onChange={(e) => setRawAccess(e.target.value)}>{["RW", "WO", "W1C", "W1S", "WAC", "SELF_CLEARING", "VOLATILE"].map((item) => <MenuItem value={item} key={item}>{item}</MenuItem>)}</Select></FormControl><Button color="warning" disabled={parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={() => openWrite({ address: parseHexInput(rawAddress) ?? 0, width: rawSize, name: `原始地址 ${rawAddress}`, access: rawAccess, known: false })}>写入工具</Button><Typography className="mono">{rawResult?.data ?? ""}</Typography></Stack></AccordionDetails></Accordion>
     </Stack>}
-    <Dialog open={writeOpen} onClose={() => { setWriteOpen(false); setPlan(undefined); }} fullWidth maxWidth="sm"><DialogTitle>寄存器安全写入</DialogTitle><DialogContent><Stack spacing={2} sx={{ pt: 1 }}><Alert severity="warning">目标从站 {slave?.position ?? "—"} · {writeContext?.name} · {hex(writeContext?.address ?? 0)}。请确认访问语义和最终字节。</Alert><TextField label={writeContext?.access === "W1C" || writeContext?.access === "W1S" ? `操作掩码（HEX，必须 ${writeContext?.width ?? 0} B）` : `目标值（HEX，必须 ${writeContext?.width ?? 0} B）`} value={writeData} onChange={(e) => { setWriteData(e.target.value); setPlan(undefined); }} inputProps={{ className: "mono" }} />{plan && <Box sx={{ p: 2, bgcolor: "#F7F8FB", borderRadius: 2 }}><Stack direction="row" justifyContent="space-between"><Typography variant="subtitle2">写入计划</Typography><Chip size="small" color={planExpired ? "error" : planRemaining <= 10 ? "warning" : "default"} label={planExpired ? "已过期" : `${planRemaining} 秒后过期`} /></Stack><Typography className="mono">当前值：{String(plan.plan.current || "不可回读")}</Typography><Typography className="mono">目标值：{String(plan.plan.target)}</Typography><Typography className="mono">变化位：{String(plan.plan.changed_mask || "按语义执行")}</Typography>{planExpired && <Alert severity="warning" sx={{ mt: 1 }}>计划已超过 60 秒，请重新生成并确认。</Alert>}</Box>}</Stack></DialogContent><DialogActions><Button onClick={() => { setWriteOpen(false); setPlan(undefined); }}>取消</Button>{!plan || planExpired ? <Button variant="contained" color="warning" disabled={!writeData.trim()} onClick={prepareWrite}>重新生成写入计划</Button> : <Button variant="contained" color="error" onClick={executeWrite}>确认并执行</Button>}</DialogActions></Dialog>
+    <Dialog open={writeOpen} onClose={() => { if (!writing) setWriteOpen(false); }} fullWidth maxWidth="sm">
+      <DialogTitle>写入寄存器</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          <Typography variant="body2" color="text.secondary">从站 {slave?.position ?? "—"} · {writeContext?.name} · {hex(writeContext?.address ?? 0)} · {writeContext?.width} byte</Typography>
+          <TextField
+            autoFocus
+            fullWidth
+            label={writeContext?.access === "W1C" || writeContext?.access === "W1S" ? "操作掩码（HEX）" : "目标值（HEX）"}
+            value={writeData}
+            onChange={(e) => setWriteData(e.target.value)}
+            inputProps={{ className: "mono" }}
+            helperText={writeData && !writeDataValid ? "十六进制字节数须与寄存器宽度一致" : "宽度 " + (writeContext?.width ?? 0) + " byte，可用空格分隔"}
+            error={Boolean(writeData && !writeDataValid)}
+            disabled={writing}
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button disabled={writing} onClick={() => setWriteOpen(false)}>取消</Button>
+        <Button variant="contained" disabled={!writeDataValid || writing} onClick={executeWrite}>{writing ? "写入中…" : "写入"}</Button>
+      </DialogActions>
+    </Dialog>
     <Dialog open={resetConfirm} onClose={() => setResetConfirm(false)}><DialogTitle>确认复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">将独占 Worker，以三个连续、独立 FPWR 向 0x0040 写入 52、45、53；从站会短暂掉线。</Alert></DialogContent><DialogActions><Button onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" onClick={async () => { const value = await run(() => bridgeRequest("register_reset", { position: slave?.position, profile: registerProfile }), "RES 复位序列已发送"); if (value) setResetConfirm(false); }}>确认并发送</Button></DialogActions></Dialog>
   </>;
 }
