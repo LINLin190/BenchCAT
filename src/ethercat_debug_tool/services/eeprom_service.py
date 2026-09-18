@@ -139,13 +139,14 @@ class EepromService:
         self,
         position: int,
         *,
+        capacity: int | None = None,
         progress: ProgressCallback = lambda _: None,
         cancel: CancelCallback = lambda: False,
         progress_operation: str = "eeprom-read",
         progress_stage: str = "read",
         cancellable: bool = True,
     ) -> bytes:
-        capacity = self.read_capacity(position)
+        capacity = self.read_capacity(position) if capacity is None else capacity
         result = bytearray()
         for byte_offset in range(0, capacity, 128):
             self._check_cancel(cancel)
@@ -228,12 +229,11 @@ class EepromService:
         cancel: CancelCallback = lambda: False,
     ) -> EepromFlashResult:
         self.parser.parse(target)
-        if len(target) != self.read_capacity(position):
-            raise ValueError("Target image size does not match the physical EEPROM capacity")
         # Read the complete current image to calculate changed words. This is not
         # persisted; users can create a BIN explicitly with the separate backup action.
         current = self.read_full(
             position,
+            capacity=len(target),
             progress=progress,
             cancel=cancel,
             progress_operation="eeprom-flash",
@@ -325,6 +325,7 @@ class EepromService:
                 self.sleep(0.02)
             readback = self.read_full(
                 position,
+                capacity=len(target),
                 progress=progress,
                 cancel=lambda: False,
                 progress_operation="eeprom-flash",

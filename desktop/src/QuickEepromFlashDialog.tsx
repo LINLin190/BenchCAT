@@ -41,10 +41,7 @@ interface TargetResult {
 }
 
 interface EepromHeader {
-  header: string;
   config_data: string;
-  crc_valid: boolean;
-  size: number;
 }
 
 type LibraryEntry = FixedEsiEntry;
@@ -112,7 +109,6 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   const [ordinal, setOrdinal] = useState(0);
   const [target, setTarget] = useState<TargetResult>();
   const [header, setHeader] = useState<EepromHeader>();
-  const [headerError, setHeaderError] = useState("");
   const [configData, setConfigData] = useState("");
   const [originalConfigData, setOriginalConfigData] = useState("");
   const [loading, setLoading] = useState(false);
@@ -175,13 +171,12 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     openedContextRef.current = contextKey;
     setResult(undefined);
     setHeader(undefined);
-    setHeaderError("");
     void bridgeRequest<LibraryResult>("esi_library_list").then(setLibrary).catch((error) =>
       setLibrary({ directory: "", entries: [], errors: [{ path: "", error: error instanceof Error ? error.message : String(error) }] })
     );
     void bridgeRequest<EepromHeader>("eeprom_header", { position: slave.position })
       .then(setHeader)
-      .catch((error) => setHeaderError(error instanceof Error ? error.message : String(error)));
+      .catch(() => setHeader(undefined));
     requestRef.current += 1;
     generatedConfigRef.current = "";
     setEsi(undefined);
@@ -235,14 +230,11 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
 
   const blocker = operationInProgress ? "EEPROM 操作正在执行"
     : status.cycle_running ? "周期通信正在运行，请先停止周期通信"
-      : headerError ? `无法读取当前 EEPROM：${headerError}`
-        : !header ? "正在读取当前 EEPROM 配置"
-          : !esi ? "请选择 XML 并等待烧录目标生成完成"
-            : parsedConfig.error ? parsedConfig.error
-              : generationError ? generationError
-                : !target ? "正在生成烧录目标"
-                : target.size !== header.size ? "XML 生成目标与物理 EEPROM 容量不兼容"
-                  : "";
+      : !esi ? "请选择 XML 并等待烧录目标生成完成"
+        : parsedConfig.error ? parsedConfig.error
+          : generationError ? generationError
+            : !target ? "正在生成烧录目标"
+              : "";
 
   const flash = async () => {
     if (!slave || !target || blocker) return;
@@ -404,7 +396,6 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
               <ConfigSummary title="实际 EEPROM ConfigData" configData={header?.config_data ?? ""} subtle />
             </Box>
           </Box>
-          {headerError && <Alert severity="error" sx={{ mb: 1.25 }}>无法读取当前 EEPROM：{headerError}</Alert>}
           {!esi ? <Box sx={{ minHeight: 280, display: "grid", placeItems: "center", textAlign: "center", color: "text.secondary" }}><Stack alignItems="center" spacing={1}><MemoryRounded sx={{ fontSize: 48, opacity: 0.24 }} /><Typography fontWeight={750}>从左侧选择烧录 XML</Typography><Typography variant="body2">选择后可查看并临时修改目标 ConfigData；双击 XML 可打开文件位置</Typography>{loading && <CircularProgress size={22} />}</Stack></Box> : <Stack spacing={1.75}>
             <Box sx={{ p: 1.45, border: 1, borderLeft: 4, borderColor: "primary.light", borderLeftColor: "primary.main", borderRadius: 1.5, bgcolor: "#F5F8FF" }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 1.1 }}>

@@ -81,6 +81,45 @@ def test_mock_flash_does_not_create_backup_and_fully_verifies(sample_esi) -> Non
         backend.disconnect()
 
 
+def test_flash_uses_xml_length_when_current_capacity_declaration_is_corrupt(sample_esi) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        device = sample_esi.devices[0]
+        target = SiiGenerator().generate(device).image
+        backend._eeprom[0][0] ^= 1  # Current configuration CRC is invalid.
+        backend._eeprom[0][0x7C:0x7E] = b"\xf0\x90"  # Declares 4,749,440 bytes.
+        service = EepromService(backend, stability_wait_s=0)
+        assert service.read_capacity(1) == 4_749_440
+
+        result = service.flash(1, target, device, auto_reset=False)
+
+        assert result.image_success
+        assert result.bytes_read_back == len(target) == 2048
+        assert service.read_capacity(1) == 2048
+    finally:
+        backend.disconnect()
+
+
+def test_flash_uses_xml_length_when_current_header_is_valid(sample_esi) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        backend._eeprom[0].extend(b"\xff" * 2048)
+        device = replace(sample_esi.devices[0], byte_size=4096)
+        target = SiiGenerator().generate(device).image
+        service = EepromService(backend, stability_wait_s=0)
+        assert service.read_capacity(1) == 2048
+
+        result = service.flash(1, target, device, auto_reset=False)
+
+        assert result.image_success
+        assert result.bytes_read_back == 4096
+        assert service.read_capacity(1) == 4096
+    finally:
+        backend.disconnect()
+
+
 def test_unchanged_flash_skips_wait_reset_and_duplicate_read(sample_esi, monkeypatch) -> None:
     backend = MockBackend()
     backend.connect("demo0")
@@ -115,7 +154,7 @@ def test_unchanged_flash_skips_wait_reset_and_duplicate_read(sample_esi, monkeyp
         assert result.image_success and result.words_written == 0
         assert result.comparison.target_sha256 == result.comparison.readback_sha256
         assert result.reset_sequence is None and result.reload_verified is None
-        assert len(reads) == 18  # Two capacity probes plus one complete 2 KiB read.
+        assert len(reads) == 16  # One complete 2 KiB read, based on XML target length.
         assert sleeps == []
         assert {item.stage for item in progress} == {"read-current", "write-verify"}
         assert "镜像已一致" not in result.image_verification

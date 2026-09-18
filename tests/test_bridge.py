@@ -689,6 +689,35 @@ def test_esi_full_flash_flow_auto_init_and_config_override(tmp_path, workspace) 
         runtime.shutdown()
 
 
+def test_sii_generate_keeps_xml_capacity_when_connected_eeprom_size_differs(tmp_path, workspace) -> None:
+    runtime = BridgeRuntime(
+        RecordingWriter(),
+        BackendMode.DEMO,
+        audit_path=tmp_path / "audit.jsonl",
+        stability_wait_s=0,
+        rediscovery_timeout_s=0,
+    )  # type: ignore[arg-type]
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        source = workspace / "ESI示例" / "SlaveCTT_900e80.xml"
+        loaded = runtime.dispatch("esi_load", {"path": str(source)})
+        document = runtime.documents[loaded["document_id"]]
+        runtime.documents[loaded["document_id"]] = replace(
+            document,
+            devices=(replace(document.devices[0], byte_size=4096), *document.devices[1:]),
+        )
+
+        target = runtime.dispatch(
+            "sii_generate",
+            {"document_id": loaded["document_id"], "ordinal": 0},
+        )
+        assert target["size"] == 4096
+        assert target["device"].byte_size == 4096
+        assert runtime.documents[loaded["document_id"]].devices[0].byte_size == 4096
+    finally:
+        runtime.shutdown()
+
+
 def test_esi_library_list_returns_all_devices(workspace) -> None:
     runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)  # type: ignore[arg-type]
     try:
