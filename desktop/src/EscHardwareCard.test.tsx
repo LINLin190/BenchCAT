@@ -24,10 +24,10 @@ describe("hardware scan snapshot card", () => {
     expect(html).toContain("展开详情");
   });
   it.each([
-    ["LAN9252", "01 00 52 92 3C 00 00 00", "4–512 KiB"],
-    ["LAN9252", "01 00 52 92 00 00 00 00", "128 B–2 KiB"],
-    ["LAN9253", "01 00 53 92 08 00 00 00", "4–512 KiB"],
-    ["LAN9253", "01 00 53 92 00 00 00 00", "128 B–2 KiB"],
+    ["LAN9252", "01 00 52 92 3C 00 00 00", "32 Kbit ~ 4 Mbit"],
+    ["LAN9252", "01 00 52 92 00 00 00 00", "1 Kbit ~ 16 Kbit"],
+    ["LAN9253", "01 00 53 92 08 00 00 00", "32 Kbit ~ 4 Mbit"],
+    ["LAN9253", "01 00 53 92 00 00 00 00", "1 Kbit ~ 16 Kbit"],
   ])("shows the scanned %s EEPROM capacity range", (profile, raw, capacity) => {
     const html = renderToStaticMarkup(<EscHardwareCard slave={{ ...slave, esc_hardware: raw }} profile={profile} />);
     expect(html).toContain("EEPROM size strap");

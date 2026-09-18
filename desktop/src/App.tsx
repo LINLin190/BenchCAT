@@ -217,7 +217,7 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
         <Stack spacing={1.25} className="overview-cards">
           <Box className="overview-grid">
             <Card sx={cardSx} className="ov-runtime"><CardContent className="ov-card-body">
-              <CardHeading title="运行与控制" />
+              <CardHeading title="状态" />
               <Box className="ov-runtime-facts">
                 <Typography className="section-label">当前状态</Typography>
                 <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />
