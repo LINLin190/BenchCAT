@@ -54,6 +54,9 @@ class EtherCatWorker:
         self._backend_factory = backend_factory
         self._tasks: queue.PriorityQueue[_Task] = queue.PriorityQueue(maxsize=queue_limit)
         self._events: queue.SimpleQueue[WorkerEvent] = queue.SimpleQueue()
+        # Process data is display state; only the newest pending cycle is useful.
+        self._process_data_lock = threading.Lock()
+        self._latest_process_data: WorkerEvent | None = None
         self._stop = threading.Event()
         self._seq = itertools.count()
         self._thread = threading.Thread(target=self._run, name="EtherCAT Worker", daemon=True)
@@ -139,7 +142,16 @@ class EtherCatWorker:
                 result.append(self._events.get_nowait())
             except queue.Empty:
                 break
+        if len(result) < limit:
+            with self._process_data_lock:
+                if self._latest_process_data is not None:
+                    result.append(self._latest_process_data)
+                    self._latest_process_data = None
         return result
+
+    def _publish_process_data(self, snapshot: ProcessDataSnapshot, session_id: int | None) -> None:
+        with self._process_data_lock:
+            self._latest_process_data = WorkerEvent("process_data", snapshot, session_id)
 
     def shutdown(self, timeout: float = 5.0) -> bool:
         self._state = WorkerState.STOPPING
@@ -187,7 +199,7 @@ class EtherCatWorker:
                 self._next_cycle = time.perf_counter()
                 self._next_state_check = self._next_cycle + 0.1
                 self._cycle_positions = {s.position for s in slaves if s.state is EtherCatState.OP}
-                self._events.put(WorkerEvent("process_data", first_snapshot, task.event_session_id))
+                self._publish_process_data(first_snapshot, task.event_session_id)
                 self._events.put(WorkerEvent("cycle_started", slaves, task.event_session_id))
             elif task.operation == "__stop_cycle__":
                 result = self._disable_cycle(self._backend)
@@ -224,7 +236,7 @@ class EtherCatWorker:
         assert self._backend is not None
         try:
             snapshot = self._backend.exchange_process_data(self._cycle_timeout_us)
-            self._events.put(WorkerEvent("process_data", snapshot, self._cycle_session_id))
+            self._publish_process_data(snapshot, self._cycle_session_id)
             if time.perf_counter() >= self._next_state_check:
                 slaves = self._backend.read_states()
                 self._next_state_check = time.perf_counter() + 0.1

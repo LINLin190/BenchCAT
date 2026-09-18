@@ -35,6 +35,10 @@ from .worker import EtherCatWorker
 from .worker.ethercat_worker import Priority
 
 AUTO_SCAN_ADAPTER_TIMEOUT_S = 4.0
+MAX_STORED_ESI_DOCUMENTS = 64
+MAX_STORED_SII_TARGETS = 64
+MAX_STORED_WRITE_PLANS = 64
+PROCESS_DATA_UI_INTERVAL_S = 0.1
 
 
 def _default_esi_library_path() -> Path | None:
@@ -265,6 +269,7 @@ class BridgeRuntime:
         self.documents: dict[str, Any] = {}
         self.targets: dict[str, tuple[bytes, Any]] = {}
         self.write_plans: dict[str, _StoredRegisterPlan] = {}
+        self._asset_lock = threading.Lock()
         self.profiles = ProfileRegistry()
         self.audit = AuditLogger(audit_path)
         self.stability_wait_s = stability_wait_s
@@ -347,6 +352,7 @@ class BridgeRuntime:
         )
 
     def _event_loop(self) -> None:
+        next_process_data_at = 0.0
         while not self._stopped.wait(0.02):
             with self._worker_lock:
                 worker = self.worker
@@ -354,6 +360,12 @@ class BridgeRuntime:
                 try:
                     if event.session_id is not None and event.session_id != self.session_id:
                         continue
+                    if event.kind == "process_data":
+                        # Keep bus exchange timing independent of display updates.
+                        now = time.monotonic()
+                        if now < next_process_data_at:
+                            continue
+                        next_process_data_at = now + PROCESS_DATA_UI_INTERVAL_S
                     # Start/stop results are committed by the command lane. A delayed
                     # event must not overwrite a subsequent requested slave state.
                     if event.kind == "cycle_fault":
@@ -385,6 +397,18 @@ class BridgeRuntime:
                     # A malformed event or a transient writer failure must not
                     # terminate the only thread forwarding Worker state changes.
                     continue
+
+    def _remember_asset(self, cache: dict[str, Any], key: str, value: Any, limit: int) -> None:
+        with self._asset_lock:
+            cache[key] = value
+            if len(cache) > limit:
+                cache.pop(next(iter(cache)))
+
+    def _get_asset(self, cache: dict[str, Any], key: str) -> Any:
+        with self._asset_lock:
+            value = cache.pop(key)
+            cache[key] = value
+            return value
 
     def _submit(
         self,
@@ -934,11 +958,17 @@ class BridgeRuntime:
                 )
             )
             plan_id = uuid.uuid4().hex
+            now = time.monotonic()
+            for expired_id, stored in list(self.write_plans.items()):
+                if now - stored.created_at > 60:
+                    self.write_plans.pop(expired_id, None)
+            if len(self.write_plans) >= MAX_STORED_WRITE_PLANS:
+                self.write_plans.pop(next(iter(self.write_plans)))
             self.write_plans[plan_id] = _StoredRegisterPlan(
                 plan,
                 self.session_id,
                 self._slave_signature(plan.position),
-                time.monotonic(),
+                now,
             )
             return {"plan_id": plan_id, "plan": plan, "expires_in_seconds": 60}
         if method == "register_execute_write":
@@ -1023,8 +1053,13 @@ class BridgeRuntime:
                     }
                 )
             target_id = str(params.get("target_id") or "")
-            if target_id and target_id in self.targets:
-                response["comparison"] = compare_images(self.targets[target_id][0], raw)
+            if target_id:
+                try:
+                    target, _ = self._get_asset(self.targets, target_id)
+                except KeyError:
+                    pass
+                else:
+                    response["comparison"] = compare_images(target, raw)
             return response
         if method == "eeprom_capacity":
             size = self._submit(lambda backend: EepromService(backend).read_capacity(int(params["position"])))
@@ -1090,7 +1125,7 @@ class BridgeRuntime:
         if method == "esi_load":
             document = EsiParser().parse(Path(params["path"]))
             document_id = uuid.uuid4().hex
-            self.documents[document_id] = document
+            self._remember_asset(self.documents, document_id, document, MAX_STORED_ESI_DOCUMENTS)
             return {
                 "document_id": document_id,
                 "path": document.path,
@@ -1100,7 +1135,7 @@ class BridgeRuntime:
                 "devices": document.devices,
             }
         if method == "sii_generate":
-            document = self.documents[str(params["document_id"])]
+            document = self._get_asset(self.documents, str(params["document_id"]))
             ordinal = int(params["ordinal"])
             device = document.devices[ordinal]
             original_config_data = device.config_data
@@ -1114,7 +1149,7 @@ class BridgeRuntime:
                 device = dataclasses.replace(device, config_data=config_data)
             report: SiiGenerationReport = SiiGenerator().generate(device)
             target_id = uuid.uuid4().hex
-            self.targets[target_id] = (report.image, device)
+            self._remember_asset(self.targets, target_id, (report.image, device), MAX_STORED_SII_TARGETS)
             parsed = SiiParser().parse(report.image)
             category_names = {
                 0x000A: "Strings",
@@ -1170,7 +1205,7 @@ class BridgeRuntime:
             slave = self._slave(position)
             if self.cycle_running:
                 raise RuntimeError("必须先安全停止周期通信")
-            target, device = self.targets[str(params["target_id"])]
+            target, device = self._get_asset(self.targets, str(params["target_id"]))
             self.cancel.clear()
             details = {
                 "position": position,
