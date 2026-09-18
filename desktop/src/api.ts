@@ -212,5 +212,4 @@ export async function openExternal(url: string): Promise<void> {
 }
 
 export const previewMode = false;
-export const demoModeAvailable = isTauri;
 export type { AdapterInfo, WorkbenchStatus };

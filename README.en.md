@@ -4,10 +4,10 @@
 
 An EtherCAT slave debugging and diagnostics workbench for Windows. The desktop application uses **Tauri 2, Rust, React, TypeScript, Material UI, and Emotion**. Python owns the EtherCAT hardware core behind a persistent local JSON bridge; the WebView never accesses pySOEM directly.
 
-This project uses [pySOEM](https://github.com/bnjmnp/pysoem) for EtherCAT master communication. Real mode on Windows depends on the official [Npcap](https://npcap.com/) driver; Npcap is not included in this repository or application.
+This project uses [pySOEM](https://github.com/bnjmnp/pysoem) for EtherCAT master communication. Hardware communication on Windows depends on the official [Npcap](https://npcap.com/) driver; Npcap is not included in this repository or application.
 
 > [!WARNING]
-> The application defaults to **Real** mode. Startup enumerates adapters and attempts connection and bus scanning. Discovery configures slaves to PRE-OP and maps PDOs to read fixed I/O widths; it does not enter OP or start cyclic communication. Demo/Mock is enabled only in Settings and remains visibly marked. Real-mode state transitions, register writes, and EEPROM operations can affect machinery or make a slave temporarily unavailable. Use an isolated, recoverable test setup.
+> Startup enumerates adapters and attempts connection and bus scanning. Discovery configures slaves to PRE-OP and maps PDOs to read fixed I/O widths; it does not enter OP or start cyclic communication. State transitions, register writes, and EEPROM operations can affect machinery or make a slave temporarily unavailable. Use an isolated, recoverable test setup.
 
 ## Why BenchCAT
 
@@ -15,18 +15,17 @@ BenchCAT brings bus discovery, state diagnostics, ESC register inspection, and E
 
 | Concern | Implementation |
 | --- | --- |
-| Safe first contact | Real startup scans and stops in PRE-OP; it does not enter OP or start cyclic communication; Demo/Mock is enabled only in Settings and is clearly marked |
+| Safe first contact | Startup scans and stops in PRE-OP; it does not enter OP or start cyclic communication |
 | Responsive UI | The WebView never calls pySOEM; hardware work runs asynchronously in the Python bridge |
 | Request consistency | One Worker serializes requests for one Master |
 | Write control | Registers use two-stage plans and readback; EEPROM uses capacity, structure, semantic, and full-image verification |
-| Hardware-free development | Mock backend, Demo data, and automated tests require no EtherCAT device |
 | Traceability | UI progress, JSONL logs, and `AUDIT` write records retain diagnostic context |
 
 ## User guide
 
 ### Windows and Npcap requirements
 
-Real mode is pinned to the official Windows wheel `pysoem==1.1.13`. It requires:
+Hardware communication uses the official Windows wheel `pysoem==1.1.13`. It requires:
 
 - Windows 10/11 x64;
 - Node.js 20 or newer, pnpm/Corepack, Rust MSVC, and WebView2 for source builds;
@@ -35,11 +34,11 @@ Real mode is pinned to the official Windows wheel `pysoem==1.1.13`. It requires:
 - administrator/raw-packet access to the selected adapter;
 - preferably, a dedicated EtherCAT adapter that carries no ordinary network traffic.
 
-The application reports actionable errors when Npcap/wpcap is missing, permissions are insufficient, or an adapter cannot be opened. Demo/Mock does not open a physical adapter.
+The application reports actionable errors when Npcap/wpcap is missing, permissions are insufficient, or an adapter cannot be opened.
 
 ### Install and run
 
-Release builds use the Tauri 2 Windows bundle flow and produce only an NSIS (`.exe`) installer with a Simplified Chinese installer and uninstaller UI; MSI packages are no longer built or published. The installer includes a standalone Python bridge, the Python runtime, and `pysoem==1.1.13`, so target computers do not need a separate Python installation. Npcap is not bundled; Real mode still requires a separate Npcap installation with WinPcap API-compatible Mode enabled. Run in PowerShell:
+Release builds use the Tauri 2 Windows bundle flow and produce only an NSIS (`.exe`) installer with a Simplified Chinese installer and uninstaller UI; MSI packages are no longer built or published. The installer includes a standalone Python bridge, the Python runtime, and `pysoem==1.1.13`, so target computers do not need a separate Python installation. Npcap is not bundled; hardware communication still requires a separate Npcap installation with WinPcap API-compatible Mode enabled. Run in PowerShell:
 
 ```powershell
 git clone https://github.com/LINLin190/BenchCAT.git
@@ -64,7 +63,7 @@ pnpm dev
 
 The public workflow is `1. Automatic or manual scan -> 2. Select slave -> 3. Read state and AL -> 4. Register or EEPROM diagnostics`.
 
-1. In Real mode, startup attempts connection and scanning; use **Detect and scan** to run it again. Demo/Mock is enabled in Settings.
+1. Startup attempts connection and scanning; use **Detect and scan** to run it again.
 2. If automatic scanning finds no slave, select an adapter, click **Connect**, then **Scan**, and select the target in the slave tree. Discovery maps PDOs in PRE-OP and caches identity, PDI, and I/O widths.
 3. Read actual state and AL status first. State buttons may request a target directly; the backend performs required intermediate transitions and stops cyclic communication before downgrading. Discovery maps PDOs once and caches fixed I/O widths.
 4. In Registers, read before writing and confirm the slave, catalog, address, current value, and target value. Regenerate plans older than 60 seconds.
@@ -116,7 +115,6 @@ Supported: ConfigData/CRC-8, Identity, standard Mailbox, Strings, General, FMMU,
 - React pages handle presentation and interaction; Tauri Rust handles desktop lifecycle and bridging.
 - The Python bridge is the only hardware entry point; the WebView never calls pySOEM directly.
 - EtherCatWorker is the sole Backend owner and serializes hardware requests for one Master.
-- Mock and Real backends share an interface; Mock does not claim physical verification.
 - EEPROM exclusivity, state checks, confirmations, and verification are enforced in the service/backend layers. A successful `recover()` is followed by actual-state and AL-status verification.
 
 ### Build the Windows application

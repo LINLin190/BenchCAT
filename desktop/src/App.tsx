@@ -72,7 +72,7 @@ import { OverviewEeprom } from "./OverviewEeprom";
 import { CardHeading } from "./OverviewDisclosure";
 import { EscHardwareCard } from "./EscHardwareCard";
 import { alStatusInfo, type AlStatusLanguage } from "./alStatus";
-import { BridgeRequestError, bridgeRequest, demoModeAvailable, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
+import { BridgeRequestError, bridgeRequest, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
 import { minimumBusState } from "./busState";
 import { operationStore } from "./operationStore";
 import { decodeConfigData, loadEepromAutoReset, normalizeConfigData, saveEepromAutoReset } from "./eepromConfig";
@@ -1059,18 +1059,6 @@ export default function App() {
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: 0, state }),
     `全部 ${status.slaves.length} 个从站已进入 ${stateLabel(state)}`,
   );
-  const switchMode = async (demo: boolean) => {
-    const mode = demo ? "demo" : "real";
-    const changed = await run(() => bridgeRequest("switch_mode", { mode }), demo ? "已切换到 Demo 模式" : "已切换到实际设备");
-    if (changed) {
-      const items = await bridgeRequest<AdapterInfo[]>("enumerate_adapters");
-      const ordered = orderAdapters(items);
-      const preferred = window.localStorage.getItem(PREFERRED_ADAPTER_KEY) ?? "";
-      setAdapters(ordered);
-      setAdapter(ordered.some((item) => item.name === preferred) ? preferred : ordered[0]?.name ?? "");
-    }
-  };
-
   const selectAdapter = (value: string) => {
     setAdapter(value);
     window.localStorage.setItem(PREFERRED_ADAPTER_KEY, value);
@@ -1189,13 +1177,8 @@ export default function App() {
       <Divider />
       <DialogContent sx={{ minHeight: 360 }}>
         {settingsTab === 0 ? <Stack spacing={2} sx={{ pt: 0.5 }}>
-          {demoModeAvailable && <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}>
-            <Box><Typography fontWeight={700}>Demo 模式</Typography><Typography variant="body2" color="text.secondary">使用模拟从站，不访问实际 EtherCAT 网卡。</Typography></Box>
-            <Switch checked={status.mode === "demo"} disabled={!bridgeAvailable || eepromExclusive || status.connected} onChange={(e) => switchMode(e.target.checked)} />
-          </Box>}
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>AL 状态码语言</Typography><Typography variant="body2" color="text.secondary">切换概览页 AL 状态名称、说明与排查建议。</Typography></Box><FormControl size="small" sx={{ width: 150 }}><InputLabel>Language</InputLabel><Select label="Language" value={alLanguage} onChange={(event) => { const value = event.target.value as AlStatusLanguage; setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }}><MenuItem value="zh">中文</MenuItem><MenuItem value="en">English</MenuItem></Select></FormControl></Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>EEPROM 写入后复位 ESC</Typography><Typography variant="body2" color="text.secondary">用于 XML 烧录和 BIN 恢复；关闭后仍会完整回读校验，但不执行 ESC RES 复位、重新发现和重新加载复核。</Typography></Box><Switch checked={eepromAutoReset} disabled={eepromExclusive} onChange={(event) => setEepromAutoReset(saveEepromAutoReset(event.target.checked))} /></Box>
-          {status.connected && <Alert severity="info">切换模式前请停止周期通信并断开网卡。</Alert>}
         </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#F8FAFF" }}>
             <Box sx={{ width: 52, height: 52, borderRadius: 1.5, bgcolor: "primary.main", color: "white", display: "grid", placeItems: "center", flexShrink: 0 }}><CableRounded /></Box>

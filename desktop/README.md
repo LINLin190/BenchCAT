@@ -11,7 +11,7 @@ pnpm install
 pnpm tauri:dev
 ```
 
-也可以从仓库根目录运行 `./start-desktop.ps1`。默认使用 Real 模式；Demo 模式只在“设置”中启用，启用后界面显示标识。
+也可以从仓库根目录运行 `./start-desktop.ps1`。
 
 在独立浏览器中连接实际 EtherCAT 设备：
 
@@ -19,7 +19,7 @@ pnpm tauri:dev
 pnpm dev
 ```
 
-打开 `http://127.0.0.1:1420`。Vite 会同时启动仅监听本机的 Real Python Bridge；浏览器与 Tauri 使用同一个 Python Core，但传输层分别为 HTTP/SSE 和 Tauri IPC。浏览器模式不提供 Demo 切换，也不会生成模拟从站数据。请勿同时运行浏览器开发服务器和 Tauri 桌面程序，以免两个 EtherCAT Master 竞争同一网卡。
+打开 `http://127.0.0.1:1420`。Vite 会同时启动仅监听本机的 Python Bridge；浏览器与 Tauri 使用同一个 Python Core，但传输层分别为 HTTP/SSE 和 Tauri IPC。请勿同时运行浏览器开发服务器和 Tauri 桌面程序，以免两个 EtherCAT Master 竞争同一网卡。
 
 只执行构建检查：
 

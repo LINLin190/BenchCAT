@@ -24,7 +24,7 @@
 ---
 
 > [!IMPORTANT]
-> 应用默认选择 **Real** 模式，启动会枚举网卡并自动尝试连接、扫描从站。扫描会将从站配置到 PRE-OP 并映射 PDO 以读取固定 I/O 长度；它不会自动进入 OP 或启动周期通信。Demo / Mock 仅可在“设置”中启用，并会在界面中明确标识。Real 模式下的状态切换、ESC 寄存器和 EEPROM 写入可能影响机械设备或使从站暂时不可用，请只在隔离、安全的测试环境使用。
+> 应用启动会枚举网卡并自动尝试连接、扫描从站。扫描会将从站配置到 PRE-OP 并映射 PDO 以读取固定 I/O 长度；它不会自动进入 OP 或启动周期通信。状态切换、ESC 寄存器和 EEPROM 写入可能影响机械设备或使从站暂时不可用，请只在隔离、安全的测试环境使用。
 
 ## 为什么使用 BenchCAT
 
@@ -34,14 +34,13 @@ BenchCAT 是一款基于 **Tauri 2、Rust、React、TypeScript、Material UI 和
 
 | 关注点 | 实现方式 |
 | --- | --- |
-| 上手安全 | Real 启动自动扫描并停留在 PRE-OP；不会自动进入 OP 或启动周期通信；Demo / Mock 需在设置中启用并有明确标识 |
+| 上手安全 | 启动自动扫描并停留在 PRE-OP；不会自动进入 OP 或启动周期通信 |
 | GUI 响应 | WebView 不调用 pySOEM，硬件工作在 Python Bridge 异步执行 |
 | 请求一致性 | 同一 Master 的硬件请求由唯一 Worker 串行调度 |
 | 写入控制 | 寄存器使用两阶段计划与回读；EEPROM 使用容量、结构、语义和完整镜像校验 |
-| 无硬件开发 | Mock Backend、Demo 数据和自动化测试无需 EtherCAT 设备 |
 | 可追踪性 | 状态、AL 状态、超时、错误和写入审计日志始终可见 |
 
-底层 EtherCAT 主站通信使用 [pySOEM](https://github.com/bnjmnp/pysoem)。Windows Real 模式依赖 [Npcap](https://npcap.com/)；本仓库和应用均不包含或再分发 Npcap。
+底层 EtherCAT 主站通信使用 [pySOEM](https://github.com/bnjmnp/pysoem)。Windows 硬件通信依赖 [Npcap](https://npcap.com/)；本仓库和应用均不包含或再分发 Npcap。
 
 ## 功能概览
 
@@ -60,7 +59,7 @@ BenchCAT 是一款基于 **Tauri 2、Rust、React、TypeScript、Material UI 和
 
 ### 安装与启动
 
-当前发布版本使用 Tauri 2 Windows bundle 流程，仅生成简体中文界面的 NSIS（`.exe`）安装包，不再生成或发布 MSI。安装包内含独立的 Python Bridge、Python 运行时和 `pysoem==1.1.13`，目标电脑无需另装 Python。Npcap 不随安装包捆绑，Real 模式仍要求单独安装 Npcap 并启用 WinPcap API-compatible Mode。
+当前发布版本使用 Tauri 2 Windows bundle 流程，仅生成简体中文界面的 NSIS（`.exe`）安装包，不再生成或发布 MSI。安装包内含独立的 Python Bridge、Python 运行时和 `pysoem==1.1.13`，目标电脑无需另装 Python。Npcap 不随安装包捆绑，硬件通信仍要求单独安装 Npcap 并启用 WinPcap API-compatible Mode。
 
 在 PowerShell 中执行：
 
@@ -92,11 +91,11 @@ pnpm dev
 | Python | 3.11 或更新版本 |
 | Rust | MSVC 工具链 |
 | WebView | Windows WebView2 |
-| pySOEM | Real 模式固定使用 `pysoem==1.1.13` |
+| pySOEM | 使用 `pysoem==1.1.13` |
 | Npcap | 1.88 或更新版本，并启用 **WinPcap API-compatible Mode** |
 | 网卡建议 | 使用不承载普通网络业务的独立 EtherCAT 网卡 |
 
-Npcap/wpcap 缺失、权限不足或网卡无法打开时，界面会显示可操作的错误提示。Demo / Mock 不会打开物理网卡。Npcap 免费版由用户从官方网站单独下载和安装。
+Npcap/wpcap 缺失、权限不足或网卡无法打开时，界面会显示可操作的错误提示。Npcap 免费版由用户从官方网站单独下载和安装。
 
 ### 界面与操作动线
 
@@ -121,11 +120,11 @@ Npcap/wpcap 缺失、权限不足或网卡无法打开时，界面会显示可�
 | 概览 | 身份、状态、AL Status、ESC Profile 和基础健康信息 |
 | 寄存器 | 标准目录、原始地址、位域、读取/写入与监视列表 |
 | EEPROM | 读取、查看、备份、生成、烧录、验证和恢复 |
-| 设置 | Real/Demo 模式、AL 状态语言和应用信息 |
+| 设置 | AL 状态语言和应用信息 |
 
 #### 推荐流程
 
-1. Real 模式启动时会尝试连接并扫描，应用会保留发现从站的连接。Demo / Mock 在设置中启用。
+1. 启动时会尝试连接并扫描，应用会保留发现从站的连接。
 2. 若自动扫描未发现从站，可在网卡下拉框中选择适配器后手动“连接”和“扫描”。扫描会在 PRE-OP 映射 PDO，并缓存身份、PDI 和 I/O 长度。
 3. 先读取概览中的实际状态和 AL 状态。状态按钮可直接请求目标状态，后端会补齐必要的中间状态；从 OP 降级时会先停止周期通信。
 4. 在寄存器页先读取再写入，核对从站、目录、地址、当前值和目标值；超过 60 秒的计划必须重新生成。
@@ -207,8 +206,7 @@ flowchart LR
     UI[React / Material UI] --> T[Tauri 2 / Rust]
     T --> B[持久 JSON Bridge]
     B --> W[EtherCatWorker]
-    W --> R[Real Backend / pySOEM]
-    W --> M[Demo / Mock Backend]
+    W --> R[Backend / pySOEM]
     W --> S[Register / EEPROM Services]
     S --> P[ESI / SII Parser 与 ESC Profiles]
 ```
@@ -217,8 +215,7 @@ flowchart LR
 - Python Bridge 是唯一硬件入口，WebView 不直接调用 pySOEM；
 - Worker 是 Backend 的唯一所有者，同一 Master 的请求串行执行；
 - EEPROM 独占期间立即拒绝其他硬件请求；周期通信期间请求状态会先停止周期通信，重新配置、恢复和 EEPROM 操作仍禁用或拒绝；
-- `recover()` 返回成功后仍会校验实际状态和 AL 状态，不能只凭布尔值提示恢复完成；
-- Mock 与 Real Backend 遵循相同接口，Mock 不代表真机验证。
+- `recover()` 返回成功后仍会校验实际状态和 AL 状态，不能只凭布尔值提示恢复完成。
 
 ### 构建 Windows 应用
 

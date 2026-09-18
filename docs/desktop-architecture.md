@@ -15,7 +15,7 @@ Python bridge process
   Debug: source Python / Release: bundled PyInstaller onedir
         │ exclusive requests/events
         ▼
-EtherCatWorker → services → Real/Mock backend → pySOEM
+EtherCatWorker → services → backend → pySOEM
 ```
 
 - The webview never imports or calls pySOEM.
@@ -26,7 +26,6 @@ EtherCatWorker → services → Real/Mock backend → pySOEM
 - The Worker remains the sole owner of the EtherCAT Master and serializes all requests.
 - The Python hardware core owns one authoritative Master state machine with validated transitions and phase invariants. Worker events retain the session that produced them, and stale events are rejected before they can change Master state.
 - Binary data crosses the IPC boundary as uppercase hexadecimal strings.
-- Real is the default mode. Demo can only be enabled in Settings and is visibly marked.
 
 ## Interface structure
 

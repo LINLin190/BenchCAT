@@ -17,4 +17,4 @@ The dependency lockfiles are the authoritative component/version inventory for a
 
 ## Npcap
 
-Npcap is a separately installed system dependency for Real mode. It is not included or redistributed by this repository. Users obtain it from https://npcap.com/ and accept its license separately.
+Npcap is a separately installed system dependency for EtherCAT hardware communication. It is not included or redistributed by this repository. Users obtain it from https://npcap.com/ and accept its license separately.
