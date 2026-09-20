@@ -99,6 +99,13 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .state-selector .state-selector-pending { animation: state-request-pulse 1s ease-in-out infinite; }
 @keyframes state-request-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
+.slave-state-icon { flex-shrink: 0; color: #64748b; }
+.slave-state-icon[data-state="8"] { color: #22c55e; filter: drop-shadow(0 0 3px #22c55e80); }
+.slave-state-icon[data-state="2"] { animation: slave-preop-icon 400ms steps(1, end) infinite; }
+.slave-state-icon[data-state="4"] { animation: slave-safeop-icon 1000ms steps(1, end) infinite; }
+@keyframes slave-preop-icon { 0%, 100% { color: #22c55e; filter: drop-shadow(0 0 3px #22c55e80); } 50% { color: #64748b; filter: none; } }
+@keyframes slave-safeop-icon { 0%, 100% { color: #22c55e; filter: drop-shadow(0 0 3px #22c55e80); } 20% { color: #64748b; filter: none; } }
+
 @media (max-width: 1180px) {
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

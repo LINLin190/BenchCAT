@@ -198,21 +198,32 @@ function StateSelector({ state, disabled, onRequest, label, className = "" }: {
 }) {
   const [pendingState, setPendingState] = useState<number>();
   const requesting = useRef(false);
-  const selectedIndex = controllableStates.indexOf(state ?? 0);
+  const [requestRunning, setRequestRunning] = useState(false);
+  const displayedState = pendingState ?? state;
+  const selectedIndex = controllableStates.indexOf(displayedState ?? 0);
+  useEffect(() => {
+    if (pendingState === undefined) return;
+    const timer = window.setTimeout(() => setPendingState(undefined), 1600);
+    return () => window.clearTimeout(timer);
+  }, [pendingState]);
+  useEffect(() => {
+    if (pendingState !== undefined && state === pendingState) setPendingState(undefined);
+  }, [state, pendingState]);
   const request = async (target: number) => {
     if (disabled || requesting.current) return;
     requesting.current = true;
+    setRequestRunning(true);
     setPendingState(target);
     try {
       await onRequest(target);
     } finally {
       requesting.current = false;
-      setPendingState(undefined);
+      setRequestRunning(false);
     }
   };
-  return <Box role="group" aria-label={label} aria-busy={pendingState !== undefined} className={`state-selector ${className}`} sx={{ bgcolor: "action.hover", borderColor: "divider" }}>
+  return <Box role="group" aria-label={label} aria-busy={requestRunning} className={`state-selector ${className}`} sx={{ bgcolor: "action.hover", borderColor: "divider" }}>
     <Box aria-hidden="true" className="state-selector-thumb" sx={{ bgcolor: "primary.main", opacity: selectedIndex < 0 ? 0 : 1, transform: `translateX(${Math.max(0, selectedIndex) * 100}%)` }} />
-    {controllableStates.map((target) => <Button key={target} size="small" disableRipple aria-pressed={state === target} disabled={disabled || pendingState !== undefined} className={pendingState === target ? "state-selector-pending" : undefined} sx={{ color: state === target ? "primary.contrastText" : "text.secondary", "&.Mui-disabled": { color: state === target ? "primary.contrastText" : "text.secondary" } }} onClick={() => void request(target)}>{stateLabel(target)}</Button>)}
+    {controllableStates.map((target) => <Button key={target} size="small" disableRipple aria-pressed={displayedState === target} disabled={disabled || requestRunning || pendingState !== undefined} className={pendingState === target ? "state-selector-pending" : undefined} sx={{ color: displayedState === target ? "primary.contrastText" : "text.secondary", "&.Mui-disabled": { color: displayedState === target ? "primary.contrastText" : "text.secondary" } }} onClick={() => void request(target)}>{stateLabel(target)}</Button>)}
   </Box>;
 }
 
@@ -266,7 +277,7 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
               </Box>
               <Box className="ov-runtime-actions">
                 <Typography className="section-label">状态请求</Typography>
-                <StateSelector key={slaveIdentityKey(slave)} state={slave.state} disabled={busy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
+                <StateSelector key={`${status.session_id}:${slaveIdentityKey(slave)}`} state={slave.state} disabled={busy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
                 <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再清除从站状态错误。" : "确认当前从站的状态错误，保持当前状态"}>
                   <span><Button className="overview-clear-error" size="small" variant="outlined" disabled={busy || status.cycle_running} onClick={() => run(() => bridgeRequest<SlaveInfo[]>("clear_error", { position: slave.position }), "已确认从站状态错误")}>Clear Error</Button></span>
                 </Tooltip>
@@ -1287,7 +1298,7 @@ export default function App() {
           {status.connected && status.slaves.length > 0 && status.slaves.length !== 1 && <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
             <Tooltip title={busStateBlockedReason || `全部从站状态控制 · 当前 ${busState === undefined ? "无状态" : stateLabel(busState)}`}>
               <span>
-                <StateSelector state={busState} disabled={Boolean(busStateBlockedReason)} onRequest={requestBusState} label="全部从站状态控制" />
+                <StateSelector key={status.session_id} state={busState} disabled={Boolean(busStateBlockedReason)} onRequest={requestBusState} label="全部从站状态控制" />
               </span>
             </Tooltip>
           </Box>}
@@ -1299,16 +1310,12 @@ export default function App() {
         </Toolbar>
       </AppBar>
       <Box sx={{ display: "flex", minHeight: 0, flex: 1 }}>
-        {status.slaves.length > 0 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><StateChip state={busState!} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 30 }}><DeveloperBoardRounded fontSize="small" sx={(theme) => ({
-                  color: item.state === 8 ? theme.palette.success.main : theme.palette.action.active,
-                  ...(item.state === 2 || item.state === 4 ? {
-                    animation: `slave-state-blink ${item.state === 4 ? "2s" : "0.5s"} steps(1, end) infinite`,
-                    "@keyframes slave-state-blink": {
-                      "0%, 100%": { color: theme.palette.success.main },
-                      "50%": { color: theme.palette.action.active },
-                    },
-                  } : {}),
-                })} /></ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
+        {status.slaves.length > 0 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><StateChip state={busState!} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 32, alignItems: "center" }}>
+                  <Box sx={{ position: "relative", display: "inline-flex" }}>
+                    <DeveloperBoardRounded className="slave-state-icon" data-state={item.state} sx={{ fontSize: 22 }} />
+                    {Boolean((item.raw_state ?? item.state) & 0x10) && <WarningAmberRounded titleAccess="状态错误" color="error" sx={{ position: "absolute", right: -4, top: -5, fontSize: 13, bgcolor: "background.paper", borderRadius: "50%" }} />}
+                  </Box>
+                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, py: page === "overview" ? 1.5 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
