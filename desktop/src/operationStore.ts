@@ -28,6 +28,7 @@ let pageGeneration = 0;
 let hostGeneration: number | undefined;
 let sessionId: number | undefined;
 let operations: ReadonlyMap<string, ManagedOperation> = new Map();
+let updateInProgress = false;
 const listeners = new Set<() => void>();
 
 function publish(next: Map<string, ManagedOperation>) {
@@ -40,6 +41,7 @@ export const operationStore = {
   snapshot() { return operations; },
   get(id: string) { return operations.get(id); },
   context() { return { pageGeneration, hostGeneration, sessionId }; },
+  setUpdateInProgress(value: boolean) { updateInProgress = value; },
   setSnapshotClock(generation: number, value: number, sourceOperationId?: string) {
     const generationChanged = hostGeneration !== undefined && hostGeneration !== generation;
     const sessionChanged = sessionId !== undefined && sessionId !== value;
@@ -64,6 +66,10 @@ export const operationStore = {
   begin(method: string) {
     const spec = specs[method];
     if (!spec) throw new Error(`未注册前端命令：${method}`);
+    // The updater still needs to stop communication and disconnect safely.
+    if (updateInProgress && spec.lane === "hardware" && !["stop_cycle", "disconnect"].includes(method)) {
+      throw new Error("正在更新 BenchCAT，设备操作暂不可用");
+    }
     const id = `ui-${Date.now()}-${++sequence}`;
     if (operations.size > 200) operations = new Map([...operations].filter(([, op]) => !terminal.has(op.phase)).slice(-100));
     const operation: ManagedOperation = { id, method, lane: spec.lane, mutating: spec.mutating, hostGeneration, sessionId, pageGeneration, phase: "queued" };

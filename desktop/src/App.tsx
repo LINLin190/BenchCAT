@@ -48,6 +48,7 @@ import {
   BugReportRounded,
   MenuRounded,
   ChevronLeftRounded,
+  CloseRounded,
   DashboardRounded,
   DeveloperBoardRounded,
   FolderOpenRounded,
@@ -87,7 +88,7 @@ import type {
   WorkbenchStatus,
 } from "./types";
 import { hex, stateLabel } from "./types";
-import { checkForUpdate, restartAfterUpdate, type AvailableUpdate } from "./updater";
+import { checkForUpdate, type AvailableUpdate } from "./updater";
 
 const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
 const brandIconUrl = new URL("./assets/BenchCAT.png", import.meta.url).href;
@@ -97,7 +98,10 @@ type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | und
 const PREFERRED_ADAPTER_KEY = "benchcat.preferred-adapter";
 const RECENT_ESI_KEY = "benchcat.recent-esi";
 const AL_LANGUAGE_KEY = "benchcat.al-language";
+const AUTO_UPDATE_KEY = "benchcat.auto-check-updates";
+const IGNORED_UPDATE_KEY = "benchcat.ignored-update-version";
 const PROJECT_URL = "https://github.com/LINLin190/BenchCAT";
+const DOWNLOAD_URL = `${PROJECT_URL}/releases/latest`;
 const ISSUES_URL = `${PROJECT_URL}/issues`;
 
 function orderAdapters(items: AdapterInfo[]): AdapterInfo[] {
@@ -189,6 +193,103 @@ function EmptyState({ text }: { text: string }) {
 function StateChip({ state, error = false }: { state: number; error?: boolean }) {
   const color = error ? "error" : state === 8 ? "success" : state === 0 ? "default" : state === 1 ? "warning" : "primary";
   return <Chip size="small" color={color} variant={state === 8 ? "filled" : "outlined"} label={`${stateLabel(state)}${error ? " + ERROR" : ""}`} />;
+}
+
+type UpdateState = "idle" | "checking" | "available" | "preparing" | "downloading" | "installing" | "latest" | "error";
+type UpdateStage = "checking" | "preparing" | "downloading" | "installing";
+interface UpdateFailure { stage: UpdateStage; message: string }
+const UPDATE_STAGE_LABELS: Record<UpdateStage, string> = {
+  checking: "检查更新",
+  preparing: "准备更新",
+  downloading: "下载更新",
+  installing: "准备安装",
+};
+const UPDATE_ERROR_LABELS: Record<UpdateStage, string> = {
+  checking: "检查更新失败",
+  preparing: "准备更新失败",
+  downloading: "下载更新失败",
+  installing: "安装启动失败",
+};
+
+function isUpdateInProgress(state: UpdateState): state is "preparing" | "downloading" | "installing" {
+  return state === "preparing" || state === "downloading" || state === "installing";
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function UpdateDialog({
+  open,
+  state,
+  update,
+  progress,
+  blockedReason,
+  error,
+  onClose,
+  onIgnore,
+  onInstall,
+  onRetry,
+  onDownloadPage,
+}: {
+  open: boolean;
+  state: UpdateState;
+  update?: AvailableUpdate;
+  progress: { downloaded: number; total: number };
+  blockedReason: string;
+  error?: UpdateFailure;
+  onClose: () => void;
+  onIgnore: () => void;
+  onInstall: () => void;
+  onRetry: () => void;
+  onDownloadPage: () => void;
+}) {
+  const downloading = state === "downloading";
+  const updating = isUpdateInProgress(state);
+  const percentage = progress.total > 0
+    ? Math.min(100, Math.round(progress.downloaded / progress.total * 100))
+    : undefined;
+  return (
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" aria-labelledby="update-dialog-title">
+      <DialogTitle id="update-dialog-title" sx={{ pr: 7 }}>
+        {updating ? "正在更新 BenchCAT" : state === "error" ? "在线更新未完成" : state === "checking" ? "正在检查更新" : "发现新版本"}
+        <IconButton aria-label={updating ? "后台运行" : "关闭更新弹窗"} onClick={onClose} sx={{ position: "absolute", right: 12, top: 12 }}><CloseRounded /></IconButton>
+      </DialogTitle>
+      <DialogContent dividers>
+        <Stack spacing={1.5}>
+          {update && <Typography fontWeight={700}>当前 v{packageInfo.version} → 新版本 v{update.version}</Typography>}
+          {!updating && update?.date && Number.isFinite(Date.parse(update.date)) && <Typography variant="body2" color="text.secondary">发布时间：{new Date(update.date).toLocaleString("zh-CN")}</Typography>}
+          {!updating && update && <Box sx={{ maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere", p: 1.5, bgcolor: "action.hover", borderRadius: 1 }}>{update.notes?.trim() || "此版本未提供更新说明。"}</Box>}
+          {(updating || state === "checking") && <>
+            <Typography role="status" variant="body2">{UPDATE_STAGE_LABELS[state]}{state === "installing" ? "，随后由 Windows 安装器接管…" : "…"}</Typography>
+            <LinearProgress aria-label={UPDATE_STAGE_LABELS[state]} variant={downloading && percentage !== undefined ? "determinate" : "indeterminate"} value={downloading ? percentage : undefined} />
+          </>}
+          {downloading && <>
+            <Stack direction="row" justifyContent="space-between" gap={2}>
+              <Typography variant="body2" color="text.secondary">已下载 {formatBytes(progress.downloaded)}{progress.total > 0 ? ` / ${formatBytes(progress.total)}` : ""}</Typography>
+              {percentage !== undefined && <Typography variant="body2" color="text.secondary">{percentage}%</Typography>}
+            </Stack>
+          </>}
+          {blockedReason && !updating && <Alert severity="info">{blockedReason}</Alert>}
+          {state === "error" && error && <Alert severity="warning" sx={{ overflowWrap: "anywhere" }}>{UPDATE_ERROR_LABELS[error.stage]}：{error.message}</Alert>}
+        </Stack>
+      </DialogContent>
+      <Box sx={{ px: 3, pt: 1.5 }}>
+        <Typography variant="caption" color="text.secondary">{updating
+          ? "关闭此弹窗后继续更新，请保持软件运行；安装时软件将退出并自动重新启动。"
+          : "更新会停止通信并断开设备，安装时软件将自动重启。忽略本次更新仅关闭该版本的自动提醒。"}</Typography>
+      </Box>
+      <DialogActions sx={{ px: 3, pb: 2, pt: 1.5, gap: 0.5 }}>
+        {state === "available" && <Button onClick={onIgnore} sx={{ mr: "auto" }}>忽略本次更新</Button>}
+        {state === "error" && <Button onClick={onDownloadPage} sx={{ mr: "auto" }}>打开下载页面</Button>}
+        <Button onClick={onClose}>{updating ? "后台运行" : state === "available" ? "取消" : "关闭"}</Button>
+        {state === "available" && <Button variant="contained" disabled={Boolean(blockedReason) || !update} onClick={onInstall}>立即更新</Button>}
+        {state === "error" && <Button variant="contained" disabled={error?.stage !== "checking" && Boolean(blockedReason)} onClick={onRetry}>{error?.stage === "checking" ? "重新检查" : "重试更新"}</Button>}
+      </DialogActions>
+    </Dialog>
+  );
 }
 
 function StateSelector({ state, disabled, onRequest, label, className = "" }: {
@@ -404,7 +505,7 @@ function littleEndianValue(data: string): bigint {
   return data.trim().split(/\s+/).filter(Boolean).reduceRight((value, byte) => (value << 8n) | BigInt(`0x${byte}`), 0n);
 }
 
-function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run: Run; registerProfile: string }) {
+function RegistersPage({ slave, run, registerProfile, deviceOperationsBlocked }: { slave?: SlaveInfo; run: Run; registerProfile: string; deviceOperationsBlocked: boolean }) {
   const [catalog, setCatalog] = useState<RegisterDefinition[]>([]);
   const [catalogError, setCatalogError] = useState("");
   const [selected, setSelected] = useState<RegisterDefinition>();
@@ -467,7 +568,7 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
       }));
       if (!detail || registerContextRef.current !== requestedContext) return;
       setSelected(detail);
-      if (detail.direct_read_allowed === false) { setResult(undefined); return; }
+      if (detail.direct_read_allowed === false || deviceOperationsBlocked) { setResult(undefined); return; }
       const value = await run(() => bridgeRequest<RegisterValue>("register_read", {
         position: slave.position, address: detail.address, size: detail.width ?? detail.size, definition_id: detail.definition_id, profile: registerProfile,
       }));
@@ -493,7 +594,7 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
   };
 
   useEffect(() => {
-    if (!watching || !pinned.length || !slave) return;
+    if (deviceOperationsBlocked || !watching || !pinned.length || !slave) return;
     let active = true;
     let timer: number | undefined;
     const poll = async () => {
@@ -518,7 +619,7 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
     };
     void poll();
     return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [watching, pinned, slave, intervalMs, registerProfile]);
+  }, [deviceOperationsBlocked, watching, pinned, slave, intervalMs, registerProfile]);
 
   const togglePinned = (definition: RegisterDefinition) => {
     if (definition.direct_read_allowed === false) return;
@@ -585,7 +686,7 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
           </CardContent>
           <Divider />
           <List dense sx={{ overflow: "auto", maxHeight: "calc(100vh - 350px)", p: 0.6 }}>
-            {filtered.map((definition) => <ListItemButton disabled={Boolean(readingDefinitionId)} selected={selected?.definition_id === definition.definition_id} key={definition.definition_id ?? `${definition.address}-${definition.name}`} onClick={() => void read(definition)} sx={{ py: 0.55, px: 0.8 }}><ListItemText primary={definition.name} secondary={`${definition.address_text ?? hex(definition.address)} · ${definition.group} · ${definition.address_space_label ?? "ESC"}`} primaryTypographyProps={{ fontSize: 13 }} secondaryTypographyProps={{ fontSize: 11.5 }} /><Stack alignItems="flex-end" gap={0.35}>{readingDefinitionId === definition.definition_id ? <CircularProgress size={18} /> : <Chip size="small" variant="outlined" label={definition.access} />}{definition.direct_read_allowed === false && <Chip size="small" variant="outlined" label="本地访问" />}</Stack></ListItemButton>)}
+            {filtered.map((definition) => <ListItemButton disabled={deviceOperationsBlocked || Boolean(readingDefinitionId)} selected={selected?.definition_id === definition.definition_id} key={definition.definition_id ?? `${definition.address}-${definition.name}`} onClick={() => void read(definition)} sx={{ py: 0.55, px: 0.8 }}><ListItemText primary={definition.name} secondary={`${definition.address_text ?? hex(definition.address)} · ${definition.group} · ${definition.address_space_label ?? "ESC"}`} primaryTypographyProps={{ fontSize: 13 }} secondaryTypographyProps={{ fontSize: 11.5 }} /><Stack alignItems="flex-end" gap={0.35}>{readingDefinitionId === definition.definition_id ? <CircularProgress size={18} /> : <Chip size="small" variant="outlined" label={definition.access} />}{definition.direct_read_allowed === false && <Chip size="small" variant="outlined" label="本地访问" />}</Stack></ListItemButton>)}
             {!catalogError && catalog.length > 0 && filtered.length === 0 && <Box sx={{ py: 6, px: 2, textAlign: "center", color: "text.secondary" }}><Typography fontWeight={700}>没有匹配的寄存器</Typography><Typography variant="caption">请调整搜索词或类别筛选。</Typography></Box>}
           </List>
         </Card>
@@ -611,13 +712,13 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
                     <Typography className="mono data-surface" sx={{ mt: 0.6, p: 1.5, fontSize: 20, minHeight: 56, display: "flex", alignItems: "center", overflowWrap: "anywhere" }}>{readingDefinitionId === selected.definition_id ? "读取中…" : result?.data ?? "尚未读取"}</Typography>
                   </Box>
                   <Stack direction="row" gap={0.75} flexWrap="wrap" alignItems="center">
-                    <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={Boolean(readingDefinitionId)} onClick={() => void read(selected)}>重新读取</Button>
+                    <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={deviceOperationsBlocked || Boolean(readingDefinitionId)} onClick={() => void read(selected)}>重新读取</Button>
                     <Button size="small" disabled={!result?.data} onClick={() => void copyReadValue()}>{copied ? "已复制" : "复制值"}</Button>
                     <Tooltip title={selected.address === 0x0040 ? "复位寄存器请使用 RES 操作" : selected.direct_write_allowed ? "" : "此寄存器不支持整寄存器写入"}>
-                      <span><Button size="small" variant="contained" disabled={!selected.direct_write_allowed || selected.address === 0x0040} onClick={() => openWrite({ address: selected.address, width: selected.width ?? selected.size ?? 1, name: selected.name, access: selected.access, known: true })}>写入寄存器值</Button></span>
+                      <span><Button size="small" variant="contained" disabled={deviceOperationsBlocked || !selected.direct_write_allowed || selected.address === 0x0040} onClick={() => openWrite({ address: selected.address, width: selected.width ?? selected.size ?? 1, name: selected.name, access: selected.access, known: true })}>写入寄存器值</Button></span>
                     </Tooltip>
                     <Button size="small" variant={pinned.some((item) => item.definition_id === selected.definition_id) ? "contained" : "text"} onClick={() => togglePinned(selected)}>{pinned.some((item) => item.definition_id === selected.definition_id) ? "取消固定" : "固定监视"}</Button>
-                    {selected.address === 0x0040 && <Button size="small" color="error" onClick={() => setResetConfirm(true)}>发送三帧 RES</Button>}
+                    {selected.address === 0x0040 && <Button size="small" color="error" disabled={deviceOperationsBlocked} onClick={() => setResetConfirm(true)}>发送三帧 RES</Button>}
                   </Stack>
                 </>}
               <Divider />
@@ -632,12 +733,12 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
           </CardContent>
         </Card>
       </Box>
-        <Accordion disableGutters defaultExpanded><AccordionSummary expandIcon={<ExpandMoreRounded />}><Box><Typography fontWeight={700}>原始地址读写</Typography><Typography variant="caption" color="text.secondary">用于未收录地址；宽度同时约束读取长度和写入 HEX 字节数。</Typography></Box></AccordionSummary><AccordionDetails><Stack direction="row" gap={1} alignItems="center" flexWrap="wrap"><TextField size="small" label="地址" value={rawAddress} onChange={(e) => { setRawAddress(e.target.value); setRawResult(undefined); }} inputProps={{ className: "mono" }} sx={{ width: 150 }} /><TextField size="small" type="number" label="读写宽度（byte）" value={rawSize} onChange={(e) => { setRawSize(Number(e.target.value)); setRawResult(undefined); }} inputProps={{ min: 1, max: 256 }} sx={{ width: 150 }} /><Button variant="outlined" disabled={parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={readRaw}>读取</Button><FormControl size="small" sx={{ width: 150 }}><InputLabel>写入语义</InputLabel><Select label="写入语义" value={rawAccess} onChange={(e) => setRawAccess(e.target.value)}>{["RW", "WO", "W1C", "W1S", "WAC", "SELF_CLEARING", "VOLATILE"].map((item) => <MenuItem value={item} key={item}>{item}</MenuItem>)}</Select></FormControl><Button variant="contained" disabled={parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={() => openWrite({ address: parseHexInput(rawAddress) ?? 0, width: rawSize, name: `原始地址 ${rawAddress}`, access: rawAccess, known: false })}>写入</Button><Typography className="mono">{rawResult?.data ? `读取值：${rawResult.data}` : ""}</Typography></Stack></AccordionDetails></Accordion>
+        <Accordion disableGutters defaultExpanded><AccordionSummary expandIcon={<ExpandMoreRounded />}><Box><Typography fontWeight={700}>原始地址读写</Typography><Typography variant="caption" color="text.secondary">用于未收录地址；宽度同时约束读取长度和写入 HEX 字节数。</Typography></Box></AccordionSummary><AccordionDetails><Stack direction="row" gap={1} alignItems="center" flexWrap="wrap"><TextField size="small" label="地址" value={rawAddress} onChange={(e) => { setRawAddress(e.target.value); setRawResult(undefined); }} inputProps={{ className: "mono" }} sx={{ width: 150 }} /><TextField size="small" type="number" label="读写宽度（byte）" value={rawSize} onChange={(e) => { setRawSize(Number(e.target.value)); setRawResult(undefined); }} inputProps={{ min: 1, max: 256 }} sx={{ width: 150 }} /><Button variant="outlined" disabled={deviceOperationsBlocked || parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={readRaw}>读取</Button><FormControl size="small" sx={{ width: 150 }}><InputLabel>写入语义</InputLabel><Select label="写入语义" value={rawAccess} onChange={(e) => setRawAccess(e.target.value)}>{["RW", "WO", "W1C", "W1S", "WAC", "SELF_CLEARING", "VOLATILE"].map((item) => <MenuItem value={item} key={item}>{item}</MenuItem>)}</Select></FormControl><Button variant="contained" disabled={deviceOperationsBlocked || parseHexInput(rawAddress) === undefined || !Number.isInteger(rawSize) || rawSize < 1 || rawSize > 256} onClick={() => openWrite({ address: parseHexInput(rawAddress) ?? 0, width: rawSize, name: `原始地址 ${rawAddress}`, access: rawAccess, known: false })}>写入</Button><Typography className="mono">{rawResult?.data ? `读取值：${rawResult.data}` : ""}</Typography></Stack></AccordionDetails></Accordion>
       <Card sx={cardSx}>
         <CardContent>
           <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
             <Box minWidth={0}><Typography variant="h6">固定监视 {pinned.length > 0 && <Typography component="span" variant="caption" color="text.secondary">· {pinned.length} 项</Typography>}</Typography><Typography variant="caption" color="text.secondary">合并相邻范围；值变化时短暂高亮；失败后自动暂停。</Typography></Box>
-            <Stack direction="row" gap={0.75}><FormControl size="small" sx={{ width: 122 }}><InputLabel>刷新周期</InputLabel><Select label="刷新周期" value={intervalMs} disabled={watching} onChange={(e) => setIntervalMs(Number(e.target.value))}>{[500, 1000, 2000, 5000].map((value) => <MenuItem value={value} key={value}>{value} ms</MenuItem>)}</Select></FormControl><Button size="small" disabled={!pinned.length} variant={watching ? "contained" : "outlined"} onClick={() => setWatching(!watching)}>{watching ? "暂停" : "开始"}</Button><Button size="small" disabled={!pinned.length} onClick={() => { setPinned([]); setWatchValues({}); watchValuesRef.current = {}; setWatching(false); }}>清空</Button></Stack>
+            <Stack direction="row" gap={0.75}><FormControl size="small" sx={{ width: 122 }}><InputLabel>刷新周期</InputLabel><Select label="刷新周期" value={intervalMs} disabled={watching} onChange={(e) => setIntervalMs(Number(e.target.value))}>{[500, 1000, 2000, 5000].map((value) => <MenuItem value={value} key={value}>{value} ms</MenuItem>)}</Select></FormControl><Button size="small" disabled={deviceOperationsBlocked || !pinned.length} variant={watching ? "contained" : "outlined"} onClick={() => setWatching(!watching)}>{watching ? "暂停" : "开始"}</Button><Button size="small" disabled={!pinned.length} onClick={() => { setPinned([]); setWatchValues({}); watchValuesRef.current = {}; setWatching(false); }}>清空</Button></Stack>
           </Stack>
           {watchError && <Alert severity="error" sx={{ mt: 1 }}>{watchError}</Alert>}
           <TableContainer sx={{ mt: 1 }}><Table size="small"><TableHead><TableRow>{["地址", "名称", "值", "耗时", "操作"].map((item) => <TableCell key={item}>{item}</TableCell>)}</TableRow></TableHead><TableBody>{pinned.map((definition) => { const width = definition.width ?? definition.size ?? 1; const key = registerKey(definition.address, width); const value = watchValues[key]; const changed = changedWatchKeys.has(key); return <TableRow key={key} sx={{ bgcolor: changed ? "warning.light" : "transparent", transition: "background-color .35s ease" }}><TableCell className="mono">{hex(definition.address)}</TableCell><TableCell>{definition.name}</TableCell><TableCell className="mono"><Stack direction="row" alignItems="center" gap={0.75}>{value?.data ?? "—"}{changed && <Chip size="small" color="warning" label="变化" />}</Stack></TableCell><TableCell>{value ? `${value.duration_ms.toFixed(2)} ms` : "—"}</TableCell><TableCell><Button size="small" onClick={() => removePinned(definition)}>移除</Button></TableCell></TableRow>; })}{!pinned.length && <TableRow><TableCell colSpan={5} align="center" sx={{ py: 2.5, color: "text.secondary" }}>从标准寄存器详情中固定需要监视的项目</TableCell></TableRow>}</TableBody></Table></TableContainer>
@@ -664,10 +765,10 @@ function RegistersPage({ slave, run, registerProfile }: { slave?: SlaveInfo; run
       </DialogContent>
       <DialogActions>
         <Button disabled={writing} onClick={() => setWriteOpen(false)}>取消</Button>
-        <Button variant="contained" disabled={!writeDataValid || writing} onClick={executeWrite}>{writing ? "写入中…" : "写入"}</Button>
+        <Button variant="contained" disabled={deviceOperationsBlocked || !writeDataValid || writing} onClick={executeWrite}>{writing ? "写入中…" : "写入"}</Button>
       </DialogActions>
     </Dialog>
-    <Dialog open={resetConfirm} onClose={() => setResetConfirm(false)}><DialogTitle>确认复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">将独占 Worker，以三个连续、独立 FPWR 向 0x0040 写入 52、45、53；从站会短暂掉线。</Alert></DialogContent><DialogActions><Button onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" onClick={async () => { const value = await run(() => bridgeRequest("register_reset", { position: slave?.position, profile: registerProfile }), "RES 复位序列已发送"); if (value) setResetConfirm(false); }}>确认并发送</Button></DialogActions></Dialog>
+    <Dialog open={resetConfirm} onClose={() => setResetConfirm(false)}><DialogTitle>确认复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">将独占 Worker，以三个连续、独立 FPWR 向 0x0040 写入 52、45、53；从站会短暂掉线。</Alert></DialogContent><DialogActions><Button onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" disabled={deviceOperationsBlocked} onClick={async () => { const value = await run(() => bridgeRequest("register_reset", { position: slave?.position, profile: registerProfile }), "RES 复位序列已发送"); if (value) setResetConfirm(false); }}>确认并发送</Button></DialogActions></Dialog>
   </>;
 }
 
@@ -721,9 +822,10 @@ interface EepromPageProps {
   onInitialSelectionConsumed: () => void;
   autoResetEsc: boolean;
   fileDropEnabled: boolean;
+  deviceOperationsBlocked: boolean;
 }
 
-function EepromPage({ slave, status, progress, setProgress, run, readResult, setReadResult, initialSelection, onInitialSelectionConsumed, autoResetEsc, fileDropEnabled }: EepromPageProps) {
+function EepromPage({ slave, status, progress, setProgress, run, readResult, setReadResult, initialSelection, onInitialSelectionConsumed, autoResetEsc, fileDropEnabled, deviceOperationsBlocked }: EepromPageProps) {
   const [esi, setEsi] = useState<EsiResult>();
   const [ordinal, setOrdinal] = useState(0);
   const [target, setTarget] = useState<TargetResult>();
@@ -743,8 +845,8 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
   const configDataResult = normalizeConfigData(configData);
   const configDecoded = decodeConfigData(configData);
   const operationInProgress = isEepromOperation(progress?.operation) && progress!.percent < 100;
-  const canFlash = Boolean(slave && target && !status.cycle_running && !operationInProgress);
-  const blockers = [operationInProgress && "已有 EEPROM 操作正在执行", !target && "需要选择有效 XML", status.cycle_running && "需要停止周期通信"].filter(Boolean) as string[];
+  const canFlash = Boolean(slave && target && !status.cycle_running && !operationInProgress && !deviceOperationsBlocked);
+  const blockers = [deviceOperationsBlocked && "正在更新 BenchCAT", operationInProgress && "已有 EEPROM 操作正在执行", !target && "需要选择有效 XML", status.cycle_running && "需要停止周期通信"].filter(Boolean) as string[];
   useEffect(() => { setOperationResult(undefined); setBackupPath(""); }, [slaveIdentityKey(slave)]);
 
   const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig?: string) => {
@@ -896,7 +998,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
           {currentDevice && target ? <Stack spacing={1.5}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>{[["设备", esiDeviceDisplayName(currentDevice)], ["厂商", esi?.vendor_name], ["Product Code（产品代码）", hex(currentDevice.product_code, 8)], ["Revision（修订版本）", hex(deviceRevision(currentDevice), 8)], ["目标容量", `${target.size} B`], ["SHA-256", target.sha256]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("Code") || label === "SHA-256" ? "mono" : ""} noWrap title={String(value)}>{value}</Typography></Box>)}</Box><Divider /><Box><Typography variant="subtitle2">已转换内容</Typography><Stack direction="row" flexWrap="wrap" gap={0.7} sx={{ mt: 1 }}>{target.supported.map((item) => <Chip size="small" color="success" variant="outlined" label={item} key={item} />)}</Stack></Box>{target.omitted.length > 0 && <Box><Typography variant="subtitle2" color={targetNeedsAttention(target) ? "warning.main" : "text.primary"}>{targetNeedsAttention(target) ? "容量降级或未写入类别" : "转换范围说明"}</Typography>{target.omitted.map((item) => <Typography variant="body2" color={targetNeedsAttention(target) ? "warning.main" : "text.secondary"} key={item}>• {item}</Typography>)}</Box>}</Stack> : <Box sx={{ py: 6, textAlign: "center", color: "text.secondary" }}>尚无可预览的烧录目标</Box>}
         </CardContent></Card>
       </Box>
-      <Card sx={cardSx}><CardContent><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(300px, .85fr)", gap: 2, alignItems: "start" }}><Box><Typography variant="h6">读取与恢复</Typography><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.25 }}>完整读取只刷新 Smart/Hex View；备份 BIN 会保存可恢复文件。</Typography><Stack direction="row" gap={0.75} flexWrap="wrap"><Tooltip title={status.cycle_running ? "完整读取前必须停止周期通信" : ""}><span><Button size="small" variant="outlined" disabled={status.cycle_running || operationInProgress} onClick={readFull}>完整读取</Button></span></Tooltip><Tooltip title={status.cycle_running ? "备份前必须停止周期通信" : ""}><span><Button size="small" variant="outlined" disabled={status.cycle_running || operationInProgress} startIcon={<SaveAltRounded />} onClick={backup}>备份 BIN</Button></span></Tooltip><Tooltip title={status.cycle_running ? "恢复前必须停止周期通信" : "恢复时自动切换到 INIT"}><span><Button size="small" color="warning" variant="outlined" disabled={status.cycle_running || operationInProgress} onClick={restore}>从 BIN 恢复</Button></span></Tooltip>{backupPath && <Button size="small" onClick={() => revealPath(backupPath)} startIcon={<FolderOpenRounded />}>打开备份位置</Button>}</Stack></Box><Box sx={{ borderLeft: { sm: 1 }, borderColor: "divider", pl: { sm: 2 } }}><Typography variant="h6">烧录</Typography><Typography variant="caption" color="text.secondary">执行时自动将目标从站切换到 INIT，再写入并完整校验。</Typography><Stack direction="row" gap={0.6} flexWrap="wrap" sx={{ my: 1 }}><Chip color={target ? "success" : "default"} label={target ? "目标已生成" : "缺少目标"} /><Chip color={!status.cycle_running ? "success" : "warning"} label={!status.cycle_running ? "周期已停止" : "周期运行中"} /></Stack><Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={flash}>烧录</Button></span></Tooltip>{blockers.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{blockers.join("；")}</Typography>}</Box></Box></CardContent></Card>
+      <Card sx={cardSx}><CardContent><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(300px, .85fr)", gap: 2, alignItems: "start" }}><Box><Typography variant="h6">读取与恢复</Typography><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.25 }}>完整读取只刷新 Smart/Hex View；备份 BIN 会保存可恢复文件。</Typography><Stack direction="row" gap={0.75} flexWrap="wrap"><Tooltip title={status.cycle_running ? "完整读取前必须停止周期通信" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress} onClick={readFull}>完整读取</Button></span></Tooltip><Tooltip title={status.cycle_running ? "备份前必须停止周期通信" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress} startIcon={<SaveAltRounded />} onClick={backup}>备份 BIN</Button></span></Tooltip><Tooltip title={status.cycle_running ? "恢复前必须停止周期通信" : "恢复时自动切换到 INIT"}><span><Button size="small" color="warning" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress} onClick={restore}>从 BIN 恢复</Button></span></Tooltip>{backupPath && <Button size="small" onClick={() => revealPath(backupPath)} startIcon={<FolderOpenRounded />}>打开备份位置</Button>}</Stack></Box><Box sx={{ borderLeft: { sm: 1 }, borderColor: "divider", pl: { sm: 2 } }}><Typography variant="h6">烧录</Typography><Typography variant="caption" color="text.secondary">执行时自动将目标从站切换到 INIT，再写入并完整校验。</Typography><Stack direction="row" gap={0.6} flexWrap="wrap" sx={{ my: 1 }}><Chip color={target ? "success" : "default"} label={target ? "目标已生成" : "缺少目标"} /><Chip color={!status.cycle_running ? "success" : "warning"} label={!status.cycle_running ? "周期已停止" : "周期运行中"} /></Stack><Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={flash}>烧录</Button></span></Tooltip>{blockers.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{blockers.join("；")}</Typography>}</Box></Box></CardContent></Card>
       {readResult && <Card sx={cardSx}><CardContent><Typography variant="h6">最近完整读取</Typography><Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.25, mt: 1.25 }}>{[["读取时间", new Date(readResult.read_at).toLocaleString()], ["容量", `${readResult.size} B`], ["SII 结构", readResult.sii_valid ? `${readResult.category_count ?? 0} 个 Category` : "无效"], ["差异", readResult.comparison ? `${readResult.comparison.differing_bytes} byte` : "未选择目标"], ["Vendor ID（厂商 ID）", readResult.identity ? hex(readResult.identity.vendor_id, 8) : "—"], ["Product Code（产品代码）", readResult.identity ? hex(readResult.identity.product_code, 8) : "—"], ["Revision（修订版本）", readResult.identity ? hex(readResult.identity.revision, 8) : "—"], ["SHA-256", readResult.sha256]].map(([label, value]) => <Box key={label} minWidth={0}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={label === "SHA-256" || label.includes("Code") ? "mono" : ""} noWrap title={value}>{value}</Typography></Box>)}</Box>{!readResult.sii_valid && <Alert severity="warning" sx={{ mt: 1.25 }}>原始 BIN 已完整读取，但 SII 解析失败：{readResult.sii_error}</Alert>}<Accordion disableGutters sx={{ mt: 1.25 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>Hex View（只读）</Typography></AccordionSummary><AccordionDetails><Box component="pre" className="mono data-surface" sx={{ m: 0, p: 1.25, maxHeight: 320, overflow: "auto", fontSize: 12 }}>{formatHexView(readResult.data)}</Box></AccordionDetails></Accordion></CardContent></Card>}
       {operationResult && <Card sx={cardSx}><CardContent><Alert severity={operationResult.severity}><Typography fontWeight={700}>{operationResult.title}</Typography>{operationResult.error ?? operationResult.payload?.result.image_verification}</Alert>{operationResult.payload && <Accordion disableGutters sx={{ mt: 1.2 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>技术详情</Typography></AccordionSummary><AccordionDetails><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>{[["写入 Word", operationResult.payload.result.words_written], ["完整回读", `${operationResult.payload.result.bytes_read_back} B`], ["差异字节", operationResult.payload.result.comparison.differing_bytes], ["目标 SHA-256", operationResult.payload.result.comparison.target_sha256], ["回读 SHA-256", operationResult.payload.result.comparison.readback_sha256], ["SII 结构", operationResult.payload.result.sii_valid ? "通过" : "失败"], ["XML 语义", operationResult.payload.result.semantic_valid ? "通过" : "失败"], ["RES 序列", operationResult.payload.result.reset_sequence == null ? "未执行" : operationResult.payload.result.reset_sequence.every(Boolean) ? "三帧成功" : "未完成"], ["重新发现", operationResult.payload.result.rediscovered == null ? "未执行" : operationResult.payload.result.rediscovered ? "成功" : "失败"], ["重新加载复核", operationResult.payload.result.reload_verified == null ? "未执行" : operationResult.payload.result.reload_verified ? "成功" : "失败"]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("SHA") ? "mono" : ""} noWrap title={String(value)}>{String(value)}</Typography></Box>)}</Box></AccordionDetails></Accordion>}</CardContent></Card>}
     </Stack>}</>;
@@ -917,12 +1019,20 @@ export default function App() {
   const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" }>();
   const [settings, setSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState(0);
-  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "downloading" | "latest" | "error">("idle");
+  const [updateState, setUpdateState] = useState<UpdateState>("idle");
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
   const [updateProgress, setUpdateProgress] = useState({ downloaded: 0, total: 0 });
-  const checkUpdateRef = useRef<(automatic?: boolean) => Promise<void>>(() => Promise.resolve());
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateError, setUpdateError] = useState<UpdateFailure>();
+  const [pendingUpdateReminder, setPendingUpdateReminder] = useState(false);
+  const [ignoredUpdateVersion, setIgnoredUpdateVersion] = useState(() => window.localStorage.getItem(IGNORED_UPDATE_KEY) ?? "");
+  const updateTaskRef = useRef(false);
+  const startupUpdateCheckedRef = useRef(false);
   const [alLanguage, setAlLanguage] = useState<AlStatusLanguage>(() => window.localStorage.getItem(AL_LANGUAGE_KEY) === "en" ? "en" : "zh");
   const [eepromAutoReset, setEepromAutoReset] = useState(() => loadEepromAutoReset());
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState(() => window.localStorage.getItem(AUTO_UPDATE_KEY) !== "false");
+  const autoCheckUpdatesRef = useRef(autoCheckUpdates);
+  autoCheckUpdatesRef.current = autoCheckUpdates;
   const [slaveContextMenu, setSlaveContextMenu] = useState<SlaveContextMenu>();
   const [quickFlashOpen, setQuickFlashOpen] = useState(false);
   const [eepromDetailSelection, setEepromDetailSelection] = useState<EepromDetailSelection>();
@@ -935,13 +1045,17 @@ export default function App() {
   const eepromReadCacheKey = `${status.host_generation}:${status.session_id}:${selectedSlaveKey}`;
   const registerProfile = slave ? registerProfileOverrides[selectedSlaveKey] ?? defaultRegisterProfile(slave.chip_model) : "ET1100";
   const operations = useSyncExternalStore(operationStore.subscribe, operationStore.snapshot);
-  const busy = useMemo(() => [...operations.values()].some((operation) =>
+  const hardwareBusy = useMemo(() => [...operations.values()].some((operation) =>
     ["queued", "running"].includes(operation.phase) && operation.lane === "hardware" && operation.method !== "register_watch"
   ), [operations]);
   const scanning = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["scan", "auto_scan"].includes(operation.method));
   const connecting = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["connect", "disconnect"].includes(operation.method));
   const eepromExclusive = isEepromOperation(progress?.operation) && progress!.percent < 100;
-  const updateBlocked = busy || eepromExclusive;
+  const updating = isUpdateInProgress(updateState);
+  const busy = hardwareBusy || updating;
+  const updateBlockedReason = eepromExclusive
+    ? "EEPROM 操作进行中，完成后即可更新。"
+    : hardwareBusy ? "设备操作进行中，完成后即可更新。" : "";
   const busState = minimumBusState(status.slaves);
   const busStateBlockedReason = !bridgeAvailable
     ? "通信核心不可用"
@@ -1187,43 +1301,99 @@ export default function App() {
     else if (await run(() => bridgeRequest("connect", { adapter }))) await scan();
   };
   const checkUpdate = useCallback(async (automatic = false) => {
-    if (updateState === "checking" || updateState === "downloading") return;
+    if (updateTaskRef.current || (automatic && startupUpdateCheckedRef.current)) return;
+    startupUpdateCheckedRef.current = true;
+    updateTaskRef.current = true;
+    setPendingUpdateReminder(false);
+    setUpdateError(undefined);
+    setAvailableUpdate(undefined);
     setUpdateState("checking");
     try {
       const update = await checkForUpdate();
       if (!update) {
         setUpdateState("latest");
+        setUpdateDialogOpen(false);
         if (!automatic) setMessage({ text: `当前已是最新版本 v${packageInfo.version}`, severity: "info" });
         return;
       }
       setAvailableUpdate(update);
+      setUpdateProgress({ downloaded: 0, total: 0 });
       setUpdateState("available");
-      if (automatic) setMessage({ text: `发现 BenchCAT v${update.version} 更新`, severity: "info" });
+      if (automatic) {
+        const ignored = window.localStorage.getItem(IGNORED_UPDATE_KEY) === update.version;
+        setPendingUpdateReminder(autoCheckUpdatesRef.current && !ignored);
+      } else {
+        setUpdateDialogOpen(true);
+      }
     } catch (error) {
       setUpdateState("error");
-      if (!automatic) setMessage({ text: `检查更新失败：${error instanceof Error ? error.message : String(error)}`, severity: "error" });
+      setUpdateError({ stage: "checking", message: error instanceof Error ? error.message : String(error) });
+      if (!automatic) setUpdateDialogOpen(true);
+    } finally {
+      updateTaskRef.current = false;
     }
-  }, [updateState]);
+  }, []);
+  useEffect(() => () => { void availableUpdate?.close().catch(console.error); }, [availableUpdate]);
   useEffect(() => {
-    checkUpdateRef.current = checkUpdate;
-  }, [checkUpdate]);
-  const installUpdate = async () => {
-    if (!availableUpdate || updateBlocked) return;
+    if (!autoCheckUpdates) {
+      setPendingUpdateReminder(false);
+      return;
+    }
+    if (pendingUpdateReminder && updateState === "available" && !updateBlockedReason) {
+      setPendingUpdateReminder(false);
+      setUpdateDialogOpen(true);
+    }
+  }, [autoCheckUpdates, pendingUpdateReminder, updateState, updateBlockedReason]);
+  const closeUpdateDialog = () => {
+    setPendingUpdateReminder(false);
+    setUpdateDialogOpen(false);
+  };
+  const ignoreUpdate = () => {
+    if (!availableUpdate || updateTaskRef.current) return;
     try {
-      if (status.cycle_running) await bridgeRequest("stop_cycle");
-      if (status.connected) await bridgeRequest("disconnect");
+      window.localStorage.setItem(IGNORED_UPDATE_KEY, availableUpdate.version);
+      setIgnoredUpdateVersion(availableUpdate.version);
+      closeUpdateDialog();
+    } catch {
+      setMessage({ text: "无法保存忽略设置，请使用“取消”关闭本次提醒。", severity: "error" });
+    }
+  };
+  const installUpdate = async () => {
+    if (!availableUpdate || updateTaskRef.current || eepromExclusive || operationStore.activeHardware()) return;
+    updateTaskRef.current = true;
+    operationStore.setUpdateInProgress(true);
+    setPendingUpdateReminder(false);
+    setUpdateError(undefined);
+    setUpdateState("preparing");
+    setUpdateDialogOpen(true);
+    setQuickFlashOpen(false);
+    setSlaveContextMenu(undefined);
+    let stage: UpdateStage = "preparing";
+    try {
+      const current = await bridgeRequest<WorkbenchStatus>("status");
+      if (current.cycle_running) await bridgeRequest("stop_cycle");
+      if (current.connected) await bridgeRequest("disconnect");
+      setUpdateProgress({ downloaded: 0, total: 0 });
+      stage = "downloading";
       setUpdateState("downloading");
-      await availableUpdate.downloadAndInstall((next) => setUpdateProgress({ downloaded: next.downloaded, total: next.total ?? 0 }));
-      await restartAfterUpdate();
+      await availableUpdate.downloadAndInstall((next) => {
+        stage = next.phase;
+        setUpdateState(next.phase);
+        setUpdateProgress({ downloaded: next.downloaded, total: next.total ?? 0 });
+      });
     } catch (error) {
+      operationStore.setUpdateInProgress(false);
       setUpdateState("error");
-      setMessage({ text: `安装更新失败：${error instanceof Error ? error.message : String(error)}`, severity: "error" });
+      setUpdateError({ stage, message: error instanceof Error ? error.message : String(error) });
+      setUpdateDialogOpen(true);
+      updateTaskRef.current = false;
     }
   };
   useEffect(() => {
-    const timer = window.setTimeout(() => { void checkUpdateRef.current(true); }, 25_000);
+    if (!autoCheckUpdates) return;
+    const timer = window.setTimeout(() => { void checkUpdate(true); }, 25_000);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [autoCheckUpdates, checkUpdate]);
   const scan = async () => {
     const found = await run(() => bridgeRequest<SlaveInfo[]>("scan"));
     if (found) setMessage({ text: found.length ? `扫描完成，发现 ${found.length} 个从站` : "扫描完成，但未发现从站。请检查网卡、链路和从站供电。", severity: found.length ? "success" : "info" });
@@ -1238,12 +1408,12 @@ export default function App() {
   };
 
   const navigate = useCallback((nextPage: PageKey) => {
-    if (nextPage === page) return;
+    if (nextPage === page || updateState === "preparing") return;
     // Advance before rendering the target page so its initial bridge calls are
     // born into the new page generation instead of being cancelled immediately.
     operationStore.nextPage();
     setPage(nextPage);
-  }, [page]);
+  }, [page, updateState]);
   const setSelectedEepromReadResult = useCallback((value?: EepromReadResult) => {
     if (value) setEepromReadCache((current) => ({ ...current, [eepromReadCacheKey]: value }));
   }, [eepromReadCacheKey]);
@@ -1251,6 +1421,7 @@ export default function App() {
 
   const openSlaveContextMenu = (event: ReactMouseEvent, position: number) => {
     event.preventDefault();
+    if (updating) return;
     setSelectedPosition(position);
     setSlaveContextMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, position });
   };
@@ -1271,9 +1442,9 @@ export default function App() {
   const content = useMemo(() => {
     const props = { slave, run };
     if (page === "overview") return <OverviewPage {...props} status={status} busy={busy} refresh={refreshStates} registerProfile={registerProfile} alLanguage={alLanguage} onRegisterProfileChange={(profile) => slave && setRegisterProfileOverrides((current) => ({ ...current, [selectedSlaveKey]: profile }))} />;
-    if (page === "registers") return <RegistersPage {...props} registerProfile={registerProfile} />;
-    return <EepromPage {...props} status={status} progress={progress} setProgress={setProgress} readResult={eepromReadCache[eepromReadCacheKey]} setReadResult={setSelectedEepromReadResult} initialSelection={eepromDetailSelection} onInitialSelectionConsumed={consumeEepromDetailSelection} autoResetEsc={eepromAutoReset} fileDropEnabled={!quickFlashOpen} />;
-  }, [page, registerProfile, selectedSlaveKey, selectedPosition, slave, status, snapshot, progress, refreshStates, run, busy, alLanguage, eepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
+    if (page === "registers") return <RegistersPage {...props} registerProfile={registerProfile} deviceOperationsBlocked={updating} />;
+    return <EepromPage {...props} status={status} progress={progress} setProgress={setProgress} readResult={eepromReadCache[eepromReadCacheKey]} setReadResult={setSelectedEepromReadResult} initialSelection={eepromDetailSelection} onInitialSelectionConsumed={consumeEepromDetailSelection} autoResetEsc={eepromAutoReset} fileDropEnabled={!quickFlashOpen} deviceOperationsBlocked={updating} />;
+  }, [page, registerProfile, selectedSlaveKey, selectedPosition, slave, status, snapshot, progress, refreshStates, run, busy, updating, alLanguage, eepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
 
   return <Box sx={{ display: "flex", height: "100vh", bgcolor: "background.default" }}>
     <Drawer variant="permanent" PaperProps={{ sx: { width: 56, borderRight: 1, borderColor: "divider", bgcolor: "#FBFCFE", overflow: "hidden" } }}>
@@ -1281,7 +1452,7 @@ export default function App() {
         <Box component="img" src={appIconUrl} alt="BenchCAT" sx={{ width: 42, height: 42, borderRadius: 1.2, display: "block", flexShrink: 0 }} />
       </Toolbar>
       <Divider />
-      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={eepromExclusive && item.key !== "eeprom"} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28, color: page === item.key ? "primary.main" : "text.secondary" }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
+      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={(updateState === "preparing" && item.key !== page) || (eepromExclusive && item.key !== "eeprom")} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28, color: page === item.key ? "primary.main" : "text.secondary" }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
       <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettingsTab(0); setSettings(true); }} sx={{ minHeight: 36, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
@@ -1353,6 +1524,7 @@ export default function App() {
       <DialogContent sx={{ minHeight: 360 }}>
         {settingsTab === 0 ? <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>AL 状态码语言</Typography><Typography variant="body2" color="text.secondary">切换概览页 AL 状态名称、说明与排查建议。</Typography></Box><FormControl size="small" sx={{ width: 150 }}><InputLabel>Language</InputLabel><Select label="Language" value={alLanguage} onChange={(event) => { const value = event.target.value as AlStatusLanguage; setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }}><MenuItem value="zh">中文</MenuItem><MenuItem value="en">English</MenuItem></Select></FormControl></Box>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>启动时自动检查更新</Typography><Typography variant="body2" color="text.secondary">软件启动后自动检查新版本；关闭后仍可在“关于”页面手动检查。</Typography></Box><Switch checked={autoCheckUpdates} onChange={(event) => { const enabled = event.target.checked; setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} /></Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>EEPROM 写入后复位 ESC</Typography><Typography variant="body2" color="text.secondary">用于 XML 烧录和 BIN 恢复；关闭后仍会完整回读校验，但不执行 ESC RES 复位、重新发现和重新加载复核。</Typography></Box><Switch checked={eepromAutoReset} disabled={eepromExclusive} onChange={(event) => setEepromAutoReset(saveEepromAutoReset(event.target.checked))} /></Box>
         </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#F8FAFF" }}>
@@ -1367,22 +1539,46 @@ export default function App() {
           <Stack direction="row" gap={1} flexWrap="wrap">
             <Button variant="contained" startIcon={<GitHubIcon />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(PROJECT_URL)}>GitHub 项目</Button>
             <Button variant="outlined" startIcon={<BugReportRounded />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(ISSUES_URL)}>问题反馈</Button>
-            <Button variant="outlined" startIcon={updateState === "checking" ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={updateState === "checking" || updateState === "downloading"} onClick={() => void checkUpdate()}>检查更新</Button>
+            <Button variant="outlined" startIcon={updateState === "checking" ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={updateState === "checking" || updating} onClick={() => void checkUpdate()}>{updateState === "checking" ? "正在检查…" : "检查更新"}</Button>
           </Stack>
           {updateState === "latest" && <Alert severity="success">当前已是最新版本。</Alert>}
-          {updateState === "error" && <Alert severity="warning">在线更新暂不可用。可以打开 GitHub 项目页面手动下载最新安装包。</Alert>}
-          {availableUpdate && updateState === "available" && <Box sx={{ p: 1.5, border: 1, borderColor: "primary.light", borderRadius: 1.25, bgcolor: "#F8FAFF" }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={2}><Box minWidth={0}><Typography fontWeight={700}>发现新版本 v{availableUpdate.version}</Typography><Typography variant="body2" color="text.secondary">{availableUpdate.date ? new Date(availableUpdate.date).toLocaleString() : ""}</Typography></Box><Button variant="contained" disabled={updateBlocked} onClick={() => void installUpdate()}>立即更新</Button></Stack>{updateBlocked && <Typography variant="caption" color="text.secondary">EEPROM 操作完成后即可更新；普通通信会在更新开始时自动停止并断开。</Typography>}{availableUpdate.notes && <Typography variant="body2" sx={{ mt: 1, whiteSpace: "pre-wrap" }}>{availableUpdate.notes}</Typography>}</Box>}
-          {updateState === "downloading" && <Box sx={{ p: 1.5, border: 1, borderColor: "primary.light", borderRadius: 1.25 }}><Typography fontWeight={700}>正在下载并安装更新</Typography><LinearProgress sx={{ mt: 1 }} variant={updateProgress.total ? "determinate" : "indeterminate"} value={updateProgress.total ? Math.min(100, updateProgress.downloaded / updateProgress.total * 100) : undefined} /><Typography variant="caption" color="text.secondary">安装程序将自动关闭并重新启动 BenchCAT。</Typography></Box>}
+          {updateState === "error" && updateError && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button>} sx={{ overflowWrap: "anywhere" }}>{UPDATE_ERROR_LABELS[updateError.stage]}：{updateError.message}</Alert>}
+          {availableUpdate && updateState === "available" && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }}>查看更新</Button>}>{ignoredUpdateVersion === availableUpdate.version ? `已忽略 v${availableUpdate.version} 的自动提醒，仍可手动更新。` : `发现 BenchCAT v${availableUpdate.version} 更新。${pendingUpdateReminder ? "设备操作结束后将显示更新弹窗。" : ""}`}</Alert>}
+          {updating && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>}>{UPDATE_STAGE_LABELS[updateState]}，请保持软件运行。</Alert>}
           <Typography variant="caption" color="text.secondary">Copyright © BenchCAT contributors</Typography>
         </Stack>}
       </DialogContent>
       <DialogActions><Button onClick={() => setSettings(false)}>完成</Button></DialogActions>
     </Dialog>
-    <Snackbar open={Boolean(progress && !isEepromOperation(progress.operation))} autoHideDuration={progress?.percent === 100 ? 6000 : null} onClose={(_, reason) => { if (reason !== "clickaway" && progress?.percent === 100) setProgress(undefined); }} anchorOrigin={{ vertical: "bottom", horizontal: "right" }}>
+    <UpdateDialog
+      open={updateDialogOpen}
+      state={updateState}
+      update={availableUpdate}
+      progress={updateProgress}
+      blockedReason={updateBlockedReason}
+      error={updateError}
+      onClose={closeUpdateDialog}
+      onIgnore={ignoreUpdate}
+      onInstall={() => void installUpdate()}
+      onRetry={() => { if (updateError?.stage === "checking") void checkUpdate(); else void installUpdate(); }}
+      onDownloadPage={() => visit(DOWNLOAD_URL)}
+    />
+    <Stack spacing={1} sx={{ position: "fixed", bottom: 24, right: 24, maxWidth: 440, zIndex: (theme) => theme.zIndex.snackbar }}>
+    <Snackbar open={!updateDialogOpen && updating} style={{ position: "static", transform: "none" }}>
+      <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>} sx={{ width: 440, "& .MuiAlert-message": { flex: 1 } }}>
+        <Typography fontWeight={700}>BenchCAT · {updating ? UPDATE_STAGE_LABELS[updateState] : "在线更新"}</Typography>
+        {updateState === "downloading" ? <>
+          <Typography variant="body2">{formatBytes(updateProgress.downloaded)}{updateProgress.total > 0 ? ` / ${formatBytes(updateProgress.total)} · ${Math.min(100, Math.round(updateProgress.downloaded / updateProgress.total * 100))}%` : ""}</Typography>
+          <LinearProgress aria-label="后台下载进度" variant={updateProgress.total > 0 ? "determinate" : "indeterminate"} value={updateProgress.total > 0 ? Math.min(100, updateProgress.downloaded / updateProgress.total * 100) : undefined} sx={{ mt: 1 }} />
+        </> : <Typography variant="body2">{updateState === "installing" ? "即将退出并交由 Windows 安装器继续。" : "正在停止通信并断开设备…"}</Typography>}
+      </Alert>
+    </Snackbar>
+    <Snackbar open={Boolean(progress && !isEepromOperation(progress.operation))} autoHideDuration={progress?.percent === 100 ? 6000 : null} onClose={(_, reason) => { if (reason !== "clickaway" && progress?.percent === 100) setProgress(undefined); }} style={{ position: "static", transform: "none" }}>
       <Alert severity={progress?.tone === "error" ? "error" : progress?.tone === "success" ? "success" : "info"} variant="filled" action={progress && progress.percent < 100 && progress.cancellable !== false ? <Button color="inherit" size="small" onClick={() => bridgeRequest("cancel")}>取消</Button> : undefined} sx={{ width: 440, alignItems: "center" }}>
         <Typography fontWeight={750}>{progress?.stage}</Typography><Typography variant="body2">{progress?.detail}</Typography>{progress && <LinearProgress color="inherit" variant="determinate" value={progress.percent} sx={{ mt: 1, height: 5, borderRadius: 8, bgcolor: "rgba(255,255,255,.25)" }} />}
       </Alert>
     </Snackbar>
-    <Snackbar open={Boolean(message)} autoHideDuration={5000} onClose={() => setMessage(undefined)} anchorOrigin={{ vertical: "bottom", horizontal: "right" }}><Alert severity={message?.severity} variant="filled" onClose={() => setMessage(undefined)}>{message?.text}</Alert></Snackbar>
+    <Snackbar open={Boolean(message)} autoHideDuration={5000} onClose={() => setMessage(undefined)} style={{ position: "static", transform: "none" }}><Alert severity={message?.severity} variant="filled" onClose={() => setMessage(undefined)} sx={{ overflowWrap: "anywhere" }}>{message?.text}</Alert></Snackbar>
+    </Stack>
   </Box>;
 }

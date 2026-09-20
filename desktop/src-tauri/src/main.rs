@@ -1440,9 +1440,10 @@ fn reveal_path(path: String) -> Result<(), String> {
 }
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
-    const ALLOWED: [&str; 2] = [
+    const ALLOWED: [&str; 3] = [
         "https://github.com/LINLin190/BenchCAT",
         "https://github.com/LINLin190/BenchCAT/issues",
+        "https://github.com/LINLin190/BenchCAT/releases/latest",
     ];
     if !ALLOWED.contains(&url.as_str()) {
         return Err("不允许打开该外部链接".into());
