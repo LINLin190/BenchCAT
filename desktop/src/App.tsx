@@ -7,7 +7,6 @@ import {
   AppBar,
   Box,
   Button,
-  ButtonGroup,
   Card,
   CardContent,
   Chip,
@@ -190,6 +189,33 @@ function StateChip({ state, error = false }: { state: number; error?: boolean })
   return <Chip size="small" color={color} variant={state === 8 ? "filled" : "outlined"} label={`${stateLabel(state)}${error ? " + ERROR" : ""}`} />;
 }
 
+function StateSelector({ state, disabled, onRequest, label, className = "" }: {
+  state?: number;
+  disabled: boolean;
+  onRequest: (state: number) => Promise<unknown>;
+  label: string;
+  className?: string;
+}) {
+  const [pendingState, setPendingState] = useState<number>();
+  const requesting = useRef(false);
+  const selectedIndex = controllableStates.indexOf(state ?? 0);
+  const request = async (target: number) => {
+    if (disabled || requesting.current) return;
+    requesting.current = true;
+    setPendingState(target);
+    try {
+      await onRequest(target);
+    } finally {
+      requesting.current = false;
+      setPendingState(undefined);
+    }
+  };
+  return <Box role="group" aria-label={label} aria-busy={pendingState !== undefined} className={`state-selector ${className}`} sx={{ bgcolor: "action.hover", borderColor: "divider" }}>
+    <Box aria-hidden="true" className="state-selector-thumb" sx={{ bgcolor: "primary.main", opacity: selectedIndex < 0 ? 0 : 1, transform: `translateX(${Math.max(0, selectedIndex) * 100}%)` }} />
+    {controllableStates.map((target) => <Button key={target} size="small" disableRipple aria-pressed={state === target} disabled={disabled || pendingState !== undefined} className={pendingState === target ? "state-selector-pending" : undefined} sx={{ color: state === target ? "primary.contrastText" : "text.secondary", "&.Mui-disabled": { color: state === target ? "primary.contrastText" : "text.secondary" } }} onClick={() => void request(target)}>{stateLabel(target)}</Button>)}
+  </Box>;
+}
+
 function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRegisterProfileChange, alLanguage }: { slave?: SlaveInfo; status: WorkbenchStatus; busy: boolean; run: Run; refresh: () => Promise<void>; registerProfile: string; onRegisterProfileChange: (profile: string) => void; alLanguage: AlStatusLanguage }) {
   const [switchingProfile, setSwitchingProfile] = useState<string>();
   const requestState = (state: number) => run(
@@ -216,7 +242,7 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
   const alInfo = alStatusInfo(slave?.al_status ?? 0, alLanguage);
   return (
     <>
-      {!slave && <PageTitle title="设备概览" subtitle="总线状态与设备信息" actions={<Button disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refresh)}>刷新状态</Button>} />}
+      {!slave && <PageTitle title="设备概览" subtitle="总线状态与设备信息" actions={<Button disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refresh)}>刷新状态</Button>} />}
       {status.last_error && <Alert severity={status.phase === "faulted" ? "error" : "warning"} sx={{ mb: 1.25 }}>
         <Typography fontWeight={700}>最近通信问题</Typography>
         <Typography variant="body2">{status.last_error}</Typography>
@@ -240,11 +266,7 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
               </Box>
               <Box className="ov-runtime-actions">
                 <Typography className="section-label">状态请求</Typography>
-                <ButtonGroup size="small" className="overview-state-buttons">
-                  {controllableStates.map((state) => (
-                    <Button key={state} disabled={busy} variant={slave.state === state ? "contained" : "outlined"} onClick={() => requestState(state)}>{stateLabel(state)}</Button>
-                  ))}
-                </ButtonGroup>
+                <StateSelector key={slaveIdentityKey(slave)} state={slave.state} disabled={busy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
                 <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再清除从站状态错误。" : "确认当前从站的状态错误，保持当前状态"}>
                   <span><Button className="overview-clear-error" size="small" variant="outlined" disabled={busy || status.cycle_running} onClick={() => run(() => bridgeRequest<SlaveInfo[]>("clear_error", { position: slave.position }), "已确认从站状态错误")}>Clear Error</Button></span>
                 </Tooltip>
@@ -903,6 +925,8 @@ export default function App() {
   const busy = useMemo(() => [...operations.values()].some((operation) =>
     ["queued", "running"].includes(operation.phase) && operation.lane === "hardware" && operation.method !== "register_watch"
   ), [operations]);
+  const scanning = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["scan", "auto_scan"].includes(operation.method));
+  const connecting = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["connect", "disconnect"].includes(operation.method));
   const eepromExclusive = isEepromOperation(progress?.operation) && progress!.percent < 100;
   const updateBlocked = busy || eepromExclusive;
   const busState = minimumBusState(status.slaves);
@@ -1263,17 +1287,14 @@ export default function App() {
           {status.connected && status.slaves.length > 0 && status.slaves.length !== 1 && <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
             <Tooltip title={busStateBlockedReason || `全部从站状态控制 · 当前 ${busState === undefined ? "无状态" : stateLabel(busState)}`}>
               <span>
-                <ButtonGroup size="small" aria-label="全部从站状态控制" disabled={Boolean(busStateBlockedReason)} sx={{ height: 28 }}>
-                  {controllableStates.map((state) => <Button key={state} variant={busState === state ? "contained" : "outlined"} onClick={() => void requestBusState(state)} sx={{ minWidth: state === 1 || state === 8 ? 42 : 58, px: 0.8, py: 0.2, fontSize: 11.5, whiteSpace: "nowrap" }}>{stateLabel(state)}</Button>)}
-                </ButtonGroup>
+                <StateSelector state={busState} disabled={Boolean(busStateBlockedReason)} onRequest={requestBusState} label="全部从站状态控制" />
               </span>
             </Tooltip>
           </Box>}
           <Box sx={{ display: "flex", alignItems: "center", alignContent: "center", justifyContent: "flex-end", flex: "0 1 auto", minWidth: 0, ml: "auto", flexWrap: "wrap", gap: 0.65 }}>
             <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} MenuProps={{ PaperProps: { sx: { width: 270, maxWidth: 270 } } }} value={adapter} disabled={!bridgeAvailable || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name} title={item.description || item.name} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
-            <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={<UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
-            <Button size="small" variant="outlined" startIcon={<RefreshRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
-            {busy && <CircularProgress size={20} sx={{ mx: 0.5 }} />}
+            <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
+            <Button size="small" variant="outlined" startIcon={<RefreshRounded className={scanning ? "operation-icon-spinning" : undefined} />} disabled={!bridgeAvailable || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
           </Box>
         </Toolbar>
       </AppBar>
@@ -1294,7 +1315,7 @@ export default function App() {
             {status.slaves.length > 0 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
             <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slaveDisplayName(slave)}>从站 {slave.position} · {slaveDisplayName(slave)}</Typography>
             {page !== "overview" && <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />}
-            {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refreshStates)}>刷新状态</Button>}
+            {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refreshStates)}>刷新状态</Button>}
           </Stack>}
         <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto", p: { xs: 1.5, xl: 2 } }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto" }}>{bridgeExit && <Alert severity="error" action={bridgeExit.log_path ? <Button color="inherit" size="small" onClick={() => revealPath(bridgeExit.log_path!)}>打开日志</Button> : undefined} sx={{ mb: 1.25 }}><Typography fontWeight={700}>通信核心已退出</Typography><Typography variant="body2">{bridgeExit.message}</Typography>{bridgeExit.log_path && <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>日志：{bridgeExit.log_path}</Typography>}</Alert>}{content}</Box></Box>
         </Box>
