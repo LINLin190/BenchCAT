@@ -89,6 +89,7 @@ import type {
   WorkbenchStatus,
 } from "./types";
 import { hex, stateLabel } from "./types";
+import { checkForUpdate, restartAfterUpdate, type AvailableUpdate } from "./updater";
 
 type PageKey = "overview" | "registers" | "eeprom";
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
@@ -870,6 +871,10 @@ export default function App() {
   const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" }>();
   const [settings, setSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState(0);
+  const [updateState, setUpdateState] = useState<"idle" | "checking" | "available" | "downloading" | "latest" | "error">("idle");
+  const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
+  const [updateProgress, setUpdateProgress] = useState({ downloaded: 0, total: 0 });
+  const checkUpdateRef = useRef<(automatic?: boolean) => Promise<void>>(() => Promise.resolve());
   const [alLanguage, setAlLanguage] = useState<AlStatusLanguage>(() => window.localStorage.getItem(AL_LANGUAGE_KEY) === "en" ? "en" : "zh");
   const [eepromAutoReset, setEepromAutoReset] = useState(() => loadEepromAutoReset());
   const [slaveContextMenu, setSlaveContextMenu] = useState<SlaveContextMenu>();
@@ -888,6 +893,7 @@ export default function App() {
     ["queued", "running"].includes(operation.phase) && operation.lane === "hardware" && operation.method !== "register_watch"
   ), [operations]);
   const eepromExclusive = isEepromOperation(progress?.operation) && progress!.percent < 100;
+  const updateBlocked = busy || eepromExclusive;
   const busState = minimumBusState(status.slaves);
   const busStateBlockedReason = !bridgeAvailable
     ? "通信核心不可用"
@@ -1115,6 +1121,44 @@ export default function App() {
     if (status.connected) await run(() => bridgeRequest("disconnect"), "已断开网卡");
     else if (await run(() => bridgeRequest("connect", { adapter }))) await scan();
   };
+  const checkUpdate = useCallback(async (automatic = false) => {
+    if (updateState === "checking" || updateState === "downloading") return;
+    setUpdateState("checking");
+    try {
+      const update = await checkForUpdate();
+      if (!update) {
+        setUpdateState("latest");
+        if (!automatic) setMessage({ text: `当前已是最新版本 v${packageInfo.version}`, severity: "info" });
+        return;
+      }
+      setAvailableUpdate(update);
+      setUpdateState("available");
+      if (automatic) setMessage({ text: `发现 BenchCAT v${update.version} 更新`, severity: "info" });
+    } catch (error) {
+      setUpdateState("error");
+      if (!automatic) setMessage({ text: `检查更新失败：${error instanceof Error ? error.message : String(error)}`, severity: "error" });
+    }
+  }, [updateState]);
+  useEffect(() => {
+    checkUpdateRef.current = checkUpdate;
+  }, [checkUpdate]);
+  const installUpdate = async () => {
+    if (!availableUpdate || updateBlocked) return;
+    try {
+      if (status.cycle_running) await bridgeRequest("stop_cycle");
+      if (status.connected) await bridgeRequest("disconnect");
+      setUpdateState("downloading");
+      await availableUpdate.downloadAndInstall((next) => setUpdateProgress({ downloaded: next.downloaded, total: next.total ?? 0 }));
+      await restartAfterUpdate();
+    } catch (error) {
+      setUpdateState("error");
+      setMessage({ text: `安装更新失败：${error instanceof Error ? error.message : String(error)}`, severity: "error" });
+    }
+  };
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void checkUpdateRef.current(true); }, 25_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   const scan = async () => {
     const found = await run(() => bridgeRequest<SlaveInfo[]>("scan"));
     if (found) setMessage({ text: found.length ? `扫描完成，发现 ${found.length} 个从站` : "扫描完成，但未发现从站。请检查网卡、链路和从站供电。", severity: found.length ? "success" : "info" });
@@ -1256,7 +1300,12 @@ export default function App() {
           <Stack direction="row" gap={1} flexWrap="wrap">
             <Button variant="contained" startIcon={<GitHubIcon />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(PROJECT_URL)}>GitHub 项目</Button>
             <Button variant="outlined" startIcon={<BugReportRounded />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(ISSUES_URL)}>问题反馈</Button>
+            <Button variant="outlined" startIcon={updateState === "checking" ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={updateState === "checking" || updateState === "downloading"} onClick={() => void checkUpdate()}>检查更新</Button>
           </Stack>
+          {updateState === "latest" && <Alert severity="success">当前已是最新版本。</Alert>}
+          {updateState === "error" && <Alert severity="warning">在线更新暂不可用。可以打开 GitHub 项目页面手动下载最新安装包。</Alert>}
+          {availableUpdate && updateState === "available" && <Box sx={{ p: 1.5, border: 1, borderColor: "primary.light", borderRadius: 1.25, bgcolor: "#F8FAFF" }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={2}><Box minWidth={0}><Typography fontWeight={700}>发现新版本 v{availableUpdate.version}</Typography><Typography variant="body2" color="text.secondary">{availableUpdate.date ? new Date(availableUpdate.date).toLocaleString() : ""}</Typography></Box><Button variant="contained" disabled={updateBlocked} onClick={() => void installUpdate()}>立即更新</Button></Stack>{updateBlocked && <Typography variant="caption" color="text.secondary">EEPROM 操作完成后即可更新；普通通信会在更新开始时自动停止并断开。</Typography>}{availableUpdate.notes && <Typography variant="body2" sx={{ mt: 1, whiteSpace: "pre-wrap" }}>{availableUpdate.notes}</Typography>}</Box>}
+          {updateState === "downloading" && <Box sx={{ p: 1.5, border: 1, borderColor: "primary.light", borderRadius: 1.25 }}><Typography fontWeight={700}>正在下载并安装更新</Typography><LinearProgress sx={{ mt: 1 }} variant={updateProgress.total ? "determinate" : "indeterminate"} value={updateProgress.total ? Math.min(100, updateProgress.downloaded / updateProgress.total * 100) : undefined} /><Typography variant="caption" color="text.secondary">安装程序将自动关闭并重新启动 BenchCAT。</Typography></Box>}
           <Typography variant="caption" color="text.secondary">Copyright © BenchCAT contributors</Typography>
         </Stack>}
       </DialogContent>
