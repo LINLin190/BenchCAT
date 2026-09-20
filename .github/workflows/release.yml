@@ -45,6 +45,32 @@ jobs:
         working-directory: desktop
         run: pnpm install --frozen-lockfile
 
+      - name: Run Python suite
+        run: python -m pytest
+
+      - name: Run frontend suite
+        working-directory: desktop
+        run: pnpm test
+
+      - name: Run Rust suite
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
+
+      - name: Load Chinese release notes
+        id: release_notes
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          $path = ".github/release-notes/$env:RELEASE_TAG.md"
+          if (-not (Test-Path -LiteralPath $path)) {
+            throw "Release notes not found: $path"
+          }
+          $delimiter = "RELEASE_NOTES_$([guid]::NewGuid().ToString('N'))"
+          "body<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Get-Content -LiteralPath $path -Raw | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          $delimiter | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Build and publish Tauri bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -55,6 +81,6 @@ jobs:
           projectPath: desktop
           tagName: ${{ inputs.release_tag || github.ref_name }}
           releaseName: BenchCAT ${{ inputs.release_tag || github.ref_name }}
-          releaseBody: "BenchCAT 自 1.3.0 起支持在线更新；请参阅本次 Release 的变更说明。"
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: true
           prerelease: false
