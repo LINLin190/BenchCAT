@@ -68,7 +68,6 @@ https://github.com/LINLin190/BenchCAT/releases/latest/download/latest.json
 
 ## 版本线
 
-- `fae/1.2.x` 分支仅供客户 FAE 使用，起始版本为 `1.2.0`，后续使用 `1.2.1`、`1.2.2` 等版本号手工发布，不包含在线更新功能。
 - `master` 是正式版本线，`v1.3.0` 起增加在线更新功能，后续使用 `1.3.1`、`1.3.2` 等版本号通过 GitHub Release 在线升级。
 
 ## GitHub Actions 是什么
