@@ -14,6 +14,8 @@ from ..models import (
     SlaveInfo,
 )
 
+DEFAULT_STATE_TRANSITION_TIMEOUT_US = 9_000_000
+
 
 class BackendError(RuntimeError):
     """Normalized backend error safe to present to the UI."""

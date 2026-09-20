@@ -1,5 +1,6 @@
 import threading
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -145,6 +146,33 @@ def test_failed_cycle_start_returns_bus_to_safe_op() -> None:
             assert "OP rejected" in str(exc)
         states = worker.submit("read_states").result(timeout=2)
         assert all(slave.state is EtherCatState.SAFE_OP for slave in states)
+    finally:
+        assert worker.shutdown()
+
+
+def test_failed_cycle_start_preserves_al_error_and_stops_other_slaves() -> None:
+    class WatchdogBackend(MockBackend):
+        def request_state(self, position, state, timeout_us):
+            result = super().request_state(position, state, timeout_us)
+            if state is EtherCatState.OP:
+                self._slaves[0] = replace(
+                    self._slaves[0], state=EtherCatState.SAFE_OP, raw_state=0x14, al_status=0x001B
+                )
+                raise RuntimeError("SyncManager watchdog")
+            return result
+
+    worker = EtherCatWorker(WatchdogBackend)
+    worker.start()
+    try:
+        worker.submit("connect", "demo0").result(timeout=2)
+        worker.submit("scan").result(timeout=2)
+        with pytest.raises(RuntimeError, match="SyncManager watchdog"):
+            worker.start_cycle(10, 1000).result(timeout=2)
+        states = worker.submit("read_states").result(timeout=2)
+        assert states[0].raw_state == 0x14
+        assert states[0].al_status == 0x001B
+        assert all(slave.state is EtherCatState.SAFE_OP for slave in states)
+        assert not any(event.kind == "slaves_changed" for event in worker.poll_events())
     finally:
         assert worker.shutdown()
 

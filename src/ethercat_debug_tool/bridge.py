@@ -19,6 +19,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .backends.base import DEFAULT_STATE_TRANSITION_TIMEOUT_US
 from .backends.mock import MockBackend
 from .backends.pysoem_backend import PysoemBackend
 from .command_registry import CommandSpec, load_command_registry
@@ -546,7 +547,7 @@ class BridgeRuntime:
         self._progress(
             OperationProgress(operation, "prepare-init", 0, 1, "正在将目标从站切换到 INIT", True)
         )
-        slaves = list(self._submit("request_state", position, EtherCatState.INIT, 2_000_000))
+        slaves = list(self._submit("request_state", position, EtherCatState.INIT, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60))
         current = next((item for item in slaves if item.position == position), None)
         if current is None or current.state is not EtherCatState.INIT:
             actual = current.state.name if current is not None else "未发现"
@@ -712,7 +713,7 @@ class BridgeRuntime:
             failure: BaseException | None = None
             if self.cycle_running:
                 try:
-                    self._submit("__stop_cycle__", priority=Priority.CONTROL, timeout=10)
+                    self._submit("__stop_cycle__", priority=Priority.CONTROL, timeout=20)
                 except BaseException as exc:
                     self._fault_worker(f"断开前无法安全停止周期通信：{exc}")
                     raise
@@ -780,6 +781,16 @@ class BridgeRuntime:
             position = None if raw_position in {None, 0} else int(raw_position)
             state = EtherCatState(int(params["state"]))
             if self.cycle_running:
+                if state is EtherCatState.OP:
+                    slaves = list(self._dispatch_serial("read_states", {}))
+                    targets = [slave for slave in slaves if position is None or slave.position == position]
+                    if targets and all(
+                        slave.state is EtherCatState.OP
+                        and not (slave.raw_state or 0) & 0x10
+                        and not slave.al_status
+                        for slave in targets
+                    ):
+                        return slaves
                 self._dispatch_serial("stop_cycle", {})
             current = min((slave.state for slave in self.slaves), default=state)
             downgrade = {
@@ -787,12 +798,12 @@ class BridgeRuntime:
                 EtherCatState.PRE_OP: {EtherCatState.OP: (EtherCatState.SAFE_OP,)},
             }
             for intermediate in downgrade.get(state, {}).get(current, ()):
-                self._submit("request_state", position, intermediate, 2_000_000)
+                self._submit("request_state", position, intermediate, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60)
             if state is EtherCatState.OP:
                 self._dispatch_serial("start_cycle", {"period_ms": 5, "position": position})
                 return list(self.slaves)
             try:
-                slaves = list(self._submit("request_state", position, state, 2_000_000))
+                slaves = list(self._submit("request_state", position, state, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60))
             except BaseException as exc:
                 try:
                     current = list(self._submit("read_states"))
@@ -873,7 +884,7 @@ class BridgeRuntime:
                     2000,
                     5,
                     priority=Priority.CONTROL,
-                    timeout=10,
+                    timeout=60,
                     position=params.get("position") or None,
                 )
             except BaseException as exc:
@@ -892,7 +903,7 @@ class BridgeRuntime:
             return {"running": True}
         if method == "stop_cycle":
             try:
-                result = self._submit("__stop_cycle__", priority=Priority.CONTROL, timeout=10)
+                result = self._submit("__stop_cycle__", priority=Priority.CONTROL, timeout=20)
             except BaseException as exc:
                 self._fault_worker(f"周期通信无法安全停止：{exc}")
                 raise

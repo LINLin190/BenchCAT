@@ -8,7 +8,7 @@ class FakeSlave:
     def __init__(self, name: str, al_status: int, al_code: int) -> None:
         self.name = name
         self.state = al_status
-        self.al_status = al_status
+        self.al_status = al_code
         self._al_code = al_code
 
     def _fprd(self, address: int, size: int, timeout_us: int) -> bytes:
@@ -81,7 +81,7 @@ def test_read_states_reuses_static_scan_information(monkeypatch) -> None:
             "XHD_Device",
             cached.identity,
             EtherCatState.OP,
-            0x001B,
+            0,
             18,
             8,
             0x1001,
@@ -267,6 +267,7 @@ class StateMaster:
         self.slaves = [StateSlave(self)]
         self.exchanges = 0
         self.maps = 0
+        self.maps_since_init = 0
         self.state = 2
         self.wkc = 3
 
@@ -286,11 +287,14 @@ class StateMaster:
 
     def config_init(self, *args, **kwargs):
         self.slaves = [StateSlave(self)]
+        self.maps_since_init = 0
         return 1
 
     def config_map(self):
         assert all(s.actual == 2 for s in self.slaves)
         assert self.manual_state_change is True
+        assert self.maps_since_init == 0, "FMMU allocation must be reset before remapping"
+        self.maps_since_init += 1
         self.maps += 1
         self.slaves[0].input = bytes(6)
         self.slaves[0].output = bytes(2)
@@ -327,6 +331,29 @@ def test_op_with_bad_wkc_is_not_reported_as_success():
     backend._master.wkc = 0
     with pytest.raises(Exception, match="WKC"):
         backend.request_state(None, EtherCatState.OP, 5000)
+
+
+def test_valid_mapping_is_reused_without_state_changes():
+    backend = state_backend()
+    backend.request_state(1, EtherCatState.OP, 100000)
+    maps = backend._master.maps
+    slave = backend._master.slaves[0]
+    writes = list(slave.writes)
+    assert backend.map_process_data() == 8
+    assert backend._master.maps == maps
+    assert slave.writes == writes
+    assert slave.actual == 8
+
+
+def test_repeated_state_requests_reset_native_allocation_and_use_current_slave():
+    backend = state_backend()
+    for state in (EtherCatState.INIT, EtherCatState.PRE_OP) * 5:
+        backend.request_state(1, state, 100000)
+        previous = backend._master.slaves[0]
+        states = backend.request_state(1, EtherCatState.OP, 100000)
+        assert backend._master.slaves[0] is not previous
+        assert states[0].state is EtherCatState.OP
+        assert backend._master.maps_since_init == 1
 
 
 def test_error_ack_precedes_state_request(caplog):
@@ -531,6 +558,46 @@ def test_failed_error_ack_does_not_attempt_requested_state(monkeypatch):
     with pytest.raises(Exception, match="actual 0x14"):
         backend.request_state(1, EtherCatState.PRE_OP, 1000)
     assert slave.writes == [0x14]
+
+
+def test_error_ack_waits_until_error_bit_clears(monkeypatch):
+    backend = state_backend()
+    slave = backend._master.slaves[0]
+    slave.writes.clear()
+    slave.actual = 0x14
+    slave.al_status = 0x1B
+    observed = iter((0x14, 0x14, 4, 2))
+
+    def delayed_ack(expected, timeout):
+        slave.state = next(observed)
+        return slave.state & 0x0F
+
+    monkeypatch.setattr(slave, "state_check", delayed_ack)
+    backend.request_state(1, EtherCatState.PRE_OP, 100000)
+    assert slave.writes == [0x14, 2]
+
+
+def test_transition_error_keeps_code_before_followup_refresh(monkeypatch):
+    backend = state_backend()
+    slave = backend._master.slaves[0]
+    slave.reject_preop = True
+
+    def clear_diagnostics():
+        slave.state = 2
+        slave.al_status = 0
+        return []
+
+    monkeypatch.setattr(backend, "read_states", clear_diagnostics)
+    with pytest.raises(Exception, match="AL status 0x0012, AL status code 0x0016"):
+        backend.request_state(1, EtherCatState.PRE_OP, 1000)
+
+
+def test_transition_error_keeps_cached_error_if_register_clears():
+    backend = PysoemBackend()
+    slave = FakeSlave("Motor", 0x14, 0x1B)
+    slave._al_code = 0
+    error = backend._state_transition_error(slave, EtherCatState.OP, 0x14, 1000)
+    assert "AL status code 0x001B" in str(error)
 
 
 def test_worker_setup_remaps_once_and_keeps_pdo_exchange_in_op_wait():

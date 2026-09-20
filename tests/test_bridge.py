@@ -732,13 +732,25 @@ def test_esi_library_list_returns_all_devices(workspace) -> None:
         runtime.shutdown()
 
 
-def test_overview_op_runs_cycle_and_downgrade_stops_it():
+def test_overview_op_runs_cycle_and_downgrade_stops_it(monkeypatch):
     runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
     try:
         runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
         states = runtime.dispatch("request_state", {"position": 1, "state": 8})
         assert states[0].state is EtherCatState.OP
         assert runtime.cycle_running
+        submit = runtime._submit
+        calls = []
+
+        def record(operation, *args, **kwargs):
+            calls.append(operation)
+            return submit(operation, *args, **kwargs)
+
+        monkeypatch.setattr(runtime, "_submit", record)
+        for _ in range(3):
+            assert runtime.dispatch("request_state", {"position": 1, "state": 8})[0].state is EtherCatState.OP
+        assert "__stop_cycle__" not in calls
+        assert "__start_cycle__" not in calls
         runtime.dispatch("request_state", {"position": 1, "state": 2})
         assert not runtime.cycle_running
         # Allow old start/stop events to arrive after the PREOP result.

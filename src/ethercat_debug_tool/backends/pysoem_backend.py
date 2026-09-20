@@ -19,7 +19,7 @@ from ..models import (
     SlaveInfo,
 )
 from ..sii.parser import SiiParser
-from .base import CommunicationError, EepromReadback, EnvironmentError
+from .base import DEFAULT_STATE_TRANSITION_TIMEOUT_US, CommunicationError, EepromReadback, EnvironmentError
 
 # Discovery must remain bounded when a slave does not implement an optional
 # ESC register.  EtherCAT round trips are normally below 1 ms; 2 ms leaves
@@ -89,6 +89,7 @@ class PysoemBackend:
         self._master: Any = None
         self._connected = False
         self._mapped = False
+        self._mapping_attempted = False
         self._slaves: list[SlaveInfo] = []
         self._cycle_count = 0
         self._wkc_errors = 0
@@ -141,6 +142,7 @@ class PysoemBackend:
         self._master = master
         self._connected = True
         self._mapped = False
+        self._mapping_attempted = False
 
     def disconnect(self) -> None:
         try:
@@ -150,6 +152,7 @@ class PysoemBackend:
             self._master = None
             self._connected = False
             self._mapped = False
+            self._mapping_attempted = False
             self._slaves = []
 
     def _require_master(self) -> Any:
@@ -413,6 +416,7 @@ class PysoemBackend:
     ) -> list[SlaveInfo]:
         master = self._require_master()
         self._mapped = False
+        self._mapping_attempted = False
         self._slaves = []
         try:
             count = master.config_init(False, release_gil=True)
@@ -474,7 +478,7 @@ class PysoemBackend:
             ]
         except Exception:
             self._mapped = False
-        return list(self.request_state(None, EtherCatState.INIT, 2_000_000))
+        return list(self.request_state(None, EtherCatState.INIT, DEFAULT_STATE_TRANSITION_TIMEOUT_US))
 
     def read_states(self, refresh_eeprom: bool = False) -> list[SlaveInfo]:
         master = self._require_master()
@@ -513,16 +517,25 @@ class PysoemBackend:
                     "Acknowledging %s: AL state 0x%02X, code 0x%04X",
                     slave.name, raw, int(slave.al_status),
                 )
+                original_error = self._state_transition_error(slave, state, raw, timeout_us)
                 slave.state = (raw & 0x0F) | 0x10
                 slave.write_state()
-                actual = self._check_state(slave, raw & 0x0F, timeout_us)
+                deadline = time.monotonic() + timeout_us / 1_000_000
+                while True:
+                    actual = self._check_state(slave, raw & 0x0F, min(1000, timeout_us))
+                    if actual == (raw & 0x0F) or (actual & 0x0F) != (raw & 0x0F):
+                        break
+                    if time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.001)
                 if actual != (raw & 0x0F):
-                    raise self._state_transition_error(slave, state, actual, timeout_us)
+                    raise CommunicationError(f"Error acknowledgement failed: {original_error}")
 
         if state in (EtherCatState.INIT, EtherCatState.PRE_OP):
             self._invalidate_mapping()
         if state in (EtherCatState.SAFE_OP, EtherCatState.OP) and not self._mapped:
             self.map_process_data()
+            target = master if position is None else self._slave(position)
         if state is EtherCatState.OP:
             self._transition(target, EtherCatState.SAFE_OP, timeout_us)
         self._transition(target, state, timeout_us)
@@ -549,13 +562,14 @@ class PysoemBackend:
         else:
             actual = self._check_state(target, int(state), timeout_us)
         if actual != int(state):
+            error = self._state_transition_error(target, state, actual, timeout_us)
             # Keep the original transition failure if a follow-up state read
             # is unavailable. Diagnostics must never replace the root error.
             try:
                 self.read_states()
             except Exception:
                 pass
-            raise self._state_transition_error(target, state, actual, timeout_us)
+            raise error
 
     def _check_state(self, target: Any, expected: int, timeout_us: int) -> int:
         # SOEM returns only the low state nibble. The refreshed .state retains
@@ -582,7 +596,8 @@ class PysoemBackend:
             al_status = int(getattr(slave, "state", actual)) & 0xFFFF
             al_code = int(getattr(slave, "al_status", 0)) & 0xFFFF
             try:
-                al_code = int.from_bytes(slave._fprd(0x0134, 2, min(timeout_us, 2000)), "little")
+                live_code = int.from_bytes(slave._fprd(0x0134, 2, min(timeout_us, 2000)), "little")
+                al_code = live_code or (al_code if al_status & 0x10 else 0)
             except Exception:
                 pass
             name = str(getattr(slave, "name", "")).strip() or f"slave {index}"
@@ -663,11 +678,21 @@ class PysoemBackend:
 
     def map_process_data(self) -> int:
         master = self._require_master()
-        self.request_state(None, EtherCatState.PRE_OP, 2_000_000)
+        if self._mapped:
+            return sum(len(slave.input) + len(slave.output) for slave in master.slaves)
+        if self._mapping_attempted:
+            # config_map appends FMMUs; config_init resets SOEM's allocation context.
+            expected = [(s.identity.vendor_id, s.identity.product_code, s.identity.revision) for s in self._slaves]
+            count = master.config_init(False, release_gil=True)
+            actual = [(int(s.man), int(s.id), int(s.rev)) for s in master.slaves]
+            if count != len(expected) or actual != expected:
+                raise CommunicationError("PDO 重建时从站拓扑发生变化，请重新扫描总线")
+        self.request_state(None, EtherCatState.PRE_OP, DEFAULT_STATE_TRANSITION_TIMEOUT_US)
         manual = master.manual_state_change
         try:
             # The caller explicitly requests SAFEOP after configuration succeeds.
             master.manual_state_change = True
+            self._mapping_attempted = True
             size = int(master.config_map())
         except Exception as exc:
             raise self._normalize_error(exc, "PDO mapping") from exc

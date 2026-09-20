@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from typing import Any
 
-from ..backends.base import EtherCatBackend
+from ..backends.base import DEFAULT_STATE_TRANSITION_TIMEOUT_US, EtherCatBackend
 from ..models import EtherCatState, ProcessDataSnapshot, SlaveInfo
 
 
@@ -171,14 +171,20 @@ class EtherCatWorker:
         if period_ms <= 0:
             raise ValueError("Cycle period must be positive")
         backend.map_process_data()
-        backend.request_state(None, EtherCatState.SAFE_OP, 2_000_000)
+        backend.request_state(None, EtherCatState.SAFE_OP, DEFAULT_STATE_TRANSITION_TIMEOUT_US)
         first_snapshot = backend.exchange_process_data(timeout_us)
-        slaves = backend.request_state(position, EtherCatState.OP, 2_000_000)
+        slaves = backend.request_state(position, EtherCatState.OP, DEFAULT_STATE_TRANSITION_TIMEOUT_US)
         return period_ms / 1000.0, timeout_us, max_consecutive_errors, slaves, first_snapshot
 
     @staticmethod
     def _disable_cycle(backend: EtherCatBackend) -> object:
-        return backend.request_state(None, EtherCatState.SAFE_OP, 2_000_000)
+        for slave in backend.read_states():
+            # SAFE-OP + ERROR is already safe. Do not acknowledge its fault
+            # during cleanup; keep the AL code available until a user request.
+            if slave.state is EtherCatState.SAFE_OP and (slave.raw_state or 0) & 0x10:
+                continue
+            backend.request_state(slave.position, EtherCatState.SAFE_OP, DEFAULT_STATE_TRANSITION_TIMEOUT_US)
+        return backend.read_states()
 
     def _execute(self, task: _Task) -> None:
         if self._backend is None or not task.future.set_running_or_notify_cancel():
@@ -218,9 +224,10 @@ class EtherCatWorker:
             if task.operation == "__start_cycle__" and self._backend.connected:
                 self._cycle_period = 0.0
                 try:
-                    slaves = self._disable_cycle(self._backend)
+                    self._disable_cycle(self._backend)
                     self._needs_safe_state = False
-                    self._events.put(WorkerEvent("slaves_changed", slaves, task.event_session_id))
+                    # The command lane publishes the failed start and its states.
+                    # A later slaves_changed event would clear that failure.
                 except Exception:
                     self._needs_safe_state = True
             elif task.operation == "__stop_cycle__":
