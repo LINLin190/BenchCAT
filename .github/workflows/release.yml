@@ -49,6 +49,10 @@ jobs:
         working-directory: desktop
         run: pnpm test
 
+      - name: Build frontend resources
+        working-directory: desktop
+        run: pnpm build
+
       - name: Run Rust suite
         working-directory: desktop/src-tauri
         run: cargo test --locked
