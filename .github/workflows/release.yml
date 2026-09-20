@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to build and publish"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -47,8 +53,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         with:
           projectPath: desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: BenchCAT ${{ github.ref_name }}
+          tagName: ${{ inputs.release_tag || github.ref_name }}
+          releaseName: BenchCAT ${{ inputs.release_tag || github.ref_name }}
           releaseBody: "BenchCAT 自 1.3.0 起支持在线更新；请参阅本次 Release 的变更说明。"
           releaseDraft: true
           prerelease: false
