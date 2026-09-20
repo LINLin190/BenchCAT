@@ -34,11 +34,11 @@
       "resources/bridge/": "bridge/"
     },
     "icon": [
-      "icons/icon.ico",
-      "icons/icon.png"
+      "icons/icon.ico"
     ],
     "windows": {
       "nsis": {
+        "installerIcon": "icons/icon.ico",
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false
       }

@@ -48,7 +48,6 @@ import {
   BugReportRounded,
   MenuRounded,
   ChevronLeftRounded,
-  CableRounded,
   DashboardRounded,
   DeveloperBoardRounded,
   FolderOpenRounded,
@@ -89,6 +88,9 @@ import type {
 } from "./types";
 import { hex, stateLabel } from "./types";
 import { checkForUpdate, restartAfterUpdate, type AvailableUpdate } from "./updater";
+
+const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
+const brandIconUrl = new URL("./assets/BenchCAT.png", import.meta.url).href;
 
 type PageKey = "overview" | "registers" | "eeprom";
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
@@ -1275,11 +1277,11 @@ export default function App() {
 
   return <Box sx={{ display: "flex", height: "100vh", bgcolor: "background.default" }}>
     <Drawer variant="permanent" PaperProps={{ sx: { width: 56, borderRight: 1, borderColor: "divider", bgcolor: "#FBFCFE", overflow: "hidden" } }}>
-      <Toolbar sx={{ minHeight: "54px !important", px: "10px !important", gap: 0.75 }}>
-        <Box sx={{ width: 34, height: 34, borderRadius: 1.2, bgcolor: "primary.main", color: "white", display: "grid", placeItems: "center", flexShrink: 0 }}><CableRounded fontSize="small" /></Box>
+      <Toolbar sx={{ minHeight: "54px !important", px: "7px !important", gap: 0.75 }}>
+        <Box component="img" src={appIconUrl} alt="BenchCAT" sx={{ width: 42, height: 42, borderRadius: 1.2, display: "block", flexShrink: 0 }} />
       </Toolbar>
       <Divider />
-      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={eepromExclusive && item.key !== "eeprom"} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
+      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={eepromExclusive && item.key !== "eeprom"} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28, color: page === item.key ? "primary.main" : "text.secondary" }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
       <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettingsTab(0); setSettings(true); }} sx={{ minHeight: 36, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
@@ -1354,7 +1356,7 @@ export default function App() {
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>EEPROM 写入后复位 ESC</Typography><Typography variant="body2" color="text.secondary">用于 XML 烧录和 BIN 恢复；关闭后仍会完整回读校验，但不执行 ESC RES 复位、重新发现和重新加载复核。</Typography></Box><Switch checked={eepromAutoReset} disabled={eepromExclusive} onChange={(event) => setEepromAutoReset(saveEepromAutoReset(event.target.checked))} /></Box>
         </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#F8FAFF" }}>
-            <Box sx={{ width: 52, height: 52, borderRadius: 1.5, bgcolor: "primary.main", color: "white", display: "grid", placeItems: "center", flexShrink: 0 }}><CableRounded /></Box>
+            <Box component="img" src={brandIconUrl} alt="BenchCAT" sx={{ width: 72, height: 72, borderRadius: 1.5, display: "block", flexShrink: 0 }} />
             <Box sx={{ minWidth: 0, flex: 1 }}><Stack direction="row" alignItems="center" gap={1}><Typography variant="h6">BenchCAT</Typography><Chip size="small" variant="outlined" label={`v${packageInfo.version}`} /></Stack><Typography variant="body2" color="text.secondary">面向 Windows 的 EtherCAT 从站调试与诊断工作台</Typography></Box>
           </Box>
           <Typography variant="body2" color="text.secondary">聚焦从站概览、ESC 标准寄存器诊断与 EEPROM 安全读取、备份、烧录和恢复。硬件通信由独立 Python Bridge 与 Worker 串行执行。</Typography>

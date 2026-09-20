@@ -1474,6 +1474,11 @@ fn configure_main_window(app: &tauri::App) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
+    let window_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/window-icon.png"))
+        .expect("invalid BenchCAT window icon");
+    window
+        .set_icon(window_icon)
+        .expect("failed to set BenchCAT window icon");
     let monitor = window
         .current_monitor()
         .ok()

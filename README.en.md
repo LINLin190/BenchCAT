@@ -1,3 +1,5 @@
+<p align="center"><img src="desktop/src/assets/BenchCAT.png" alt="BenchCAT" width="160" height="160"></p>
+
 # BenchCAT
 
 [简体中文](README.md) | [English](README.en.md)

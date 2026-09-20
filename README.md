@@ -1,3 +1,5 @@
+<p align="center"><img src="desktop/src/assets/BenchCAT.png" alt="BenchCAT" width="160" height="160"></p>
+
 <h1 align="center">BenchCAT</h1>
 
 <p align="center"><strong>面向 Windows 的 pySOEM EtherCAT 从站调试与诊断工作台</strong></p>
