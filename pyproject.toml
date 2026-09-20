@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "benchcat"
-version = "1.3.0"
+version = "1.3.1"
 description = "BenchCAT - Windows pySOEM EtherCAT slave debugging application"
 requires-python = ">=3.11"
 readme = "README.md"

@@ -127,8 +127,10 @@ def test_scan_keeps_pre_read_status_and_refresh_does_not_read_eeprom(monkeypatch
     backend._master = SimpleNamespace(slaves=[slave], config_init=lambda *a, **kw: 1, read_state=lambda: None)
     backend._connected = True
     info = SlaveInfo(1, "test", SlaveIdentity(1, 2, 3), EtherCatState.PRE_OP, 0, 0, 0, chip_model="LAN9252")
+    monkeypatch.setattr(backend, "_basic_info", lambda *a: info)
     monkeypatch.setattr(backend, "_info", lambda *a: info)
     monkeypatch.setattr(backend, "map_process_data", lambda: None)
+    monkeypatch.setattr(backend, "request_state", lambda *a: backend._slaves)
     first = backend.scan()[0]
     assert first.eeprom_status == 0x40C0
     assert first.eeprom_prefix == slave.data.hex(" ").upper()

@@ -28,8 +28,11 @@ def test_hardware_is_read_only_once_per_scan(monkeypatch, model, size, failure):
     backend._master = master
     backend._connected = True
     info = SlaveInfo(1, "test", SlaveIdentity(1, 2, 3), EtherCatState.PRE_OP, 0, 0, 0, chip_model=model)
+    monkeypatch.setattr(backend, "_basic_info", lambda *args: info)
     monkeypatch.setattr(backend, "_info", lambda *args: info)
+    monkeypatch.setattr(backend, "_sii_discovery_info", lambda *args: (None, None, None, None))
     monkeypatch.setattr(backend, "map_process_data", lambda: None)
+    monkeypatch.setattr(backend, "request_state", lambda *args: backend._slaves)
     first = backend.scan()[0]
     assert calls == ([(0x0E00, size, DISCOVERY_FPRD_TIMEOUT_US)] if size else [])
     assert first.esc_hardware == (bytes(raw[:size]).hex(" ").upper() if size and not failure else None)

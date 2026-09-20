@@ -445,6 +445,17 @@ class PysoemBackend:
             except Exception as exc:
                 self._slaves[index] = replace(info, esc_hardware_error=str(exc))
         for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
+            # Preserve the status before read commands can clear error bits.
+            info = self._eeprom_status_info(info, slave)
+            try:
+                if info.eeprom_status is None:
+                    raise CommunicationError("EEPROM 状态不可用，未读取配置区")
+                data = self._read_eeprom_prefix(slave, info.eeprom_status)
+                info = replace(info, eeprom_prefix=data.hex(" ").upper(), eeprom_prefix_error=None)
+            except Exception as exc:
+                info = replace(info, eeprom_prefix=None, eeprom_prefix_error=str(exc))
+            self._slaves[index] = info
+        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
             input_size, output_size, product_type, product_model = self._sii_discovery_info(
                 slave, index + 1
             )
@@ -457,17 +468,6 @@ class PysoemBackend:
                 product_type=product_type,
                 product_model=product_model,
             )
-        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
-            # Preserve the status before read commands can clear error bits.
-            info = self._eeprom_status_info(info, slave)
-            try:
-                if info.eeprom_status is None:
-                    raise CommunicationError("EEPROM 状态不可用，未读取配置区")
-                data = self._read_eeprom_prefix(slave, info.eeprom_status)
-                info = replace(info, eeprom_prefix=data.hex(" ").upper(), eeprom_prefix_error=None)
-            except Exception as exc:
-                info = replace(info, eeprom_prefix=None, eeprom_prefix_error=str(exc))
-            self._slaves[index] = info
         # Establish fixed PDO widths once during discovery while the slave is in PREOP.
         try:
             self.map_process_data()
