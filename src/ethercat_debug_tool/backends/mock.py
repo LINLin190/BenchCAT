@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 import time
+from collections.abc import Callable
 from dataclasses import replace
 
 from ..models import (
@@ -122,14 +123,25 @@ class MockBackend:
         if position is not None and not 1 <= position <= len(self._slaves):
             raise CommunicationError(f"Slave {position} is not available")
 
-    def scan(self) -> list[SlaveInfo]:
+    def scan(
+        self, on_discovered: Callable[[list[SlaveInfo]], None] | None = None
+    ) -> list[SlaveInfo]:
         self._check()
+        if on_discovered is not None:
+            on_discovered(list(self._slaves))
         self._slaves = [
             replace(info, esc_hardware=bytes(self._registers[i][0x0E00:0x0E08]).hex(" ").upper(),
                     eeprom_status=int.from_bytes(self._registers[i][0x0502:0x0504], "little"),
                     eeprom_prefix=bytes(self._eeprom[i][:16]).hex(" ").upper())
             for i, info in enumerate(self._slaves)
         ]
+        self._slaves = [
+            replace(info, state=EtherCatState.INIT, raw_state=int(EtherCatState.INIT))
+            for info in self._slaves
+        ]
+        for registers in self._registers:
+            registers[0x130:0x132] = int(EtherCatState.INIT).to_bytes(2, "little")
+        self._mapped = False
         return list(self._slaves)
 
     def read_states(self, refresh_eeprom: bool = False) -> list[SlaveInfo]:

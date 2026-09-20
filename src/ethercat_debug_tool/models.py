@@ -72,6 +72,8 @@ class SlaveInfo:
     eeprom_status_error: str | None = None
     eeprom_prefix: str | None = None
     eeprom_prefix_error: str | None = None
+    product_type: str | None = None
+    product_model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

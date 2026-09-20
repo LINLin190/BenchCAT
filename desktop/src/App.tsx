@@ -130,6 +130,14 @@ function slaveIdentityKey(slave?: SlaveInfo): string {
   return [slave.position, identity.vendor_id, identity.product_code, identity.revision, identity.serial_number, slave.configured_address ?? ""].join(":");
 }
 
+function slaveDisplayName(slave: SlaveInfo): string {
+  return slave.product_model || slave.name;
+}
+
+function esiDeviceDisplayName(device: EsiDevice): string {
+  return device.type_name || device.name;
+}
+
 function isEepromOperation(operation?: string): boolean {
   return Boolean(operation?.startsWith("eeprom"));
 }
@@ -253,14 +261,14 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
               identity={<>
                 <Typography className="ov-section-title">设备身份</Typography>
               <Box>
-                <Box className="kv-identity"><Typography className="section-label">配置地址</Typography><Typography className="mono ov-strong">{slave.configured_address == null ? "—" : hex(slave.configured_address)}</Typography></Box>
-                <Box className="kv-identity"><Typography className="section-label">厂商 ID</Typography><Typography className="mono ov-strong">{hex(slave.identity.vendor_id, 8)}</Typography></Box>
-                <Box className="kv-identity"><Typography className="section-label">产品代码</Typography><Typography className="mono ov-strong">{hex(slave.identity.product_code, 8)}</Typography></Box>
-                <Box className="kv-identity"><Typography className="section-label">修订版本</Typography><Typography className="mono ov-strong">{hex(slave.identity.revision, 8)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">配置地址</Typography><Typography variant="body2" className="mono ov-strong">{slave.configured_address == null ? "—" : hex(slave.configured_address)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">厂商 ID</Typography><Typography variant="body2" className="mono ov-strong">{hex(slave.identity.vendor_id, 8)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">{slave.product_type ? "产品类型" : "产品代码"}</Typography><Typography variant="body2" className="mono ov-strong">{slave.product_type || hex(slave.identity.product_code, 8)}</Typography></Box>
+                <Box className="kv-identity"><Typography className="section-label">{slave.product_model ? "产品型号" : "修订版本"}</Typography><Typography variant="body2" className="mono ov-strong">{slave.product_model || hex(slave.identity.revision, 8)}</Typography></Box>
               </Box>
                 <Divider sx={{ my: 1.5 }} />
               </>}
-              modelControl={<Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再切换 ESC 型号；停止周期通信将影响整条总线。" : ""}><FormControl size="small" fullWidth>
+              modelControl={<Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再切换 ESC 型号；停止周期通信将影响整条总线。" : ""}><FormControl size="small" sx={{ width: 152, maxWidth: "100%" }}>
                 <InputLabel>ESC 型号</InputLabel>
                 <Select label="ESC 型号" value={registerProfile} onChange={(event) => void changeEscModel(String(event.target.value))} disabled={busy || status.cycle_running || Boolean(switchingProfile)}>
                   {registerProfiles.map((profile) => <MenuItem key={profile} value={profile}>{profile}</MenuItem>)}
@@ -838,7 +846,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
         <Card sx={cardSx}><CardContent><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography variant="h6">烧录目标</Typography><Typography color="text.secondary">XML 或 Device 变化时自动生成</Typography></Box><Button disabled={operationInProgress} variant="outlined" startIcon={<FolderOpenRounded />} onClick={selectXml}>选择 XML</Button></Stack><Divider sx={{ my: 2 }} />
           {esi ? <Stack spacing={1.5}>
             <TextField label="XML 文件" size="small" value={esi.path} InputProps={{ readOnly: true }} />
-            <FormControl disabled={operationInProgress} fullWidth size="small"><InputLabel>Device</InputLabel><Select label="Device" value={ordinal} onChange={(e) => changeDevice(Number(e.target.value))}>{esi.devices.map((device, i) => <MenuItem value={i} key={i}>{device.name} · {hex(device.product_code, 8)}</MenuItem>)}</Select></FormControl>
+            <FormControl disabled={operationInProgress} fullWidth size="small"><InputLabel>Device</InputLabel><Select label="Device" value={ordinal} onChange={(e) => changeDevice(Number(e.target.value))}>{esi.devices.map((device, i) => <MenuItem value={i} key={i}>{esiDeviceDisplayName(device)} · {hex(device.product_code, 8)}</MenuItem>)}</Select></FormControl>
             <Box sx={{ p: 1.4, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#FAFBFD" }}>
               <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 0.8 }}><Box><Typography variant="subtitle2">本次烧录 ConfigData</Typography><Typography variant="caption" color="text.secondary">10 byte；修改只作用于本次内存目标，原 XML 不变</Typography></Box><Button size="small" disabled={operationInProgress || configData === originalConfigData} onClick={() => setConfigData(originalConfigData)}>恢复原值</Button></Stack>
               <TextField fullWidth size="small" value={configData} disabled={operationInProgress} error={Boolean(configDataResult.error)} helperText={configDataResult.error ?? (configDecoded ? `PDI ${configDecoded.formatted.slice(0, 2)} · ${configDecoded.pdiLabel}` : "输入 10 个十六进制字节")} onChange={(event) => { setConfigData(event.target.value.toUpperCase()); setTarget(undefined); }} onBlur={() => configDataResult.formatted && setConfigData(configDataResult.formatted)} inputProps={{ className: "mono", spellCheck: false }} />
@@ -847,7 +855,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
           </Stack> : <Box sx={{ py: 6, textAlign: "center", color: "text.secondary" }}>选择厂商 ESI XML 后自动解析并生成目标</Box>}
         </CardContent></Card>
         <Card sx={cardSx}><CardContent><Typography variant="h6">Smart View</Typography><Typography color="text.secondary">随当前 XML 和 Device 实时更新</Typography><Divider sx={{ my: 2 }} />
-          {currentDevice && target ? <Stack spacing={1.5}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>{[["设备", currentDevice.name], ["厂商", esi?.vendor_name], ["Product Code（产品代码）", hex(currentDevice.product_code, 8)], ["Revision（修订版本）", hex(deviceRevision(currentDevice), 8)], ["目标容量", `${target.size} B`], ["SHA-256", target.sha256]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("Code") || label === "SHA-256" ? "mono" : ""} noWrap title={String(value)}>{value}</Typography></Box>)}</Box><Divider /><Box><Typography variant="subtitle2">已转换内容</Typography><Stack direction="row" flexWrap="wrap" gap={0.7} sx={{ mt: 1 }}>{target.supported.map((item) => <Chip size="small" color="success" variant="outlined" label={item} key={item} />)}</Stack></Box>{target.omitted.length > 0 && <Box><Typography variant="subtitle2" color={targetNeedsAttention(target) ? "warning.main" : "text.primary"}>{targetNeedsAttention(target) ? "容量降级或未写入类别" : "转换范围说明"}</Typography>{target.omitted.map((item) => <Typography variant="body2" color={targetNeedsAttention(target) ? "warning.main" : "text.secondary"} key={item}>• {item}</Typography>)}</Box>}</Stack> : <Box sx={{ py: 6, textAlign: "center", color: "text.secondary" }}>尚无可预览的烧录目标</Box>}
+          {currentDevice && target ? <Stack spacing={1.5}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>{[["设备", esiDeviceDisplayName(currentDevice)], ["厂商", esi?.vendor_name], ["Product Code（产品代码）", hex(currentDevice.product_code, 8)], ["Revision（修订版本）", hex(deviceRevision(currentDevice), 8)], ["目标容量", `${target.size} B`], ["SHA-256", target.sha256]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("Code") || label === "SHA-256" ? "mono" : ""} noWrap title={String(value)}>{value}</Typography></Box>)}</Box><Divider /><Box><Typography variant="subtitle2">已转换内容</Typography><Stack direction="row" flexWrap="wrap" gap={0.7} sx={{ mt: 1 }}>{target.supported.map((item) => <Chip size="small" color="success" variant="outlined" label={item} key={item} />)}</Stack></Box>{target.omitted.length > 0 && <Box><Typography variant="subtitle2" color={targetNeedsAttention(target) ? "warning.main" : "text.primary"}>{targetNeedsAttention(target) ? "容量降级或未写入类别" : "转换范围说明"}</Typography>{target.omitted.map((item) => <Typography variant="body2" color={targetNeedsAttention(target) ? "warning.main" : "text.secondary"} key={item}>• {item}</Typography>)}</Box>}</Stack> : <Box sx={{ py: 6, textAlign: "center", color: "text.secondary" }}>尚无可预览的烧录目标</Box>}
         </CardContent></Card>
       </Box>
       <Card sx={cardSx}><CardContent><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(300px, .85fr)", gap: 2, alignItems: "start" }}><Box><Typography variant="h6">读取与恢复</Typography><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.25 }}>完整读取只刷新 Smart/Hex View；备份 BIN 会保存可恢复文件。</Typography><Stack direction="row" gap={0.75} flexWrap="wrap"><Tooltip title={status.cycle_running ? "完整读取前必须停止周期通信" : ""}><span><Button size="small" variant="outlined" disabled={status.cycle_running || operationInProgress} onClick={readFull}>完整读取</Button></span></Tooltip><Tooltip title={status.cycle_running ? "备份前必须停止周期通信" : ""}><span><Button size="small" variant="outlined" disabled={status.cycle_running || operationInProgress} startIcon={<SaveAltRounded />} onClick={backup}>备份 BIN</Button></span></Tooltip><Tooltip title={status.cycle_running ? "恢复前必须停止周期通信" : "恢复时自动切换到 INIT"}><span><Button size="small" color="warning" variant="outlined" disabled={status.cycle_running || operationInProgress} onClick={restore}>从 BIN 恢复</Button></span></Tooltip>{backupPath && <Button size="small" onClick={() => revealPath(backupPath)} startIcon={<FolderOpenRounded />}>打开备份位置</Button>}</Stack></Box><Box sx={{ borderLeft: { sm: 1 }, borderColor: "divider", pl: { sm: 2 } }}><Typography variant="h6">烧录</Typography><Typography variant="caption" color="text.secondary">执行时自动将目标从站切换到 INIT，再写入并完整校验。</Typography><Stack direction="row" gap={0.6} flexWrap="wrap" sx={{ my: 1 }}><Chip color={target ? "success" : "default"} label={target ? "目标已生成" : "缺少目标"} /><Chip color={!status.cycle_running ? "success" : "warning"} label={!status.cycle_running ? "周期已停止" : "周期运行中"} /></Stack><Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={flash}>烧录</Button></span></Tooltip>{blockers.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{blockers.join("；")}</Typography>}</Box></Box></CardContent></Card>
@@ -1072,6 +1080,23 @@ export default function App() {
         setMessage({ text: `EtherCAT Worker 无法启动或已停止：${text}`, severity: "error" });
       }
       if (event.kind === "process_data") setSnapshot(event.data as Snapshot);
+      if (event.kind === "scan_discovered") {
+        const data = event.data as { adapter?: string; slaves?: SlaveInfo[] };
+        const discovered = data.slaves ?? [];
+        if (discovered.length) {
+          setStatus((current) => ({
+            ...current,
+            phase: "bus_scanned",
+            adapter: data.adapter ?? current.adapter,
+            connected: true,
+            slaves: discovered,
+          }));
+          setSelectedPosition((current) => current !== undefined && discovered.some((item) => item.position === current)
+            ? current
+            : discovered[0].position);
+          setMessage({ text: `已发现 ${discovered.length} 个从站，正在读取设备信息并切换到 INIT…`, severity: "info" });
+        }
+      }
       if (event.kind === "progress") {
         const next = event.data as OperationProgress;
         const fraction = next.total > 0 ? Math.min(1, next.completed / next.total) : 0;
@@ -1250,12 +1275,12 @@ export default function App() {
         </Toolbar>
       </AppBar>
       <Box sx={{ display: "flex", minHeight: 0, flex: 1 }}>
-        {status.slaves.length > 0 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><StateChip state={busState!} /><Chip size="small" variant="outlined" label={status.cycle_running ? "周期运行" : "周期停止"} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 30 }}><DeveloperBoardRounded fontSize="small" color={item.state === 8 ? "success" : "action"} /></ListItemIcon><ListItemText primary={`${item.position}. ${item.name}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
+        {status.slaves.length > 0 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}><StateChip state={busState!} /><Chip size="small" variant="outlined" label={status.cycle_running ? "周期运行" : "周期停止"} /></Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 30 }}><DeveloperBoardRounded fontSize="small" color={item.state === 8 ? "success" : "action"} /></ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${stateLabel(item.state)}${(item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · ${item.input_size ?? "—"}/${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, py: page === "overview" ? 1.5 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
             {status.slaves.length > 0 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
-            <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slave.name}>从站 {slave.position} · {slave.name}</Typography>
+            <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slaveDisplayName(slave)}>从站 {slave.position} · {slaveDisplayName(slave)}</Typography>
             {page !== "overview" && <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />}
             {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded />} onClick={() => run(refreshStates)}>刷新状态</Button>}
           </Stack>}

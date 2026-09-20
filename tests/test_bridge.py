@@ -58,9 +58,12 @@ class MultiAdapterBackend:
         self.current = adapter
         self.connected = True
 
-    def scan(self) -> list[str]:
+    def scan(self, on_discovered=None) -> list[str]:
         self.calls.append(f"scan:{self.current}")
-        return ["slave"] if self.current == self.slave_adapter else []
+        slaves = ["slave"] if self.current == self.slave_adapter else []
+        if slaves and on_discovered is not None:
+            on_discovered(slaves)
+        return slaves
 
     def disconnect(self) -> None:
         self.calls.append(f"disconnect:{self.current}")
@@ -161,13 +164,16 @@ def test_bridge_demo_core_commands(tmp_path) -> None:
         assert automatic["connected"] is True
         slaves = automatic["slaves"]
         assert len(slaves) == 3
+        discovered = [payload for kind, payload in writer.events if kind == "scan_discovered"]
+        assert discovered[-1]["adapter"] == "demo0"
+        assert len(discovered[-1]["slaves"]) == 3
         assert runtime.dispatch("status", {})["connected"] is True
 
         sdo = runtime.dispatch("sdo_read", {"position": 1, "index": 0x1000, "subindex": 0})
         assert sdo["data"] == bytes.fromhex("92 01 02 00")
 
         register = runtime.dispatch("register_read", {"position": 1, "address": 0x0130, "size": 2})
-        assert register.data == bytes.fromhex("02 00")
+        assert register.data == bytes.fromhex("01 00")
 
         prepared = runtime.dispatch(
             "register_prepare_write",
@@ -216,7 +222,7 @@ def test_bridge_demo_core_commands(tmp_path) -> None:
 
         serializable = _json_value(runtime.dispatch("status", {}))
         assert serializable["mode"] == "demo"
-        assert serializable["slaves"][0]["state"] == 2
+        assert serializable["slaves"][0]["state"] == 1
         audit = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
         assert audit[-1]["level"] == "AUDIT"
         assert audit[-1]["action"] == "register_write"
@@ -309,7 +315,7 @@ def test_failed_rescan_invalidates_old_slave_snapshot(tmp_path) -> None:
         backend = runtime.worker._backend
         assert backend is not None
 
-        def failed_scan() -> list[Any]:
+        def failed_scan(_on_discovered=None) -> list[Any]:
             raise RuntimeError("link lost")
 
         backend.scan = failed_scan  # type: ignore[method-assign]
@@ -614,7 +620,7 @@ def test_expired_hardware_request_never_reaches_worker() -> None:
         runtime.shutdown()
 
 
-def test_esi_full_flash_flow_auto_init_and_config_override(tmp_path, workspace) -> None:
+def test_esi_full_flash_flow_uses_scan_init_and_config_override(tmp_path, workspace) -> None:
     writer = RecordingWriter()
     audit_path = tmp_path / "audit.jsonl"
     runtime = BridgeRuntime(
@@ -626,7 +632,7 @@ def test_esi_full_flash_flow_auto_init_and_config_override(tmp_path, workspace) 
     )  # type: ignore[arg-type]
     try:
         runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
-        assert runtime.dispatch("status", {})["slaves"][0].state is not EtherCatState.INIT
+        assert runtime.dispatch("status", {})["slaves"][0].state is EtherCatState.INIT
 
         source = workspace / "ESI示例" / "SlaveCTT_900e80.xml"
         source_before = source.read_bytes()
@@ -657,10 +663,6 @@ def test_esi_full_flash_flow_auto_init_and_config_override(tmp_path, workspace) 
             {"position": 1, "target_id": target["target_id"], "auto_reset": True},
         )
         assert result["success"] is True
-        assert any(
-            event == "progress" and payload.stage == "prepare-init"
-            for event, payload in writer.events
-        )
         flash = result["result"]
         assert flash.comparison.equal and flash.sii_valid and flash.semantic_valid
         assert flash.reset_sequence == (True, True, True)
@@ -683,7 +685,7 @@ def test_esi_full_flash_flow_auto_init_and_config_override(tmp_path, workspace) 
         assert audit[-1]["action"] == "eeprom_flash"
         assert audit[-1]["outcome"] == "succeeded"
         assert audit[-1]["details"]["vendor_id"] == loaded["vendor_id"]
-        assert audit[-2]["details"]["auto_init"] is True
+        assert audit[-2]["details"]["auto_init"] is False
         assert audit[-1]["details"]["auto_init"] is False
     finally:
         runtime.shutdown()

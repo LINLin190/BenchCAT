@@ -85,6 +85,14 @@ function deviceConfigData(device?: EsiDevice): string {
   return normalizeConfigData(value).formatted ?? "";
 }
 
+function deviceDisplayName(device?: EsiDevice): string {
+  return device?.type_name || device?.name || "—";
+}
+
+function slaveDisplayName(slave?: SlaveInfo): string {
+  return slave?.product_model || slave?.name || "—";
+}
+
 function ConfigSummary({ title, configData, subtle = false }: {
   title: string; configData: string; subtle?: boolean;
 }) {
@@ -224,7 +232,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     return [...items.values()];
   }, [fixedState, library.entries]);
   const filteredLibrary = useMemo(() => fixedEntries.filter((item) => {
-    const haystack = `${item.path} ${item.device_name} ${item.product_code.toString(16)} ${item.config_data}`.toLowerCase();
+    const haystack = `${item.path} ${item.type_name} ${item.device_name} ${item.product_code.toString(16)} ${item.config_data}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   }), [fixedEntries, query]);
 
@@ -253,7 +261,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
         path: esi!.path,
         documentSha256: esi!.sha256,
         ordinal,
-        deviceName: currentDevice!.name,
+        deviceName: deviceDisplayName(currentDevice),
         vendorId: esi!.vendor_id,
         productCode: currentDevice!.product_code,
         revision: Number(currentDevice!.revision ?? currentDevice!.revision_number ?? 0),
@@ -318,12 +326,12 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
 
   const renderSource = (item: LibraryEntry | FlashHistoryEntry, recent: boolean) => {
     const path = item.path;
-    const deviceName = recent ? (item as FlashHistoryEntry).deviceName : (item as LibraryEntry).device_name;
+    const deviceName = recent ? (item as FlashHistoryEntry).deviceName : (item as LibraryEntry).type_name || (item as LibraryEntry).device_name;
     const productCode = recent ? (item as FlashHistoryEntry).productCode : (item as LibraryEntry).product_code;
     const sourceConfig = recent ? (item as FlashHistoryEntry).effectiveConfigData : (item as LibraryEntry).config_data;
     const itemOrdinal = recent ? (item as FlashHistoryEntry).ordinal : (item as LibraryEntry).ordinal;
     const decoded = decodeConfigData(sourceConfig);
-    const selected = esi?.path === path && currentDevice?.name === deviceName && parsedConfig.formatted === decoded?.formatted;
+    const selected = esi?.path === path && deviceDisplayName(currentDevice) === deviceName && parsedConfig.formatted === decoded?.formatted;
     const inFixedList = fixedEntries.some((entry) => fixedEsiKey(entry) === fixedEsiKey({ path, ordinal: itemOrdinal }));
     return <Box key={`${path}-${itemOrdinal}-${sourceConfig}`} sx={{ position: "relative", mb: 0.4 }}>
       <ListItemButton
@@ -360,7 +368,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   return <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg" disableEscapeKeyDown={operationInProgress}
     PaperProps={{ sx: { height: { xs: "calc(100vh - 40px)", xl: 820 }, maxHeight: "calc(100vh - 32px)", borderRadius: 2, overflow: "hidden" } }}>
     <DialogTitle sx={{ py: 1.6, px: 2.25 }}>
-      <Box><Typography variant="h6" fontWeight={780} fontSize={18}>快速烧录 EEPROM</Typography><Typography variant="body2" fontSize={12.5} color="text.secondary">{slave ? `从站 ${slave.position} · ${slave.name} · ${slave.chip_model}` : "未选择从站"}</Typography></Box>
+      <Box><Typography variant="h6" fontWeight={780} fontSize={18}>快速烧录 EEPROM</Typography><Typography variant="body2" fontSize={12.5} color="text.secondary">{slave ? `从站 ${slave.position} · ${slaveDisplayName(slave)} · ${slave.chip_model}` : "未选择从站"}</Typography></Box>
     </DialogTitle>
     <Divider />
     <DialogContent sx={{ p: 0, overflow: "hidden" }}>
@@ -390,7 +398,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
             <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 0.9fr) minmax(0, 1.1fr)", gap: 1.25 }}>
               <Box sx={{ p: 1.35, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "background.paper", minWidth: 0 }}>
                 <Typography variant="overline" color="text.secondary" sx={{ fontSize: 11, lineHeight: 1.55 }}>当前 Device</Typography>
-                <Typography fontWeight={780} fontSize={14} noWrap title={slave?.name}>Device：{slave?.name ?? "—"}</Typography>
+                <Typography fontWeight={780} fontSize={14} noWrap title={slaveDisplayName(slave)}>Device：{slaveDisplayName(slave)}</Typography>
                 <Typography variant="body2" fontSize={13} color="text.secondary" noWrap>{slave ? `从站 ${slave.position} · ${slave.chip_model}` : "未选择从站"}</Typography>
               </Box>
               <ConfigSummary title="实际 EEPROM ConfigData" configData={header?.config_data ?? ""} subtle />
@@ -403,7 +411,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
               </Stack>
               <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 0.9fr) minmax(0, 1.1fr)", gap: 1.25 }}>
                 <Box sx={{ p: 1.35, borderRadius: 1.25, bgcolor: "background.paper", border: 1, borderColor: "primary.light", minWidth: 0 }}>
-                  <Typography variant="overline" color="text.secondary" sx={{ fontSize: 11, lineHeight: 1.55 }}>XML 文件</Typography><Typography fontWeight={780} fontSize={14} noWrap title={fileName(esi.path)}>{fileName(esi.path)}</Typography><Typography variant="body2" fontSize={13} color="text.secondary" noWrap title={currentDevice?.name}>Device：{currentDevice?.name}</Typography>
+                  <Typography variant="overline" color="text.secondary" sx={{ fontSize: 11, lineHeight: 1.55 }}>XML 文件</Typography><Typography fontWeight={780} fontSize={14} noWrap title={fileName(esi.path)}>{fileName(esi.path)}</Typography><Typography variant="body2" fontSize={13} color="text.secondary" noWrap title={deviceDisplayName(currentDevice)}>Device：{deviceDisplayName(currentDevice)}</Typography>
                 </Box>
                 <ConfigSummary title="XML ConfigData" configData={configData} />
               </Box>

@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from datetime import UTC, datetime
@@ -89,7 +90,11 @@ def _ordered_adapters(adapters: list[Any], preferred_adapter: str = "") -> list[
     return ordered
 
 
-def _scan_adapter(backend: Any, adapter_name: str) -> tuple[dict[str, Any], list[Any]]:
+def _scan_adapter(
+    backend: Any,
+    adapter_name: str,
+    on_discovered: Callable[[list[Any]], None] | None = None,
+) -> tuple[dict[str, Any], list[Any]]:
     """Run one bounded-by-caller adapter attempt and leave it connected only on success."""
     started = time.perf_counter()
     attempt: dict[str, Any] = {"adapter": adapter_name, "slave_count": 0}
@@ -98,7 +103,11 @@ def _scan_adapter(backend: Any, adapter_name: str) -> tuple[dict[str, Any], list
         backend.disconnect()
     try:
         backend.connect(adapter_name)
-        slaves = list(backend.scan())
+        slaves = (
+            list(backend.scan(on_discovered))
+            if on_discovered is not None
+            else list(backend.scan())
+        )
         attempt["slave_count"] = len(slaves)
     except Exception as exc:
         attempt["error"] = str(exc)
@@ -454,8 +463,19 @@ class BridgeRuntime:
             )
             started = time.perf_counter()
             try:
+                def on_discovered(
+                    slaves: list[Any], adapter_name: str = item.name
+                ) -> None:
+                    self.writer.event(
+                        "scan_discovered",
+                        {"adapter": adapter_name, "slaves": slaves},
+                        self.session_id,
+                    )
+
                 attempt, slaves = self._submit(
-                    lambda backend, name=item.name: _scan_adapter(backend, name),
+                    lambda backend, name=item.name: _scan_adapter(
+                        backend, name, on_discovered
+                    ),
                     timeout=AUTO_SCAN_ADAPTER_TIMEOUT_S,
                     fault_on_timeout=False,
                 )
@@ -713,7 +733,18 @@ class BridgeRuntime:
             if not self.connected:
                 raise RuntimeError("Master 未连接，无法扫描从站")
             try:
-                slaves = list(self._submit("scan", timeout=30))
+                adapter = self.master_state.snapshot().adapter
+
+                def on_discovered(discovered: list[Any]) -> None:
+                    self.writer.event(
+                        "scan_discovered",
+                        {"adapter": adapter, "slaves": discovered},
+                        self.session_id,
+                    )
+
+                slaves = list(
+                    self._submit(lambda backend: backend.scan(on_discovered), timeout=30)
+                )
             except BaseException as exc:
                 if not self._worker_stalled:
                     self.master_state.scan_failed(str(exc))

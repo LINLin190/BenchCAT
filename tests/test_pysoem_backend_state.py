@@ -316,7 +316,7 @@ def test_op_wait_exchanges_until_slave_is_ready():
     states = backend.request_state(None, EtherCatState.OP, 100000)
     assert states[0].state is EtherCatState.OP
     assert backend._master.exchanges >= 3
-    assert backend._master.maps == 1
+    assert backend._master.maps == 2
     assert backend._master.manual_state_change is False
     assert (states[0].input_size, states[0].output_size) == (6, 2)
     assert states[0].pdo_size_source == "mapped"
@@ -368,17 +368,34 @@ def test_mapping_is_rebuilt_after_configuration_invalidates_it(operation):
         backend.scan()
     else:
         getattr(backend, operation)(1, 1000)
-    assert backend._mapped is (operation == "scan")
+    assert backend._mapped is False
+    maps_before_request = backend._master.maps
     backend.request_state(None, EtherCatState.SAFE_OP, 100000)
-    assert backend._master.maps == 2
+    assert backend._master.maps == maps_before_request + 1
 
 
-def test_scan_maps_pdos_and_keeps_live_pdi():
+def test_scan_maps_pdos_keeps_live_pdi_and_finishes_in_init():
     backend = state_backend()
     assert backend._slaves[0].pdi_type == 0x80
     assert backend._master.maps == 1
+    assert backend._mapped is False
+    assert backend._slaves[0].state is EtherCatState.INIT
     assert (backend._slaves[0].input_size, backend._slaves[0].output_size) == (6, 2)
-    assert backend._slaves[0].pdo_size_source == "mapped"
+    assert backend._slaves[0].pdo_size_source == "cache"
+
+
+def test_scan_reports_discovered_slave_before_finishing_details():
+    backend = PysoemBackend()
+    backend._master = StateMaster()
+    backend._connected = True
+    discovered = []
+
+    final = backend.scan(discovered.append)
+
+    assert len(discovered) == 1
+    assert discovered[0][0].state is EtherCatState.PRE_OP
+    assert discovered[0][0].configured_address is None
+    assert final[0].state is EtherCatState.INIT
 
 
 def test_sii_scan_reads_declared_sm_sizes_without_mailbox():
@@ -399,6 +416,80 @@ def test_sii_scan_reads_declared_sm_sizes_without_mailbox():
     image[0x82:0x84] = bytes.fromhex("FF FF")
     assert PysoemBackend()._sii_pdo_sizes(EepromSlave()) == (None, None)
 
+
+def test_sii_scan_reads_product_names_and_sm_size_fallback():
+    image = bytearray(b"\xff" * 512)
+    image[0x7C:0x7E] = (3).to_bytes(2, "little")
+    offset = 0x80
+
+    def category(kind, data):
+        nonlocal offset
+        payload = bytes(data)
+        payload += bytes(len(payload) % 2)
+        image[offset : offset + 4] = (
+            kind.to_bytes(2, "little") + (len(payload) // 2).to_bytes(2, "little")
+        )
+        image[offset + 4 : offset + 4 + len(payload)] = payload
+        offset += 4 + len(payload)
+
+    names = ("XHD_Device", "XHD_CAN_Motor_18*8", "XHD_Device")
+    category(
+        0x000A,
+        bytes([len(names)])
+        + b"".join(bytes([len(name)]) + name.encode("ascii") for name in names),
+    )
+    general = bytearray(32)
+    general[0:4] = bytes([1, 0, 2, 3])
+    category(0x001E, general)
+    category(
+        0x0029,
+        bytes.fromhex(
+            "00 10 80 00 26 00 01 01 80 10 80 00 22 00 01 02 "
+            "00 11 E2 00 64 00 01 03 00 14 E8 00 20 00 01 04"
+        ),
+    )
+    image[offset : offset + 2] = b"\xff\xff"
+
+    class EepromSlave:
+        def eeprom_read(self, word, timeout):
+            return bytes(image[word * 2 : word * 2 + 4])
+
+    assert PysoemBackend()._sii_discovery_info(EepromSlave()) == (
+        232,
+        226,
+        "XHD_Device",
+        "XHD_CAN_Motor_18*8",
+    )
+
+
+def test_mapping_keeps_sii_sizes_when_pysoem_buffers_are_empty():
+    class ZeroMapMaster(StateMaster):
+        def config_map(self):
+            self.maps += 1
+            self.slaves[0].input = b""
+            self.slaves[0].output = b""
+            return 0
+
+    backend = PysoemBackend()
+    backend._master = ZeroMapMaster()
+    backend._connected = True
+    backend._slaves = [
+        SlaveInfo(
+            1,
+            "Motor",
+            SlaveIdentity(1, 2, 3),
+            EtherCatState.PRE_OP,
+            0,
+            232,
+            226,
+            pdo_size_source="sii",
+        )
+    ]
+
+    backend.map_process_data()
+
+    assert (backend._slaves[0].input_size, backend._slaves[0].output_size) == (232, 226)
+    assert backend._slaves[0].pdo_size_source == "sii"
 
 
 def test_example_slave_sii_declares_six_input_and_two_output_bytes(workspace):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes.util
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -17,6 +18,7 @@ from ..models import (
     SlaveIdentity,
     SlaveInfo,
 )
+from ..sii.parser import SiiParser
 from .base import CommunicationError, EepromReadback, EnvironmentError
 
 # Discovery must remain bounded when a slave does not implement an optional
@@ -170,11 +172,34 @@ class PysoemBackend:
         except Exception:
             return 0
 
-    def _sii_pdo_sizes(self, slave: Any) -> tuple[int | None, int | None]:
-        """Read declared SM lengths without configuring PDOs or waiting on CoE."""
+    def _sii_discovery_info(
+        self, slave: Any, position: int | None = None
+    ) -> tuple[int | None, int | None, str | None, str | None]:
+        """Read the bounded SII summary needed during discovery."""
         deadline = time.monotonic() + 0.1
+        cached_capacity_words: int | None = None
+        cached_categories = b""
+        if position is not None:
+            try:
+                size_data = self.eeprom_read_block(position, 0x3E, 4).data
+                cached_capacity_words = (int.from_bytes(size_data[:2], "little") + 1) * 64
+                category_words = min(max(cached_capacity_words - 0x40, 0), 256)
+                if category_words:
+                    cached_categories = self.eeprom_read_block(
+                        position, 0x40, category_words * 2
+                    ).data
+            except Exception:
+                return None, None, None, None
 
         def read(word: int) -> bytes:
+            if cached_capacity_words is not None:
+                if word == 0x3E:
+                    return (cached_capacity_words // 64 - 1).to_bytes(2, "little") + b"\x01\x00"
+                offset = (word - 0x40) * 2
+                value = cached_categories[offset:offset + 4]
+                if len(value) != 4:
+                    raise ValueError("SII discovery summary exceeds bounded prefix")
+                return value
             if time.monotonic() >= deadline:
                 raise TimeoutError("SII discovery deadline exceeded")
             value = slave.eeprom_read(word, timeout=DISCOVERY_FPRD_TIMEOUT_US)
@@ -182,6 +207,14 @@ class PysoemBackend:
                 raise ValueError("Truncated SII word read")
             return value
 
+        def payload(start: int, words: int) -> bytes:
+            chunks = [read(start + offset) for offset in range(0, words, 2)]
+            return b"".join(chunks)[: words * 2]
+
+        strings: tuple[str, ...] = ()
+        general = b""
+        input_size: int | None = None
+        output_size: int | None = None
         try:
             capacity_words = (int.from_bytes(read(0x3E)[:2], "little") + 1) * 64
             word = 0x40
@@ -193,7 +226,11 @@ class PysoemBackend:
                 length = int.from_bytes(header[2:], "little")
                 if kind == 0xFFFF or word + 2 + length > min(capacity_words, 0x10000):
                     break
-                if kind == 0x0029:
+                if kind == 0x000A:
+                    strings = SiiParser._parse_strings(payload(word + 2, length))
+                elif kind == 0x001E:
+                    general = payload(word + 2, length)
+                elif kind == 0x0029:
                     if length % 4 or length > 16 * 4:
                         break
                     sizes: dict[int, int | None] = {3: 0, 4: 0}
@@ -203,14 +240,50 @@ class PysoemBackend:
                             size = int.from_bytes(sm[2:4], "little")
                             previous = sizes[sm[7]]
                             # An enabled SM with no default length needs online mapping.
-                            sizes[sm[7]] = previous + size if size and previous is not None else None
-                    return sizes[4], sizes[3]
+                            sizes[sm[7]] = (
+                                previous + size if size and previous is not None else None
+                            )
+                    input_size, output_size = sizes[4], sizes[3]
+                    break
                 word += 2 + length
+
         except Exception:
             pass
-        return None, None
+
+        def string(index: int) -> str | None:
+            return strings[index - 1] if 0 < index <= len(strings) else None
+
+        product_type = string(general[0]) if len(general) >= 1 else None
+        product_model = None
+        if len(general) >= 4:
+            product_model = string(general[2]) or string(general[3])
+        return input_size, output_size, product_type, product_model
+
+    def _sii_pdo_sizes(self, slave: Any) -> tuple[int | None, int | None]:
+        input_size, output_size, _, _ = self._sii_discovery_info(slave)
+        return input_size, output_size
+
+    def _basic_info(self, position: int, slave: Any) -> SlaveInfo:
+        try:
+            state = EtherCatState(int(slave.state) & 0x0F)
+        except ValueError:
+            state = EtherCatState.NONE
+        key = (int(slave.man), int(slave.id), int(slave.rev))
+        input_size, output_size = self._pdo_size_cache.get(key, (None, None))
+        return SlaveInfo(
+            position,
+            slave.name,
+            SlaveIdentity(slave.man, slave.id, slave.rev, 0),
+            state,
+            int(slave.al_status),
+            input_size,
+            output_size,
+            raw_state=int(slave.state),
+            pdo_size_source="cache" if input_size is not None else "unknown",
+        )
 
     def _info(self, position: int, slave: Any) -> SlaveInfo:
+        basic = self._basic_info(position, slave)
         configured_address = None
         pdi_type = None
         chip_model, family = "Generic ESC", "GENERIC"
@@ -255,30 +328,12 @@ class PysoemBackend:
                 sm_count=capabilities[1] if capabilities is not None else None,
                 ram_kib=capabilities[2] if capabilities is not None else None,
             )
-        try:
-            state = EtherCatState(int(slave.state) & 0x0F)
-        except ValueError:
-            state = EtherCatState.NONE
-        # PDO sizes remain authoritative only after config_map(). The bounded
-        # configuration-prefix read in scan() restores EEPROM ownership.
-        key = (int(slave.man), int(slave.id), int(slave.rev))
-        input_size, output_size = self._pdo_size_cache.get(key, (None, None))
-        return SlaveInfo(
-            position,
-            slave.name,
-            # Serial is intentionally omitted during discovery; direct EEPROM
-            # reads can retain LAN9252 EEPROM ownership until a reset.
-            SlaveIdentity(slave.man, slave.id, slave.rev, 0),
-            state,
-            int(slave.al_status),
-            input_size,
-            output_size,
-            configured_address,
-            chip_model,
-            family,
-            raw_state=int(slave.state),
+        return replace(
+            basic,
+            configured_address=configured_address,
+            chip_model=chip_model,
+            register_family=family,
             pdi_type=pdi_type,
-            pdo_size_source="cache" if input_size is not None else "unknown",
         )
 
     def _read_eeprom_status(
@@ -353,7 +408,9 @@ class PysoemBackend:
                 raise CommunicationError(f"EEPROM 控制权归还失败：{exc}") from exc
         return bytes(result)
 
-    def scan(self) -> list[SlaveInfo]:
+    def scan(
+        self, on_discovered: Callable[[list[SlaveInfo]], None] | None = None
+    ) -> list[SlaveInfo]:
         master = self._require_master()
         self._mapped = False
         self._slaves = []
@@ -364,6 +421,11 @@ class PysoemBackend:
         if count <= 0:
             self._slaves = []
             return []
+        self._slaves = [
+            self._basic_info(i, slave) for i, slave in enumerate(master.slaves, 1)
+        ]
+        if on_discovered is not None:
+            on_discovered(list(self._slaves))
         master.read_state()
         self._slaves = [self._info(i, slave) for i, slave in enumerate(master.slaves, 1)]
         # Keep a power-on information snapshot until the next scan, even after reset.
@@ -378,6 +440,19 @@ class PysoemBackend:
                 self._slaves[index] = replace(info, esc_hardware=data.hex(" ").upper())
             except Exception as exc:
                 self._slaves[index] = replace(info, esc_hardware_error=str(exc))
+        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
+            input_size, output_size, product_type, product_model = self._sii_discovery_info(
+                slave, index + 1
+            )
+            has_sii_sizes = input_size is not None or output_size is not None
+            self._slaves[index] = replace(
+                info,
+                input_size=input_size if input_size is not None else info.input_size,
+                output_size=output_size if output_size is not None else info.output_size,
+                pdo_size_source="sii" if has_sii_sizes else info.pdo_size_source,
+                product_type=product_type,
+                product_model=product_model,
+            )
         for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
             # Preserve the status before read commands can clear error bits.
             info = self._eeprom_status_info(info, slave)
@@ -399,7 +474,7 @@ class PysoemBackend:
             ]
         except Exception:
             self._mapped = False
-        return list(self._slaves)
+        return list(self.request_state(None, EtherCatState.INIT, 2_000_000))
 
     def read_states(self, refresh_eeprom: bool = False) -> list[SlaveInfo]:
         master = self._require_master()
@@ -599,24 +674,36 @@ class PysoemBackend:
         finally:
             master.manual_state_change = manual
         self._mapped = True
-        self._slaves = [
-            replace(
-                info, input_size=len(master.slaves[i].input), output_size=len(master.slaves[i].output),
-                pdo_size_source="mapped",
-            )
-            for i, info in enumerate(self._slaves)
-        ]
+        resolved: list[SlaveInfo] = []
         for info, slave in zip(self._slaves, master.slaves, strict=True):
+            mapped_input = len(slave.input)
+            mapped_output = len(slave.output)
+            fallback_input = mapped_input == 0 and info.input_size not in (None, 0)
+            fallback_output = mapped_output == 0 and info.output_size not in (None, 0)
+            resolved.append(
+                replace(
+                    info,
+                    input_size=info.input_size if fallback_input else mapped_input,
+                    output_size=info.output_size if fallback_output else mapped_output,
+                    pdo_size_source=(
+                        info.pdo_size_source
+                        if fallback_input or fallback_output
+                        else "mapped"
+                    ),
+                )
+            )
+        self._slaves = resolved
+        for info in self._slaves:
             self._pdo_size_cache[
                 (info.identity.vendor_id, info.identity.product_code, info.identity.revision)
-            ] = (len(slave.input), len(slave.output))
+            ] = (info.input_size, info.output_size)
         return size
 
     def _invalidate_mapping(self) -> None:
         self._mapped = False
         self._slaves = [
             replace(info, pdo_size_source="cache")
-            if info.input_size is not None and info.output_size is not None else info
+            if info.pdo_size_source == "mapped" else info
             for info in self._slaves
         ]
 

@@ -34,6 +34,8 @@ export interface SlaveInfo {
   eeprom_status_error?: string | null;
   eeprom_prefix?: string | null;
   eeprom_prefix_error?: string | null;
+  product_type?: string | null;
+  product_model?: string | null;
 }
 
 export interface WorkbenchStatus {
