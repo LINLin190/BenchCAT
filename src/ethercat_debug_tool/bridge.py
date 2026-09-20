@@ -776,6 +776,24 @@ class BridgeRuntime:
                 self.write_plans.clear()
             self._publish_snapshot()
             return slaves
+        if method == "clear_error":
+            if self.cycle_running:
+                raise RuntimeError("周期通信运行时不能清除从站状态错误，请先请求 SAFE-OP")
+            position = int(params["position"])
+            try:
+                slaves = list(self._submit("clear_error", position, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60))
+            except BaseException as exc:
+                if not self._worker_stalled:
+                    try:
+                        self._dispatch_serial("read_states", {})
+                    except BaseException:
+                        self.master_state.state_read_failed(str(exc))
+                        self._publish_snapshot()
+                raise
+            if self.master_state.states_updated(slaves):
+                self.write_plans.clear()
+            self._publish_snapshot()
+            return slaves
         if method == "request_state":
             raw_position = params.get("position")
             position = None if raw_position in {None, 0} else int(raw_position)

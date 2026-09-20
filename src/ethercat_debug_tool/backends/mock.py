@@ -161,6 +161,16 @@ class MockBackend:
             self._registers[idx][0x130:0x132] = int(state).to_bytes(2, "little")
         return list(self._slaves)
 
+    def clear_error(self, position: int, timeout_us: int) -> list[SlaveInfo]:
+        self._check(position)
+        idx = position - 1
+        slave = self._slaves[idx]
+        if (slave.raw_state or int(slave.state)) & 0x10:
+            self._slaves[idx] = replace(slave, raw_state=int(slave.state), al_status=0)
+            self._registers[idx][0x130:0x132] = int(slave.state).to_bytes(2, "little")
+            self._registers[idx][0x134:0x136] = bytes(2)
+        return list(self._slaves)
+
     def reconfig(self, position: int, timeout_us: int) -> bool:
         self._check(position)
         return True

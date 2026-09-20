@@ -17,6 +17,7 @@
     "scan": { "lane": "hardware", "timeout_ms": 45000, "mutating": false },
     "read_states": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },
     "request_state": { "lane": "hardware", "timeout_ms": 90000, "mutating": true },
+    "clear_error": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "reconfig": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "recover": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "switch_mode": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },

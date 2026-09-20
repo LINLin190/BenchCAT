@@ -245,6 +245,9 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
                     <Button key={state} disabled={busy} variant={slave.state === state ? "contained" : "outlined"} onClick={() => requestState(state)}>{stateLabel(state)}</Button>
                   ))}
                 </ButtonGroup>
+                <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再清除从站状态错误。" : "确认当前从站的状态错误，保持当前状态"}>
+                  <span><Button className="overview-clear-error" size="small" variant="outlined" disabled={busy || status.cycle_running} onClick={() => run(() => bridgeRequest<SlaveInfo[]>("clear_error", { position: slave.position }), "已确认从站状态错误")}>Clear Error</Button></span>
+                </Tooltip>
                 <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP；停止周期通信将影响整条总线。" : busy ? "操作进行中" : ""}>
                 <Stack direction="row" gap={0.75} className="ov-repair-actions">
                   <Button disabled={busy || status.cycle_running} size="small" color="warning" variant="outlined" onClick={() => repair("reconfig", "重配置完成")}>重配置</Button>

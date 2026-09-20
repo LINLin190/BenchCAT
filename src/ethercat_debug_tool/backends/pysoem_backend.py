@@ -511,25 +511,7 @@ class PysoemBackend:
             self._invalidate_mapping()
         candidates = master.slaves if position is None else [target]
         for slave in candidates:
-            raw = int(slave.state)
-            if raw & 0x10:
-                logger.warning(
-                    "Acknowledging %s: AL state 0x%02X, code 0x%04X",
-                    slave.name, raw, int(slave.al_status),
-                )
-                original_error = self._state_transition_error(slave, state, raw, timeout_us)
-                slave.state = (raw & 0x0F) | 0x10
-                slave.write_state()
-                deadline = time.monotonic() + timeout_us / 1_000_000
-                while True:
-                    actual = self._check_state(slave, raw & 0x0F, min(1000, timeout_us))
-                    if actual == (raw & 0x0F) or (actual & 0x0F) != (raw & 0x0F):
-                        break
-                    if time.monotonic() >= deadline:
-                        break
-                    time.sleep(0.001)
-                if actual != (raw & 0x0F):
-                    raise CommunicationError(f"Error acknowledgement failed: {original_error}")
+            self._acknowledge_error(slave, state, timeout_us)
 
         if state in (EtherCatState.INIT, EtherCatState.PRE_OP):
             self._invalidate_mapping()
@@ -540,6 +522,35 @@ class PysoemBackend:
             self._transition(target, EtherCatState.SAFE_OP, timeout_us)
         self._transition(target, state, timeout_us)
         return self.read_states()
+
+    def clear_error(self, position: int, timeout_us: int) -> list[SlaveInfo]:
+        master = self._require_master()
+        slave = self._slave(position)
+        master.read_state()
+        if int(slave.state) & 0x10:
+            self._acknowledge_error(slave, EtherCatState(int(slave.state) & 0x0F), timeout_us)
+        return self.read_states()
+
+    def _acknowledge_error(self, slave: Any, state: EtherCatState, timeout_us: int) -> None:
+        raw = int(slave.state)
+        if raw & 0x10:
+            logger.warning(
+                "Acknowledging %s: AL state 0x%02X, code 0x%04X",
+                slave.name, raw, int(slave.al_status),
+            )
+            original_error = self._state_transition_error(slave, state, raw, timeout_us)
+            slave.state = (raw & 0x0F) | 0x10
+            slave.write_state()
+            deadline = time.monotonic() + timeout_us / 1_000_000
+            while True:
+                actual = self._check_state(slave, raw & 0x0F, min(1000, timeout_us))
+                if actual == (raw & 0x0F) or (actual & 0x0F) != (raw & 0x0F):
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.001)
+            if actual != (raw & 0x0F):
+                raise CommunicationError(f"Error acknowledgement failed: {original_error}")
 
     def _transition(self, target: Any, state: EtherCatState, timeout_us: int) -> None:
         target.state = int(state)
