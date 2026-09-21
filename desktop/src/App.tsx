@@ -330,7 +330,7 @@ function StateSelector({ state, disabled, onRequest, label, className = "" }: {
   </Box>;
 }
 
-function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRegisterProfileChange, alLanguage }: { slave?: SlaveInfo; status: WorkbenchStatus; busy: boolean; run: Run; refresh: () => Promise<void>; registerProfile: string; onRegisterProfileChange: (profile: string) => void; alLanguage: AlStatusLanguage }) {
+function OverviewPage({ slave, status, busy, stateRequestBusy, run, refresh, registerProfile, onRegisterProfileChange, alLanguage }: { slave?: SlaveInfo; status: WorkbenchStatus; busy: boolean; stateRequestBusy: boolean; run: Run; refresh: () => Promise<void>; registerProfile: string; onRegisterProfileChange: (profile: string) => void; alLanguage: AlStatusLanguage }) {
   const [switchingProfile, setSwitchingProfile] = useState<string>();
   const requestState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: slave?.position ?? 0, state }),
@@ -380,7 +380,7 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
               </Box>
               <Box className="ov-runtime-actions">
                 <Typography className="section-label">状态请求</Typography>
-                <StateSelector key={`${status.session_id}:${slaveIdentityKey(slave)}`} state={slave.state} disabled={busy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
+                <StateSelector key={`${status.session_id}:${slaveIdentityKey(slave)}`} state={slave.state} disabled={busy || stateRequestBusy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
                 <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再清除从站状态错误。" : "确认当前从站的状态错误，保持当前状态"}>
                   <span><Button className="overview-clear-error" size="small" variant="outlined" disabled={busy || status.cycle_running} onClick={() => run(() => bridgeRequest<SlaveInfo[]>("clear_error", { position: slave.position }), "已确认从站状态错误")}>Clear Error</Button></span>
                 </Tooltip>
@@ -408,8 +408,7 @@ function OverviewPage({ slave, status, busy, run, refresh, registerProfile, onRe
                 <Divider sx={{ my: 1.5 }} />
               </>}
               modelControl={<Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再切换 ESC 型号；停止周期通信将影响整条总线。" : ""}><FormControl size="small" sx={{ width: 152, maxWidth: "100%" }}>
-                <InputLabel>ESC 型号</InputLabel>
-                <Select label="ESC 型号" value={registerProfile} onChange={(event) => void changeEscModel(String(event.target.value))} disabled={busy || status.cycle_running || Boolean(switchingProfile)}>
+                <Select inputProps={{ "aria-label": "ESC 型号" }} value={registerProfile} onChange={(event) => void changeEscModel(String(event.target.value))} disabled={busy || status.cycle_running || Boolean(switchingProfile)}>
                   {registerProfiles.map((profile) => <MenuItem key={profile} value={profile}>{profile}</MenuItem>)}
                 </Select>
               </FormControl></Tooltip>}
@@ -1030,7 +1029,7 @@ export default function App() {
   const startupUpdateCheckedRef = useRef(false);
   const [alLanguage, setAlLanguage] = useState<AlStatusLanguage>(() => window.localStorage.getItem(AL_LANGUAGE_KEY) === "en" ? "en" : "zh");
   const [eepromAutoReset, setEepromAutoReset] = useState(() => loadEepromAutoReset());
-  const [autoCheckUpdates, setAutoCheckUpdates] = useState(() => window.localStorage.getItem(AUTO_UPDATE_KEY) !== "false");
+  const [autoCheckUpdates, setAutoCheckUpdates] = useState(() => window.localStorage.getItem(AUTO_UPDATE_KEY) === "true");
   const autoCheckUpdatesRef = useRef(autoCheckUpdates);
   autoCheckUpdatesRef.current = autoCheckUpdates;
   const [slaveContextMenu, setSlaveContextMenu] = useState<SlaveContextMenu>();
@@ -1045,8 +1044,11 @@ export default function App() {
   const eepromReadCacheKey = `${status.host_generation}:${status.session_id}:${selectedSlaveKey}`;
   const registerProfile = slave ? registerProfileOverrides[selectedSlaveKey] ?? defaultRegisterProfile(slave.chip_model) : "ET1100";
   const operations = useSyncExternalStore(operationStore.subscribe, operationStore.snapshot);
+  const stateRequestBusy = useMemo(() => [...operations.values()].some((operation) =>
+    ["queued", "running"].includes(operation.phase) && operation.method === "request_state"
+  ), [operations]);
   const hardwareBusy = useMemo(() => [...operations.values()].some((operation) =>
-    ["queued", "running"].includes(operation.phase) && operation.lane === "hardware" && operation.method !== "register_watch"
+    ["queued", "running"].includes(operation.phase) && operation.lane === "hardware" && !["register_watch", "request_state"].includes(operation.method)
   ), [operations]);
   const scanning = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["scan", "auto_scan"].includes(operation.method));
   const connecting = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["connect", "disconnect"].includes(operation.method));
@@ -1055,7 +1057,7 @@ export default function App() {
   const busy = hardwareBusy || updating;
   const updateBlockedReason = eepromExclusive
     ? "EEPROM 操作进行中，完成后即可更新。"
-    : hardwareBusy ? "设备操作进行中，完成后即可更新。" : "";
+    : hardwareBusy || stateRequestBusy ? "设备操作进行中，完成后即可更新。" : "";
   const busState = minimumBusState(status.slaves);
   const busStateBlockedReason = !bridgeAvailable
     ? "通信核心不可用"
@@ -1065,7 +1067,9 @@ export default function App() {
         ? "请先扫描从站"
         : eepromExclusive
           ? "EEPROM 操作期间不能切换状态"
-          : busy
+          : stateRequestBusy
+            ? "正在切换从站状态"
+            : busy
             ? "请等待当前硬件操作完成"
             : "";
 
@@ -1321,7 +1325,11 @@ export default function App() {
       setUpdateState("available");
       if (automatic) {
         const ignored = window.localStorage.getItem(IGNORED_UPDATE_KEY) === update.version;
-        setPendingUpdateReminder(autoCheckUpdatesRef.current && !ignored);
+        if (!ignored && autoCheckUpdatesRef.current) {
+          setPendingUpdateReminder(true);
+        } else if (!ignored) {
+          setMessage({ text: `发现 BenchCAT v${update.version} 更新，可在“关于”页面查看。`, severity: "info" });
+        }
       } else {
         setUpdateDialogOpen(true);
       }
@@ -1390,10 +1398,9 @@ export default function App() {
     }
   };
   useEffect(() => {
-    if (!autoCheckUpdates) return;
     const timer = window.setTimeout(() => { void checkUpdate(true); }, 25_000);
     return () => window.clearTimeout(timer);
-  }, [autoCheckUpdates, checkUpdate]);
+  }, [checkUpdate]);
   const scan = async () => {
     const found = await run(() => bridgeRequest<SlaveInfo[]>("scan"));
     if (found) setMessage({ text: found.length ? `扫描完成，发现 ${found.length} 个从站` : "扫描完成，但未发现从站。请检查网卡、链路和从站供电。", severity: found.length ? "success" : "info" });
@@ -1441,10 +1448,10 @@ export default function App() {
 
   const content = useMemo(() => {
     const props = { slave, run };
-    if (page === "overview") return <OverviewPage {...props} status={status} busy={busy} refresh={refreshStates} registerProfile={registerProfile} alLanguage={alLanguage} onRegisterProfileChange={(profile) => slave && setRegisterProfileOverrides((current) => ({ ...current, [selectedSlaveKey]: profile }))} />;
+    if (page === "overview") return <OverviewPage {...props} status={status} busy={busy} stateRequestBusy={stateRequestBusy} refresh={refreshStates} registerProfile={registerProfile} alLanguage={alLanguage} onRegisterProfileChange={(profile) => slave && setRegisterProfileOverrides((current) => ({ ...current, [selectedSlaveKey]: profile }))} />;
     if (page === "registers") return <RegistersPage {...props} registerProfile={registerProfile} deviceOperationsBlocked={updating} />;
     return <EepromPage {...props} status={status} progress={progress} setProgress={setProgress} readResult={eepromReadCache[eepromReadCacheKey]} setReadResult={setSelectedEepromReadResult} initialSelection={eepromDetailSelection} onInitialSelectionConsumed={consumeEepromDetailSelection} autoResetEsc={eepromAutoReset} fileDropEnabled={!quickFlashOpen} deviceOperationsBlocked={updating} />;
-  }, [page, registerProfile, selectedSlaveKey, selectedPosition, slave, status, snapshot, progress, refreshStates, run, busy, updating, alLanguage, eepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
+  }, [page, registerProfile, selectedSlaveKey, selectedPosition, slave, status, snapshot, progress, refreshStates, run, busy, stateRequestBusy, updating, alLanguage, eepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
 
   return <Box sx={{ display: "flex", height: "100vh", bgcolor: "background.default" }}>
     <Drawer variant="permanent" PaperProps={{ sx: { width: 56, borderRight: 1, borderColor: "divider", bgcolor: "#FBFCFE", overflow: "hidden" } }}>
@@ -1524,7 +1531,7 @@ export default function App() {
       <DialogContent sx={{ minHeight: 360 }}>
         {settingsTab === 0 ? <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>AL 状态码语言</Typography><Typography variant="body2" color="text.secondary">切换概览页 AL 状态名称、说明与排查建议。</Typography></Box><FormControl size="small" sx={{ width: 150 }}><InputLabel>Language</InputLabel><Select label="Language" value={alLanguage} onChange={(event) => { const value = event.target.value as AlStatusLanguage; setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }}><MenuItem value="zh">中文</MenuItem><MenuItem value="en">English</MenuItem></Select></FormControl></Box>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>启动时自动检查更新</Typography><Typography variant="body2" color="text.secondary">软件启动后自动检查新版本；关闭后仍可在“关于”页面手动检查。</Typography></Box><Switch checked={autoCheckUpdates} onChange={(event) => { const enabled = event.target.checked; setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} /></Box>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>自动检查更新</Typography><Typography variant="body2" color="text.secondary">开启后发现新版本会显示更新弹窗；关闭后启动时仅在右下角短暂提示，仍可在“关于”页面手动检查。</Typography></Box><Switch checked={autoCheckUpdates} onChange={(event) => { const enabled = event.target.checked; setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} /></Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>EEPROM 写入后复位 ESC</Typography><Typography variant="body2" color="text.secondary">用于 XML 烧录和 BIN 恢复；关闭后仍会完整回读校验，但不执行 ESC RES 复位、重新发现和重新加载复核。</Typography></Box><Switch checked={eepromAutoReset} disabled={eepromExclusive} onChange={(event) => setEepromAutoReset(saveEepromAutoReset(event.target.checked))} /></Box>
         </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#F8FAFF" }}>
