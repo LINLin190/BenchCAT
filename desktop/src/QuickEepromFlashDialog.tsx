@@ -366,13 +366,13 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   };
 
   return <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg" disableEscapeKeyDown={operationInProgress}
-    PaperProps={{ sx: { height: { xs: "calc(100vh - 40px)", xl: 820 }, maxHeight: "calc(100vh - 32px)", borderRadius: 2, overflow: "hidden" } }}>
-    <DialogTitle sx={{ py: 1.6, px: 2.25 }}>
+    PaperProps={{ sx: { width: "calc(100% - 96px)", maxWidth: 1080, height: { xs: "calc(100vh - 56px)", xl: 730 }, maxHeight: "calc(100vh - 56px)", borderRadius: 2, overflow: "hidden" } }}>
+    <DialogTitle sx={{ py: 1.35, px: 2 }}>
       <Box><Typography variant="h6" fontWeight={780} fontSize={18}>快速烧录 EEPROM</Typography><Typography variant="body2" fontSize={12.5} color="text.secondary">{slave ? `从站 ${slave.position} · ${slaveDisplayName(slave)} · ${slave.chip_model}` : "未选择从站"}</Typography></Box>
     </DialogTitle>
     <Divider />
     <DialogContent sx={{ p: 0, overflow: "hidden" }}>
-      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "310px minmax(0, 1fr)", xl: "350px minmax(0, 1fr)" }, height: "100%", minHeight: 0 }}>
+      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "290px minmax(0, 1fr)", xl: "320px minmax(0, 1fr)" }, height: "100%", minHeight: 0 }}>
         <Box sx={{ borderRight: 1, borderColor: "divider", display: "flex", flexDirection: "column", minHeight: 0, bgcolor: "#FBFCFE" }}>
           <Tabs value={tab} onChange={(_, value: 0 | 1) => { setTab(value); saveQuickFlashTab(value); }} variant="fullWidth" sx={{ minHeight: 40, bgcolor: "background.paper" }}>
             <Tab icon={<HistoryRounded sx={{ fontSize: 18 }} />} iconPosition="start" label={`最近烧录 ${history.length || ""}`} sx={{ minHeight: 40, py: 0.7, fontSize: 12.5 }} />
@@ -388,7 +388,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
           <Box sx={{ p: 1, borderTop: 1, borderColor: "divider", bgcolor: "background.paper" }}><Button fullWidth size="small" variant="outlined" startIcon={<FolderOpenRounded />} disabled={operationInProgress} onClick={chooseFile}>选择或拖入 XML</Button></Box>
         </Box>
 
-        <Box sx={{ p: 2.25, overflow: "auto", minWidth: 0 }}>
+        <Box sx={{ p: 2, overflow: "auto", minWidth: 0 }}>
           {progress && operationInProgress && <Box sx={{ mb: 1.5, p: 1.4, borderRadius: 1.5, bgcolor: "#F2F7FF", border: 1, borderColor: "primary.light" }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={2}><Box minWidth={0}><Typography fontWeight={750}>{progress.stage}</Typography><Typography variant="caption" color="text.secondary">{progress.detail}</Typography></Box><Typography className="mono" fontWeight={700}>{progress.percent}%</Typography></Stack><LinearProgress variant="determinate" value={progress.percent} sx={{ mt: 1, height: 6, borderRadius: 4 }} /></Box>}
           {result && <Alert severity={result.severity} sx={{ mb: 1.5 }}>{result.text}</Alert>}
           <Box sx={{ p: 1.45, mb: 1.5, border: 1, borderLeft: 4, borderColor: "#D7DCE3", borderLeftColor: "#7B8794", borderRadius: 1.5, bgcolor: "#F8F9FB" }}>
@@ -434,7 +434,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
       </Box>
     </DialogContent>
     <Divider />
-    <DialogActions sx={{ px: 2, py: 1.25, justifyContent: "space-between" }}>
+    <DialogActions sx={{ px: 2, py: 1, justifyContent: "space-between" }}>
       <Button disabled={!esi || operationInProgress} onClick={() => esi && onOpenDetails({ path: esi.path, ordinal, configData: parsedConfig.formatted ?? configData })}>进入 EEPROM 详情</Button>
       <Stack direction="row" gap={1} alignItems="center"><Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420, textAlign: "right" }}>{blocker || (autoResetEsc ? "有写入时自动复位 ESC" : "烧录后不复位 ESC")}</Typography><Button disabled={operationInProgress} onClick={() => handleClose()}>取消</Button><Button variant="contained" color="error" startIcon={operationInProgress ? <CircularProgress size={16} color="inherit" /> : <MemoryRounded />} disabled={Boolean(blocker)} onClick={flash}>烧录</Button></Stack>
     </DialogActions>
