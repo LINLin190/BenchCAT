@@ -27,7 +27,7 @@ describe("overview EEPROM card", () => {
 
   it("puts the raw register value and binary above the control/status table", () => {
     const html = renderToStaticMarkup(<OverviewEeprom slave={slave} profile="LAN9252" />);
-    const raw = html.indexOf("Raw value");
+    const raw = html.indexOf("Value");
     const table = html.indexOf("EEPROM Algorithm");
     expect(raw).toBeGreaterThan(-1);
     expect(table).toBeGreaterThan(raw);

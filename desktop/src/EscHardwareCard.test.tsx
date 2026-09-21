@@ -21,7 +21,16 @@ describe("hardware scan snapshot card", () => {
     expect(html).not.toContain("非实测");
     expect(html).not.toContain("不作状态判断");
     expect(html).not.toContain("不是 EEPROM Revision");
+    expect(html).toContain("Address");
+    expect(html).toContain("ChipMode");
     expect(html).toContain("展开详情");
+  });
+  it("uses the requested LAN9252 field names", () => {
+    const html = renderToStaticMarkup(<EscHardwareCard slave={{ ...slave, esc_hardware: "01 00 52 92 3C 00 00 00" }} profile="LAN9252" />);
+    expect(html).toContain("ChipMode");
+    expect(html).toContain("EEPROM Size");
+    expect(html).toContain("TX_Shift");
+    expect(html).toContain("MII_LinkPOL");
   });
   it.each([
     ["LAN9252", "01 00 52 92 3C 00 00 00", "32 Kbit ~ 4 Mbit"],

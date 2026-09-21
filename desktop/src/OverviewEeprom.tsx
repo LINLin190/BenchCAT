@@ -10,9 +10,8 @@ function eepromFamily(profile: string): EepromFamily {
   return family === "LAN9252" || family === "LAN9253" ? family : "ET1100";
 }
 
-/** Field name and decoded value lead, the bit position trails: the text column must own the
- *  flexible width, otherwise it wraps several lines deep once the detail table expands. */
-const BIT_TABLE_COLUMNS = ["Name", "Value", "Bit", "Description"];
+/** The bit position leads the decoded field; the description column owns the flexible width. */
+const BIT_TABLE_COLUMNS = ["Bit", "Name", "Value", "Description"];
 
 function HeadRow({ labels }: { labels: string[] }) {
   return (
@@ -65,9 +64,9 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
             <Typography className="ov-section-title">控制 / 状态 · 0x0502–0x0503</Typography>
             {!status ? <Alert severity={slave.eeprom_status_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_status_error || "无可用寄存器数据"}</Alert> : <>
               <Box className="ov-raw-row" sx={{ mt: 0.75 }}>
-                <Typography variant="caption" color="text.secondary">Raw value</Typography>
+                <Typography variant="caption" color="text.secondary">Value</Typography>
                 <Typography variant="body2" className="mono ov-strong">{status.raw}</Typography>
-                <Typography variant="caption" color="text.secondary">Binary</Typography>
+                <Typography variant="caption" color="text.secondary">Bin</Typography>
                 <Typography variant="body2" className="mono ov-binary">{status.binary}</Typography>
               </Box>
               <TableContainer sx={{ mt: 0.75 }}>
@@ -93,7 +92,7 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
               <Typography variant="caption" className="mono ov-group-title">配置区 · 前 16 字节解析</Typography>
               <TableContainer>
                 <Table size="small" className="overview-data-table ov-word-table">
-                  <HeadRow labels={["Word", "16-bit 值", "解析"]} />
+                  <HeadRow labels={["Word", "Value", "Description"]} />
                   <TableBody>
                     {prefix.words.map((row) => (
                       <TableRow key={row.word} hover>
@@ -114,9 +113,9 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
                   <TableBody>
                     {status.fields.map((field) => (
                       <TableRow key={field.bits} className={field.error ? "ov-row-error" : undefined}>
+                        <TableCell className="mono ov-col-bit">{field.bits}</TableCell>
                         <TableCell>{field.name}</TableCell>
                         <TableCell className="mono ov-col-num">{field.binary}</TableCell>
-                        <TableCell className="mono ov-col-bit">{field.bits}</TableCell>
                         <TableCell className="ov-col-text">
                           {field.description}
                           {field.detail ? <Typography component="span" variant="caption" color="text.secondary">（{field.detail}）</Typography> : null}

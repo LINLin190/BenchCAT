@@ -4,6 +4,13 @@ import { CardHeading, useDisclosure } from "./OverviewDisclosure";
 import { decodeEscHardware, hardwareFamily } from "./escHardware";
 import type { SlaveInfo } from "./types";
 
+const DISPLAY_FIELD_NAMES: Record<string, string> = {
+  CHIPMODE: "ChipMode",
+  EEPROM_SIZE_STRAP: "EEPROM Size",
+  TX_SHIFT_STRAP: "TX_Shift",
+  LINK_POL_STRAP_MII: "MII_LinkPOL",
+};
+
 /** ESC hardware identification from the scanned 0x0E00–0x0E07 snapshot. Renders its own card
  *  so it can be dropped into the overview grid as one grid item. */
 export function EscHardwareCard({ slave, profile, modelControl, modelNote, identity }: { slave: SlaveInfo; profile: string; modelControl?: ReactNode; modelNote?: ReactNode; identity?: ReactNode }) {
@@ -17,12 +24,12 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
       {identity}
       <Typography className="ov-section-title">ESC 硬件信息</Typography>
       {hardwareFamily(profile) !== profile && <Typography variant="caption" color="text.secondary">按 {hardwareFamily(profile)} 兼容定义解析</Typography>}
-      {modelControl}
-      {modelNote}
-      {!decoded ? <Alert severity={slave.esc_hardware_error ? "warning" : "info"} sx={{ mt: 1 }}>
-        {slave.esc_hardware_error ? `读取失败：${slave.esc_hardware_error}` : "当前扫描无可用数据"}
-      </Alert> : <>
-        <Box className="kv-compact" sx={{ mt: 1 }}>
+      <Box className="kv-compact" sx={{ mt: 1 }}>
+        {modelControl && <>
+          <Typography className="section-label ov-esc-model-label">ESC 型号</Typography>
+          <Box className="ov-model-control">{modelControl}</Box>
+        </>}
+        {decoded && <>
           {/* ET1100 has no Microchip Chip ID at 0x0E02; that word is its own Power-On value. */}
           <Typography className="section-label">{decoded.family === "ET1100" ? "Product ID" : "Chip ID"}</Typography>
           <Typography variant="body2" className="mono ov-strong">{decoded.chipId}</Typography>
@@ -34,7 +41,12 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
             <Typography className="section-label">EEPROM size strap</Typography>
             <Typography variant="body2" className="mono ov-strong">{eepromSize.meaning.replace("EEPROM 容量范围 ", "")}</Typography>
           </>}
-        </Box>
+        </>}
+      </Box>
+      {modelNote}
+      {!decoded ? <Alert severity={slave.esc_hardware_error ? "warning" : "info"} sx={{ mt: 1 }}>
+        {slave.esc_hardware_error ? `读取失败：${slave.esc_hardware_error}` : "当前扫描无可用数据"}
+      </Alert> : <>
         <Stack direction="row" gap={1.5} alignItems="baseline" sx={{ mt: 1, flexWrap: "wrap" }}>
           <Typography variant="body2" color="text.secondary" className="mono">0x0E00–0x0E07</Typography>
           <Typography variant="body2" className="mono ov-strong ov-hexline">{decoded.bytes.join(" ")}</Typography>
@@ -45,13 +57,13 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
         <Collapse in={disclosure.expanded} id={disclosure.controls}>
           <TableContainer sx={{ mt: 0.75 }}>
             <Table size="small" className="overview-data-table">
-              <TableHead><TableRow>{["Name", "Value", "地址 / Bit", "Description"].map((label) => <TableCell key={label} scope="col">{label}</TableCell>)}</TableRow></TableHead>
+              <TableHead><TableRow>{["Address", "Name", "Value", "Description"].map((label) => <TableCell key={label} scope="col">{label}</TableCell>)}</TableRow></TableHead>
               <TableBody>
                 {decoded.fields.filter((field) => !field.reserved).map((field) => (
                   <TableRow key={`${field.location}-${field.name}`} hover>
-                    <TableCell>{field.name}</TableCell>
-                    <TableCell className="mono ov-col-num">{field.value}</TableCell>
                     <TableCell className="mono ov-col-bit ov-nowrap">{field.location}</TableCell>
+                    <TableCell>{DISPLAY_FIELD_NAMES[field.name] ?? field.name}</TableCell>
+                    <TableCell className="mono ov-col-num">{field.value}</TableCell>
                     <TableCell className="ov-col-text">{field.meaning}</TableCell>
                   </TableRow>
                 ))}
