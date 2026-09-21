@@ -34,11 +34,11 @@
       "resources/bridge/": "bridge/"
     },
     "icon": [
-      "icons/icon.ico"
+      "icons/windows_desktop_shortcut.ico"
     ],
     "windows": {
       "nsis": {
-        "installerIcon": "icons/icon.ico",
+        "installerIcon": "icons/windows_desktop_shortcut.ico",
         "installerHooks": "nsis/installer-hooks.nsh",
         "languages": ["SimpChinese"],
         "displayLanguageSelector": false

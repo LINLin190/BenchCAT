@@ -38,6 +38,17 @@ jobs:
           cache: pnpm
           cache-dependency-path: desktop/pnpm-lock.yaml
 
+      - name: Cache Rust build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-release-
+
       - name: Install Python dependencies
         run: python -m pip install -e ".[dev]"
 
@@ -55,7 +66,7 @@ jobs:
 
       - name: Run Rust suite
         working-directory: desktop/src-tauri
-        run: cargo test --locked
+        run: cargo test --release --locked
 
       - name: Load Chinese release notes
         id: release_notes
