@@ -4,7 +4,7 @@ import struct
 from dataclasses import dataclass
 
 from ..esi.parser import EsiDcMode, EsiDevice, EsiEntry, EsiPdo, EsiSyncManager
-from .parser import SiiParser, crc8
+from .parser import SiiParser, crc8, validate_eeprom_range
 
 DATA_TYPES = {
     "BOOL": 0x01,
@@ -70,6 +70,7 @@ class SiiGenerator:
         capacity = device.byte_size
         if capacity < 128 or capacity % 128:
             raise ValueError("EEPROM ByteSize must be a positive multiple of 128")
+        validate_eeprom_range(0, capacity)
         image = bytearray(b"\xff" * capacity)
         config = device.config_data[:10].ljust(10, b"\x00") + b"\x00" * 4
         image[:14] = config

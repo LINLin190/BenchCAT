@@ -4,6 +4,15 @@ import hashlib
 import struct
 from dataclasses import dataclass
 
+MAX_EEPROM_BYTES = 128 * 1024
+
+
+def validate_eeprom_range(word_address: int, byte_count: int) -> None:
+    if word_address < 0 or byte_count <= 0 or byte_count % 2:
+        raise ValueError("EEPROM 地址和长度必须是有效的整 Word 范围")
+    if word_address * 2 + byte_count > MAX_EEPROM_BYTES:
+        raise ValueError("EEPROM 操作超出当前支持的 128 KiB 地址范围")
+
 
 class SiiValidationError(ValueError):
     pass
@@ -16,6 +25,39 @@ def crc8(data: bytes) -> int:
         for _ in range(8):
             crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
     return crc
+
+
+@dataclass(frozen=True, slots=True)
+class SiiHeader:
+    status: str
+    error: str | None
+    capacity: int | None
+    identity_valid: bool
+
+
+def inspect_sii_header(data: bytes) -> SiiHeader:
+    """Classify readable bytes without treating their contents as physical capacity."""
+    if len(data) < 128:
+        return SiiHeader("invalid", "SII 固定区不足 128 字节", None, False)
+    if data[:16] in (bytes(16), b"\xff" * 16):
+        return SiiHeader("blank", "EEPROM 配置区空白，疑似未烧录", None, False)
+    errors: list[str] = []
+    if crc8(data[:16]) != 0:
+        errors.append("配置区 CRC-8 错误")
+    size_word, version = struct.unpack_from("<HH", data, 0x7C)
+    declared = (size_word + 1) * 128
+    if version in (0, 0xFFFF):
+        errors.append("SII 版本字段无效")
+    if declared > MAX_EEPROM_BYTES:
+        errors.append("SII 声明容量超出 128 KiB，不能作为读取长度")
+    vendor, product, revision, _ = struct.unpack_from("<IIII", data, 0x10)
+    identity_valid = vendor not in (0, 0xFFFFFFFF) and product != 0xFFFFFFFF and revision != 0xFFFFFFFF
+    if not identity_valid:
+        errors.append("SII 设备身份无效")
+    return SiiHeader(
+        "invalid" if errors else "header_valid", "；".join(errors) or None,
+        declared if not errors else None, identity_valid and not errors,
+    )
 
 
 @dataclass(frozen=True, slots=True)

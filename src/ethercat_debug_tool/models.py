@@ -74,6 +74,12 @@ class SlaveInfo:
     eeprom_prefix_error: str | None = None
     product_type: str | None = None
     product_model: str | None = None
+    sii_status: str = "unknown"
+    sii_error: str | None = None
+    eeprom_capacity: int | None = None
+    identity_valid: bool | None = None
+    scan_errors: tuple[str, ...] = ()
+    state_error: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

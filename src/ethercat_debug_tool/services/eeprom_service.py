@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,7 +11,7 @@ from pathlib import Path
 from ..backends.base import CommunicationError, EtherCatBackend
 from ..esi.parser import EsiDevice
 from ..models import EepromBackup, OperationProgress, SlaveInfo
-from ..sii.parser import SiiImage, SiiParser
+from ..sii.parser import MAX_EEPROM_BYTES, SiiImage, SiiParser, inspect_sii_header, validate_eeprom_range
 from .register_service import ResetService
 
 ProgressCallback = Callable[[OperationProgress], None]
@@ -41,6 +42,8 @@ class EepromFlashResult:
     reset_sequence: tuple[bool, bool, bool] | None
     rediscovered: bool | None
     reload_verified: bool | None
+    attempts: int = 1
+    reload_error: str | None = None
 
     @property
     def image_success(self) -> bool:
@@ -84,11 +87,16 @@ class EepromService:
         self.monotonic = monotonic
         self.parser = SiiParser()
 
-    def _rediscover(self, position: int) -> bool:
+    def _rediscover(self, position: int, device: EsiDevice) -> bool:
         deadline = self.monotonic() + self.rediscovery_timeout_s
         while True:
             try:
-                if any(item.position == position for item in self.backend.scan()):
+                if any(
+                    item.position == position and item.identity_valid is not False
+                    and (item.identity.vendor_id, item.identity.product_code, item.identity.revision)
+                    == (device.vendor_id, device.product_code, device.revision)
+                    for item in self.backend.scan()
+                ):
                     return True
             except Exception:
                 pass
@@ -105,25 +113,19 @@ class EepromService:
     @staticmethod
     def capacity_from_size_word(size_word: int) -> int:
         capacity = (size_word + 1) * 128
-        if not 128 <= capacity <= 16 * 1024 * 1024:
-            raise ValueError(f"EEPROM capacity field is unreasonable: {capacity} bytes")
+        if not 128 <= capacity <= MAX_EEPROM_BYTES:
+            raise ValueError("EEPROM 声明容量无效或超出 128 KiB，请指定读取长度")
         return capacity
 
     def read_capacity(self, position: int) -> int:
-        size_and_version = self._read_chunk(position, 0x3E)
-        if len(size_and_version) < 2:
-            raise RuntimeError("EEPROM size word could not be read")
-        return self.capacity_from_size_word(int.from_bytes(size_and_version[:2], "little"))
+        header = inspect_sii_header(self._read_chunk(position, 0, 128))
+        if header.capacity is None:
+            raise ValueError(f"{header.error}；容量未知，请指定读取长度，或使用所选目标镜像的长度烧录")
+        return header.capacity
 
     def read_configuration_header(self, position: int) -> bytes:
         """Read the eight-word ESC configuration area without scanning the full EEPROM."""
-        result = bytearray()
-        for word_address in range(0, 8, 2):
-            chunk = self._read_chunk(position, word_address)
-            if len(chunk) != 4:
-                raise RuntimeError(f"EEPROM returned {len(chunk)} bytes; expected four")
-            result.extend(chunk)
-        return bytes(result)
+        return self._read_chunk(position, 0, 16)
 
     def _read_chunk(self, position: int, word_address: int, byte_count: int = 4) -> bytes:
         for attempt in range(3):
@@ -147,13 +149,14 @@ class EepromService:
         cancellable: bool = True,
     ) -> bytes:
         capacity = self.read_capacity(position) if capacity is None else capacity
+        validate_eeprom_range(0, capacity)
         result = bytearray()
         for byte_offset in range(0, capacity, 128):
             self._check_cancel(cancel)
             byte_count = min(128, capacity - byte_offset)
             chunk = self._read_chunk(position, byte_offset // 2, byte_count)
             if len(chunk) != byte_count:
-                raise RuntimeError(f"EEPROM returned {len(chunk)} bytes; expected {byte_count}")
+                raise CommunicationError(f"EEPROM returned {len(chunk)} bytes; expected {byte_count}")
             result.extend(chunk)
             progress(
                 OperationProgress(
@@ -175,9 +178,11 @@ class EepromService:
         *,
         progress: ProgressCallback = lambda _: None,
         cancel: CancelCallback = lambda: False,
+        capacity: int | None = None,
     ) -> EepromBackup:
         raw = self.read_full(
             position,
+            capacity=capacity,
             progress=progress,
             cancel=cancel,
             progress_operation="eeprom-backup",
@@ -186,9 +191,9 @@ class EepromService:
         sha256 = hashlib.sha256(raw).hexdigest()
         directory.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        base = directory / f"slave{position}_{slave.identity.product_code:08X}_{stamp}"
-        binary_path = base.with_suffix(".bin")
-        binary_path.write_bytes(raw)
+        binary_path = directory / f"slave{position}_{slave.identity.product_code:08X}_{stamp}_{uuid.uuid4().hex[:8]}.bin"
+        with binary_path.open("xb") as output:
+            output.write(raw)
         return EepromBackup(binary_path, sha256, len(raw))
 
     @staticmethod
@@ -228,113 +233,70 @@ class EepromService:
         progress: ProgressCallback = lambda _: None,
         cancel: CancelCallback = lambda: False,
     ) -> EepromFlashResult:
-        self.parser.parse(target)
-        # Read the complete current image to calculate changed words. This is not
-        # persisted; users can create a BIN explicitly with the separate backup action.
-        current = self.read_full(
-            position,
-            capacity=len(target),
-            progress=progress,
-            cancel=cancel,
-            progress_operation="eeprom-flash",
-            progress_stage="read-current",
-        )
-        words = self.different_words(current, target)
-        total = len(words)
-        # Cancellation is safe until programming starts. Once the first word is
-        # written, finish programming and verification so the ESC is not left
-        # with an arbitrarily partial SII image.
+        validate_eeprom_range(0, len(target))
+        if not self.semantic_matches(self.parser.parse(target), device):
+            raise ValueError("烧录失败：目标镜像与所选 XML Device 不一致")
+        current: bytes | None = None
+        last_error = ""
+        try:
+            current = self.read_full(
+                position, capacity=len(target), progress=progress, cancel=cancel,
+                progress_operation="eeprom-flash", progress_stage="read-current",
+            )
+        except CommunicationError as exc:
+            # Bad existing contents do not impose a dependency on a usable SII.
+            # If the controller accepts writes, the final full read decides success.
+            last_error = str(exc)
         self._check_cancel(cancel)
-        if total == 0:
-            progress(
-                OperationProgress(
-                    "eeprom-flash", "write-verify", 1, 1, "无需写入差异 Word", cancellable=False
-                )
-            )
-            comparison = compare_images(target, current)
-            current_image = self.parser.parse(current)
-            semantic_valid = self.semantic_matches(current_image, device)
-            return EepromFlashResult(
-                len(current),
-                0,
-                comparison,
-                True,
-                semantic_valid,
-                "逐字节、SHA-256、SII 结构与 XML 身份语义均通过" if semantic_valid else "镜像验证失败",
-                None,
-                None,
-                None,
-            )
-        else:
-            progress(
-                OperationProgress(
-                    "eeprom-flash",
-                    "write-verify",
-                    0,
-                    total,
-                    "已进入不可中断的写入与校验阶段",
-                    cancellable=False,
-                )
-            )
-        word_retry_counts: dict[int, int] = {}
-        for completed, word in enumerate(words, 1):
-            expected = target[word * 2 : word * 2 + 2]
-            self.backend.eeprom_write(position, word, expected)
-            for retry in range(4):
+        written: set[int] = set()
+        write_attempted = False
+        readback: bytes | None = current
+        attempts = 0
+        for attempts in range(1, 4):
+            words = self.different_words(current, target) if current is not None else tuple(range(len(target) // 2))
+            if not words:
+                readback = current
+                progress(OperationProgress(
+                    "eeprom-flash", "write-verify", 1, 1,
+                    "完整回读已与目标一致，无需重复写入", cancellable=False,
+                ))
+                break
+            progress(OperationProgress(
+                "eeprom-flash", "write-verify", 0, len(words),
+                f"第 {attempts}/3 轮写入，共 {len(words)} Word", cancellable=False,
+            ))
+            for completed, word in enumerate(words, 1):
                 try:
-                    readback_word = self.backend.eeprom_read_checked(position, word)
-                except CommunicationError:
-                    pass  # The final full-image read decides whether programming succeeded.
-                else:
-                    if readback_word.data[:2] == expected:
-                        break
-                if retry < 3:
-                    self.sleep(0.02)
-            if retry:
-                word_retry_counts[word] = retry
-            progress(
-                OperationProgress(
-                    "eeprom-flash",
-                    "write-verify",
-                    completed,
-                    total,
-                    f"word 0x{word:04X}",
-                    cancellable=False,
+                    write_attempted = True
+                    self.backend.eeprom_write(position, word, target[word * 2:word * 2 + 2])
+                    written.add(word)
+                except Exception as exc:
+                    last_error = f"word 0x{word:04X}：{exc}"
+                    break
+                progress(OperationProgress(
+                    "eeprom-flash", "write-verify", completed, len(words),
+                    f"第 {attempts}/3 轮，word 0x{word:04X}", cancellable=False,
+                ))
+            progress(OperationProgress(
+                "eeprom-flash", "stability-wait", 0, 1, "等待 EEPROM 写入结束", cancellable=False,
+            ))
+            self.sleep(self.stability_wait_s)
+            try:
+                readback = self.read_full(
+                    position, capacity=len(target), progress=progress, cancel=lambda: False,
+                    progress_operation="eeprom-flash", progress_stage="full-verify", cancellable=False,
                 )
-            )
-
-        # After writes, allow the EEPROM to settle before full-image verification.
-        progress(
-            OperationProgress(
-                "eeprom-flash",
-                "stability-wait",
-                0,
-                1,
-                f"mandatory {self.stability_wait_s:g} second wait",
-                cancellable=False,
-            )
-        )
-        self.sleep(self.stability_wait_s)
-        progress(
-            OperationProgress(
-                "eeprom-flash", "stability-wait", 1, 1, "EEPROM 已稳定", cancellable=False
-            )
-        )
-        for attempt in range(3):
-            if attempt:
-                self.sleep(0.02)
-            readback = self.read_full(
-                position,
-                capacity=len(target),
-                progress=progress,
-                cancel=lambda: False,
-                progress_operation="eeprom-flash",
-                progress_stage="full-verify",
-                cancellable=False,
-            )
+            except Exception as exc:
+                readback = current = None
+                last_error = f"完整回读失败：{exc}"
+                continue
             comparison = compare_images(target, readback)
             if comparison.equal:
                 break
+            current = readback
+        if readback is None:
+            raise CommunicationError(f"烧录失败：已尝试 {attempts} 轮；{last_error}")
+        comparison = compare_images(target, readback)
         try:
             readback_parsed = self.parser.parse(readback)
         except ValueError:
@@ -342,41 +304,37 @@ class EepromService:
         sii_valid = readback_parsed is not None
         semantic_valid = readback_parsed is not None and self.semantic_matches(readback_parsed, device)
         verification = (
-            "逐字节、SHA-256、SII 结构与 XML 身份语义均通过"
+            "烧录完成，完整回读与目标一致"
             if (comparison.equal and semantic_valid)
-            else "镜像验证失败"
+            else "烧录失败：完整回读与目标不一致或 SII 内容无效"
         )
         if not comparison.equal and comparison.first_difference is not None:
             word = comparison.first_difference // 2
             expected = target[word * 2 : word * 2 + 2]
             actual = readback[word * 2 : word * 2 + 2]
-            try:
-                diagnostic = self.backend.eeprom_read_checked(position, word)
-                wkc = str(diagnostic.wkc)
-                status = f"0x{diagnostic.status:04X}"
-            except Exception:
-                wkc, status = "unavailable", "unavailable"
             verification = (
-                f"EEPROM full verification failed at word 0x{word:04X}: "
+                f"烧录失败：{attempts} 轮后 word 0x{word:04X} 不一致；"
                 f"expected={expected.hex().upper()} actual={actual.hex().upper()} "
-                f"WKC={wkc} word_retries={word_retry_counts.get(word, 0)} "
-                f"full_retries=2 0x0502={status}; "
-                f"target_sha256={comparison.target_sha256} "
-                f"readback_sha256={comparison.readback_sha256}"
+                f"{last_error}"
             )
         reset: tuple[bool, bool, bool] | None = None
         rediscovered: bool | None = None
         reload_verified: bool | None = None
-        if comparison.equal and semantic_valid and auto_reset:
+        reload_error: str | None = None
+        if comparison.equal and semantic_valid and auto_reset and write_attempted:
             # The three calls below are adjacent inside this exclusive Worker operation.
             progress(
                 OperationProgress(
                     "eeprom-flash", "reset", 0, 1, "发送 ESC 复位序列", cancellable=False
                 )
             )
-            reset = ResetService(self.backend).reset_ecat(position)
+            try:
+                reset = ResetService(self.backend).reset_ecat(position)
+            except Exception as exc:
+                reset = (False, False, False)
+                reload_error = f"镜像已写入，ESC 复位命令失败：{exc}"
             # A temporary drop after reset is expected and never rewrites the image result.
-            rediscovered = self._rediscover(position)
+            rediscovered = self._rediscover(position, device)
             progress(
                 OperationProgress(
                     "eeprom-flash",
@@ -391,6 +349,7 @@ class EepromService:
                 try:
                     reload = self.read_full(
                         position,
+                        capacity=len(target),
                         progress=progress,
                         cancel=lambda: False,
                         progress_operation="eeprom-flash",
@@ -398,14 +357,20 @@ class EepromService:
                         cancellable=False,
                     )
                     reload_image = self.parser.parse(reload)
-                    reload_verified = compare_images(target, reload).equal and self.semantic_matches(
+                    reload_verified = all(reset) and compare_images(target, reload).equal and self.semantic_matches(
                         reload_image, device
                     )
-                except Exception:
+                    if not reload_verified and reload_error is None:
+                        reload_error = "镜像烧录后回读一致，但复位序列未完成或复位后的回读已变化"
+                except Exception as exc:
                     reload_verified = False
+                    reload_error = f"复位后回读失败：{exc}"
+            else:
+                reload_verified = False
+                reload_error = "镜像已写入，复位后未发现目标设备；部分配置需要断电重启才能生效"
         return EepromFlashResult(
             len(readback),
-            total,
+            len(written),
             comparison,
             sii_valid,
             semantic_valid,
@@ -413,9 +378,12 @@ class EepromService:
             reset,
             rediscovered,
             reload_verified,
+            attempts,
+            reload_error,
         )
 
     def restore(self, position: int, backup_path: Path, **kwargs: object) -> EepromFlashResult:
+        validate_eeprom_range(0, backup_path.stat().st_size)
         raw = backup_path.read_bytes()
         parsed = self.parser.parse(raw)
         # Semantic target uses the selected BIN identity.
