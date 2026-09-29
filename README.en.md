@@ -9,7 +9,7 @@ An EtherCAT slave debugging and diagnostics workbench for Windows. The desktop a
 This project uses [pySOEM](https://github.com/bnjmnp/pysoem) for EtherCAT master communication. Hardware communication on Windows depends on the official [Npcap](https://npcap.com/) driver; Npcap is not included in this repository or application.
 
 > [!WARNING]
-> Startup enumerates adapters and attempts connection and bus scanning. Discovery configures slaves to PRE-OP and maps PDOs to read fixed I/O widths; it does not enter OP or start cyclic communication. State transitions, register writes, and EEPROM operations can affect machinery or make a slave temporarily unavailable. Use an isolated, recoverable test setup.
+> Startup enumerates adapters and attempts connection and bus scanning. Discovery uses EtherCAT read frames and only the EEPROM controller writes required for an EEPROM read; it does not request PRE-OP, map PDOs, enter OP, or start cyclic communication. State transitions, register writes, and EEPROM operations can affect machinery or make a slave temporarily unavailable. Use an isolated, recoverable test setup.
 
 ## Why BenchCAT
 
@@ -17,7 +17,7 @@ BenchCAT brings bus discovery, state diagnostics, ESC register inspection, and E
 
 | Concern | Implementation |
 | --- | --- |
-| Safe first contact | Startup scans and stops in PRE-OP; it does not enter OP or start cyclic communication |
+| Safe first contact | Startup performs passive register/SM discovery; it does not request PRE-OP, map PDOs, enter OP, or start cyclic communication |
 | Responsive UI | The WebView never calls pySOEM; hardware work runs asynchronously in the Python bridge |
 | Request consistency | One Worker serializes requests for one Master |
 | Write control | Registers use two-stage plans and readback; EEPROM uses capacity, structure, semantic, and full-image verification |
@@ -66,10 +66,10 @@ pnpm dev
 The public workflow is `1. Automatic or manual scan -> 2. Select slave -> 3. Read state and AL -> 4. Register or EEPROM diagnostics`.
 
 1. Startup attempts connection and scanning; use **Detect and scan** to run it again.
-2. If automatic scanning finds no slave, select an adapter, click **Connect**, then **Scan**, and select the target in the slave tree. Discovery maps PDOs in PRE-OP and caches identity, PDI, and I/O widths.
-3. Read actual state and AL status first. State buttons may request a target directly; the backend performs required intermediate transitions and stops cyclic communication before downgrading. Discovery maps PDOs once and caches fixed I/O widths.
-4. In Registers, read before writing and confirm the slave, catalog, address, current value, and target value. Regenerate plans older than 60 seconds.
-5. For EEPROM, stop cyclic communication and put the target in INIT. Back up a BIN first, then select XML/Device, inspect Smart View and capacity, and program or restore.
+2. If automatic scanning finds no slave, select an adapter, click **Connect**, then **Scan**, and select the target in the slave tree. Discovery does not change state or map PDOs; it caches identity, PDI, and SM IN/SM OUT widths.
+3. Read actual state and AL status first. State buttons may request a target directly; the backend performs required intermediate transitions and stops cyclic communication before downgrading. PDO mapping is an explicit operational action; passive discovery only reports SM IN/SM OUT widths.
+4. In Registers, confirm the slave, catalog, address, and target value. The software rereads before writing; a changed current value fails the operation without performing the write. Waiting alone does not require another confirmation.
+5. For EEPROM, stop cyclic communication, select XML/Device, inspect Smart View and target image length, then program or restore. INIT and backups are not prerequisites. Use an explicit raw-read length when capacity is unknown.
 
 ### Implemented functionality
 
@@ -77,7 +77,7 @@ The public workflow is `1. Automatic or manual scan -> 2. Select slave -> 3. Rea
 - ESC register catalogs for ET1100, LAN9252, and LAN9253 with search, categories, bit fields, raw access, monitoring, change highlighting, and copy;
 - two-stage register writes bound to slave identity, with semantic readback and `AUDIT` logging;
 - ESI XML selection, drag and drop, five recent files, multiple Device entries, SII generation, Smart View, and capacity checks;
-- complete EEPROM reads, BIN backups, changed-word writes, per-word readback, settling wait, full reread, byte/SHA-256/structure/identity-semantic validation, and BIN restore;
+- explicit-length EEPROM reads, BIN backups, changed-word writes, full-image comparison, up to three programming attempts, and BIN restore;
 - exclusive three-frame ESC ECAT reset using `0x0040 <- 0x52/0x45/0x53`, bounded rediscovery polling, and separate rediscovery/reload results;
 - persistent JSONL logs under `%LOCALAPPDATA%\BenchCAT\logs`; every write operation is recorded as `AUDIT`.
 
@@ -96,9 +96,11 @@ Overview reads the ESC standard AL status register `0x0134` and shows the code, 
 
 ## EEPROM safety rules
 
-EEPROM programming is allowed only with cyclic communication stopped and the target slave in INIT. Identity mismatches are warnings only and do not require an extra confirmation. The selected XML/Device fully defines the target image; XML text is never written directly, and old Serial Number, Station Alias, or private data is not silently merged.
+EEPROM programming requires stopped cyclic communication, but not INIT or a valid existing SII. Blank contents, bad CRCs, and corrupt size declarations can be repaired using the target image length. Backups are optional. The selected XML/Device fully defines the target image; XML text is never written directly, and old Serial Number, Station Alias, or private data is not silently merged.
 
-Invalid XML, failed SII generation, unreadable or mismatched physical capacity, running cyclic communication, another EEPROM operation, or communication failure blocks the operation. During programming or restore, other hardware commands immediately return `EEPROM_BUSY`. Cancellation is shown neutrally as **Cancelled**. Verification details include the `first_difference` offset, and the complete backup path is shown after backup.
+Each programming pass is followed by a full-image read and comparison. Remaining differences are rewritten for up to three passes; a persistent mismatch or unreadable result is reported as programming failure. A partial write may be followed by reprogramming, without rollback. Reset/reload outcomes are reported separately from the completed image comparison. During programming or restore, other hardware commands immediately return `EEPROM_BUSY`.
+
+The SII size declaration is not a physical-capacity measurement. When it is untrustworthy, raw reads accept an explicit even length of 2–131072 bytes. Discovery retains ESC, AL, and live SM information even with blank, unreadable, or corrupt SII; unknown identity fields are not displayed as valid zeros. Ambiguous multi-Device XML requires an explicit selection, and old programming targets expire when the selected slave or bus session changes.
 
 `image_success` is true only when complete readback is byte-for-byte identical to the target, both SHA-256 values match, SII structure is valid, and XML semantic validation passes. Reset rediscovery and reload failures are reported separately and do not alter completed image verification.
 
@@ -159,7 +161,7 @@ Current visual acceptance targets are `2560 x 1440` (default), `1920 x 1080`, an
 - vendor-private SII Categories and arbitrary complete ESI Schema conversion are outside the current support claim;
 - CoE, PDO mapping, and online I/O pages are hidden in this release; the standard register catalog does not claim complete coverage of every vendor extension.
 
-For first physical contact, enumerate adapters, connect and scan (PRE-OP/PDO mapping), read state/AL, read registers, and read and store an EEPROM BIN offline. Confirm that the backup parses and that the equipment is safe before validating writes on an isolated test slave.
+For first physical contact, enumerate adapters, connect and perform passive discovery, read state/AL, read registers, and read and store an EEPROM BIN offline. Confirm that the backup parses and that the equipment is safe before validating writes on an isolated test slave.
 
 ## Safety notice
 
