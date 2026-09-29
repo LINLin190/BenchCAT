@@ -361,7 +361,6 @@ function OverviewPage({ slave, status, busy, stateRequestBusy, run, refresh, reg
   return (
     <>
       {!slave && <PageTitle title="设备概览" subtitle="总线状态与设备信息" actions={<Button disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refresh)}>刷新状态</Button>} />}
-      {status.last_error && status.phase === "faulted" && <Alert severity="error" sx={{ mb: 1.25 }}>{status.last_error}</Alert>}
       {!slave ? <EmptyState text="连接并扫描后，在左侧选择一个从站" /> : (
         <Stack spacing={1.25} className="overview-cards">
           {Boolean(slave.scan_errors?.length) && <Alert severity="warning">扫描信息不完整：{slave.scan_errors!.join("；")}</Alert>}

@@ -215,7 +215,7 @@ class PysoemBackend:
         except Exception as exc:
             raise CommunicationError(f"初始化从站运行通道失败：{exc}") from exc
         if count != len(self._slaves) or count <= 0:
-            raise CommunicationError("从站运行通道拓扑与被动发现结果不一致，请重新扫描总线")
+            raise CommunicationError("无法执行该操作：从站初始化失败")
         self._mapping_attempted = False
         self._mapped = False
         return master
