@@ -218,7 +218,7 @@ class WebBridgeHandler(BaseHTTPRequestHandler):
             else:
                 self._send_json(
                     HTTPStatus.BAD_REQUEST,
-                    {"code": "HOST_ACTION", "message": str(exc), "operation_result": "failed"},
+                    {"code": "HOST_ACTION", "message": str(exc), "user_message": "文件操作未完成，请检查文件或目录后重试。", "operation_result": "failed"},
                 )
 
     def _bridge_request(self, body: dict[str, Any]) -> None:

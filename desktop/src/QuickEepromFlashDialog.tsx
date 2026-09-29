@@ -157,7 +157,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
         setTarget(value);
       }
     } catch (error) {
-      if (requestRef.current === requestId && contextRef.current === context) setGenerationError(error instanceof Error ? error.message : String(error));
+      if (requestRef.current === requestId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法生成烧录目标，请检查所选 XML 和设备。");
     }
   }, [contextKey, slave?.position]);
 
@@ -189,7 +189,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
       setConfigData(effective);
       if (selectedOrdinal >= 0) await generate(document, selectedOrdinal, effective);
     } catch (error) {
-      if (loadRequestRef.current === loadId && contextRef.current === context) setGenerationError(error instanceof Error ? error.message : String(error));
+      if (loadRequestRef.current === loadId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法打开所选 XML，请检查文件。");
     } finally {
       if (loadRequestRef.current === loadId && contextRef.current === context) setLoading(false);
     }
@@ -207,12 +207,12 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     setResult(undefined);
     setHeader(undefined);
     setHeaderError("");
-    void bridgeRequest<LibraryResult>("esi_library_list").then(setLibrary).catch((error) =>
-      setLibrary({ directory: "", entries: [], errors: [{ path: "", error: error instanceof Error ? error.message : String(error) }] })
+    void bridgeRequest<LibraryResult>("esi_library_list").then(setLibrary).catch((_error) =>
+      setLibrary({ directory: "", entries: [], errors: [{ path: "", error: "无法读取 XML 文件列表" }] })
     );
     void bridgeRequest<EepromHeader>("eeprom_header", { position: slave.position })
       .then((value) => { if (openedContextRef.current === contextKey) setHeader(value); })
-      .catch((error) => { if (openedContextRef.current === contextKey) setHeaderError(error instanceof Error ? error.message : String(error)); });
+      .catch((error) => { if (openedContextRef.current === contextKey) setHeaderError(error instanceof BridgeRequestError ? error.message : "无法读取设备当前配置"); });
     requestRef.current += 1;
     loadRequestRef.current += 1;
     setLoading(false);
@@ -284,8 +284,8 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     try {
       const payload = await bridgeRequest<FlashPayload>("eeprom_flash", { position: slave.position, target_id: target.target_id, auto_reset: autoResetEsc });
       if (!payload.success) {
-        setResult({ severity: "error", text: payload.result.image_verification });
-        setProgress({ operation: "eeprom-flash", stage: "烧录失败", completed: 100, total: 100, percent: 100, detail: payload.result.image_verification, tone: "error" });
+        setResult({ severity: "error", text: "写入后的内容与目标不一致，或设备信息未能解析。请重新读取设备确认结果。" });
+        setProgress({ operation: "eeprom-flash", stage: "烧录失败", completed: 100, total: 100, percent: 100, detail: "写入后的内容与目标不一致，或设备信息未能解析。请重新读取设备确认结果。", tone: "error" });
         return;
       }
       const effective = parsedConfig.formatted!;
@@ -307,13 +307,13 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
       setHistory((current) => saveFlashHistory(entry, window.localStorage, current));
       const reloadFailed = payload.result.reload_verified === false;
       const text = reloadFailed
-        ? payload.result.reload_error || "镜像已写入且完整回读一致；复位后的重新加载复核未通过。"
+        ? "复位后未能确认设备已加载新内容，请重新读取设备。"
         : payload.result.words_written === 0 ? "烧录校验已完成。"
         : autoResetEsc ? "烧录、完整回读和校验已完成。" : "烧录与完整回读校验已完成；未复位 ESC。";
       setResult({ severity: reloadFailed ? "warning" : "success", text });
       setProgress({ operation: "eeprom-flash", stage: reloadFailed ? "烧录完成，重新加载复核未通过" : "烧录并校验完成", completed: 100, total: 100, percent: 100, detail: text, tone: reloadFailed ? "info" : "success", cancellable: false });
     } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
+      const text = error instanceof BridgeRequestError ? error.message : "烧录未完成，请重新读取设备确认当前内容。";
       const cancelled = error instanceof BridgeRequestError && error.code === "CANCELLED";
       setResult({ severity: cancelled ? "info" : "error", text });
       setProgress({ operation: "eeprom-flash", stage: cancelled ? "已取消" : "烧录失败", completed: 100, total: 100, percent: 100, detail: text, tone: cancelled ? "info" : "error", cancellable: false });
@@ -352,8 +352,8 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   const openXmlLocation = async (path: string) => {
     try {
       await revealPath(path);
-    } catch (error) {
-      setResult({ severity: "error", text: error instanceof Error ? error.message : String(error) });
+    } catch (_error) {
+      setResult({ severity: "error", text: "无法打开 XML 文件位置，请检查文件是否仍存在。" });
     }
   };
 
@@ -436,9 +436,9 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
               </Box>
               <ConfigSummary title="实际 EEPROM ConfigData" configData={header?.config_data ?? ""} placeholder={headerError ? "读取失败" : "读取中…"} subtle />
             </Box>
-            {headerError ? <Alert severity="warning" sx={{ mt: 1 }}>{headerError}。仍可尝试烧录。</Alert>
+            {headerError ? <Alert severity="warning" sx={{ mt: 1 }}>暂时无法读取设备当前配置，仍可尝试烧录。</Alert>
               : header?.sii_status === "blank" ? <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>EEPROM 未烧录，可直接烧录。</Typography>
-                : header?.sii_error && <Alert severity="warning" sx={{ mt: 1 }}>{header.sii_error}。仍可尝试烧录。</Alert>}
+                : header?.sii_error && <Alert severity="warning" sx={{ mt: 1 }}>设备信息未能完整读取或解析，仍可尝试烧录。</Alert>}
           </Box>
           {!esi ? <Box sx={{ minHeight: 280, display: "grid", placeItems: "center", textAlign: "center", color: "text.secondary" }}><Stack alignItems="center" spacing={1}><MemoryRounded sx={{ fontSize: 48, opacity: 0.24 }} /><Typography fontWeight={750}>从左侧选择烧录 XML</Typography><Typography variant="body2">选择后可查看并临时修改目标 ConfigData；双击 XML 可打开文件位置</Typography>{loading && <CircularProgress size={22} />}</Stack></Box> : <Stack spacing={1.75}>
             <Box sx={{ p: 1.45, border: 1, borderLeft: 4, borderColor: "primary.light", borderLeftColor: "primary.main", borderRadius: 1.5, bgcolor: "#F5F8FF" }}>

@@ -38,6 +38,14 @@ DISCOVERY_FPRD_TIMEOUT_US = 2_000
 logger = logging.getLogger(__name__)
 
 
+class AlControlWriteError(CommunicationError):
+    """The master could not confirm the AL Control write."""
+
+
+class StateTransitionTimeoutError(CommunicationError):
+    """The requested AL state was not reached before the transition deadline."""
+
+
 def _decode_adapter_description(value: object) -> str:
     if isinstance(value, bytes):
         return decode_native_text(value)
@@ -634,7 +642,7 @@ class PysoemBackend:
                         pending = "；PDI 尚未读取前一次 AL Control（0x0220[0]=1）"
                 except CommunicationError:
                     pass
-            raise CommunicationError(f"从站 {position} AL Control 写入失败：{exc}{pending}") from exc
+            raise AlControlWriteError(f"从站 {position} AL Control 写入失败：{exc}{pending}") from exc
         deadline = time.monotonic() + timeout_us / 1_000_000
         while True:
             raw = self._read_passive_register(position, 0x0130, 2)
@@ -642,7 +650,7 @@ class PysoemBackend:
             if raw == int(expected) and ((esc_config & 1) == 0 or code == 0):
                 return
             if time.monotonic() >= deadline:
-                raise CommunicationError(
+                raise StateTransitionTimeoutError(
                     f"从站 {position} 请求 {expected.label} 失败："
                     f"AL status 0x{raw:04X}, AL status code 0x{code:04X}, "
                     f"ESC configuration 0x{esc_config:02X} (device emulation {esc_config & 1})"
@@ -759,7 +767,7 @@ class PysoemBackend:
             slave.state = (raw & 0x0F) | 0x10
             wkc = slave.write_state()
             if wkc is not None and wkc <= 0:
-                raise CommunicationError(f"AL Control 错误确认写入失败，WKC={wkc}：{original_error}")
+                raise AlControlWriteError(f"AL Control 错误确认写入失败，WKC={wkc}：{original_error}")
             deadline = time.monotonic() + timeout_us / 1_000_000
             while True:
                 actual = self._check_state(slave, raw & 0x0F, min(1000, timeout_us))
@@ -777,7 +785,7 @@ class PysoemBackend:
         target.state = int(state)
         wkc = target.write_state()
         if wkc is not None and wkc <= 0:
-            raise CommunicationError(f"请求 {state.label} 时 AL Control 写入失败，WKC={wkc}")
+            raise AlControlWriteError(f"请求 {state.label} 时 AL Control 写入失败，WKC={wkc}")
         if state is EtherCatState.OP and process_data:
             deadline = time.monotonic() + timeout_us / 1_000_000
             while True:
@@ -794,8 +802,10 @@ class PysoemBackend:
                         )
                     break
         else:
+            deadline = time.monotonic() + timeout_us / 1_000_000
             actual = self._check_state(target, int(state), timeout_us)
         if actual != int(state):
+            timed_out = time.monotonic() >= deadline
             error = self._state_transition_error(target, state, actual, timeout_us)
             # Keep the original transition failure if a follow-up state read
             # is unavailable. Diagnostics must never replace the root error.
@@ -803,6 +813,8 @@ class PysoemBackend:
                 self.read_states()
             except Exception:
                 pass
+            if timed_out:
+                raise StateTransitionTimeoutError(str(error)) from error
             raise error
 
     def _check_state(self, target: Any, expected: int, timeout_us: int) -> int:

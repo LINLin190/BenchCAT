@@ -15,6 +15,7 @@ export interface ManagedOperation {
 export interface BridgeFailure {
   code: string;
   message: string;
+  user_message?: string;
   operation_result?: "failed" | "unknown";
   session_invalidated?: boolean;
   method?: string;
@@ -50,11 +51,11 @@ export const operationStore = {
     if (generationChanged) {
       this.invalidate(
         "GENERATION_CHANGED",
-        "EtherCAT 通信核心已重建",
+        "通信服务已重新启动，请重新连接设备",
         (op) => op.id !== sourceOperationId,
       );
     } else if (sessionChanged) {
-      this.invalidate("SESSION_CHANGED", "EtherCAT 会话已变化", (op) =>
+      this.invalidate("SESSION_CHANGED", "连接状态已变化，请刷新从站状态", (op) =>
         op.id !== sourceOperationId
         && op.sessionId !== undefined
         && op.sessionId !== value
@@ -62,13 +63,13 @@ export const operationStore = {
       );
     }
   },
-  nextPage() { pageGeneration += 1; this.invalidate("PAGE_CHANGED", "页面上下文已变化", (op) => op.pageGeneration < pageGeneration); },
+  nextPage() { pageGeneration += 1; this.invalidate("PAGE_CHANGED", "页面已切换，当前操作已停止", (op) => op.pageGeneration < pageGeneration); },
   begin(method: string) {
     const spec = specs[method];
     if (!spec) throw new Error(`未注册前端命令：${method}`);
     // The updater still needs to stop communication and disconnect safely.
     if (updateInProgress && spec.lane === "hardware" && !["stop_cycle", "disconnect"].includes(method)) {
-      throw new Error("正在更新 BenchCAT，设备操作暂不可用");
+      throw new Error("软件正在更新，设备操作暂不可用");
     }
     const id = `ui-${Date.now()}-${++sequence}`;
     if (operations.size > 200) operations = new Map([...operations].filter(([, op]) => !terminal.has(op.phase)).slice(-100));
@@ -95,7 +96,7 @@ export const operationStore = {
 export function normalizeBridgeFailure(error: unknown): BridgeFailure {
   if (error && typeof error === "object" && "message" in error) {
     const value = error as Partial<BridgeFailure>;
-    return { code: value.code ?? "UNKNOWN", message: String(value.message), operation_result: value.operation_result, session_invalidated: value.session_invalidated, method: value.method };
+    return { code: value.code ?? "UNKNOWN", message: String(value.message), user_message: value.user_message, operation_result: value.operation_result, session_invalidated: value.session_invalidated, method: value.method };
   }
   return { code: "UNKNOWN", message: error instanceof Error ? error.message : String(error) };
 }

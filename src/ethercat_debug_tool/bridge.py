@@ -4,6 +4,7 @@ import dataclasses
 import hashlib
 import itertools
 import json
+import logging
 import os
 import queue
 import re
@@ -19,9 +20,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .backends.base import CommunicationError, DEFAULT_STATE_TRANSITION_TIMEOUT_US
+from .al_status import al_status_info
+from .backends.base import DEFAULT_STATE_TRANSITION_TIMEOUT_US, CommunicationError
 from .backends.mock import MockBackend
-from .backends.pysoem_backend import PysoemBackend
+from .backends.pysoem_backend import AlControlWriteError, PysoemBackend, StateTransitionTimeoutError
 from .command_registry import CommandSpec, load_command_registry
 from .esc_profiles.profiles import ProfileRegistry
 from .esi import EsiParser
@@ -41,6 +43,8 @@ MAX_STORED_ESI_DOCUMENTS = 64
 MAX_STORED_SII_TARGETS = 64
 MAX_STORED_WRITE_PLANS = 64
 PROCESS_DATA_UI_INTERVAL_S = 0.1
+MANUAL_STATE_REQUEST_TIMEOUT_US = 2_000_000
+logger = logging.getLogger(__name__)
 
 
 def _default_esi_library_path() -> Path | None:
@@ -208,6 +212,62 @@ class EepromExclusiveError(RuntimeError):
     """Raised when a hardware command is rejected during an EEPROM write/restore."""
 
 
+class StateRequestDisplayError(CommunicationError):
+    """A state request failure phrased for the ordinary user notification."""
+
+
+_OPERATION_LABELS = {
+    "enumerate_adapters": "检测网卡",
+    "auto_scan": "自动扫描",
+    "connect": "连接网卡",
+    "disconnect": "断开网卡",
+    "scan": "扫描从站",
+    "read_states": "刷新从站状态",
+    "request_state": "状态请求",
+    "clear_error": "清除状态错误",
+    "reconfig": "重配置从站",
+    "recover": "恢复从站",
+    "start_cycle": "启动周期通信",
+    "stop_cycle": "停止周期通信",
+    "set_output": "写入输出数据",
+    "object_dictionary": "读取对象字典",
+    "pdo_mapping": "读取 PDO 映射",
+    "switch_mode": "切换模式",
+}
+
+
+def _user_error_message(exc: BaseException, code: str, method: str, mutating: bool) -> str:
+    if isinstance(exc, StateRequestDisplayError):
+        return str(exc)
+    if code == "CANCELLED":
+        return "操作已取消"
+    if code == "EEPROM_BUSY":
+        return "EEPROM 操作正在进行，请等待完成后再操作"
+    if code == "SESSION_CHANGED":
+        return "连接状态已变化，请刷新从站状态后再操作"
+    if code == "QUEUE_FULL":
+        return "当前操作较多，请稍后再试"
+    if code == "WORKER_STALLED":
+        return "通信服务无响应，请重新启动软件后再连接设备"
+    action = _OPERATION_LABELS.get(method)
+    if action is None:
+        if method.startswith("eeprom_"):
+            action = "EEPROM 操作"
+        elif method.startswith("register_"):
+            action = "寄存器操作"
+        elif method.startswith("sdo_"):
+            action = "SDO 操作"
+        elif method.startswith(("esi_", "sii_")):
+            action = "设备描述操作"
+        else:
+            action = "当前操作"
+    if mutating and code == "COMMUNICATION":
+        return f"无法确认{action}的结果。请先刷新设备状态，确认结果后再操作。"
+    if code == "VALIDATION":
+        return f"{action}未完成。请检查输入和当前操作条件。"
+    return f"{action}未完成。请检查当前连接和操作条件；如果反复出现，请记录操作步骤并反馈。"
+
+
 def _structured_error(
     exc: BaseException,
     *,
@@ -235,6 +295,7 @@ def _structured_error(
     error = {
         "code": code,
         "message": str(exc),
+        "user_message": _user_error_message(exc, code, method, mutating),
         "category": (
             "validation" if code == "VALIDATION" else "busy" if code == "EEPROM_BUSY" else "transport"
         ),
@@ -823,46 +884,50 @@ class BridgeRuntime:
                     ):
                         return slaves
                 self._dispatch_serial("stop_cycle", {})
-            if state is EtherCatState.OP:
-                try:
-                    slaves = list(
-                        self._submit(
-                            "request_state",
-                            position,
-                            state,
-                            DEFAULT_STATE_TRANSITION_TIMEOUT_US,
-                            timeout=60,
-                            process_data=False,
-                        )
-                    )
-                except BaseException as exc:
-                    try:
-                        current = list(self._submit("read_states"))
-                    except BaseException:
-                        self.master_state.state_read_failed(str(exc))
-                    else:
-                        if self.master_state.states_updated(current):
-                            self.write_plans.clear()
-                    self._publish_snapshot()
-                    raise
-                self.master_state.states_updated(slaves)
-                self._publish_snapshot()
-                return slaves
+            starting_states = {slave.position: slave.state for slave in self.slaves}
+            current: list[SlaveInfo] | None = None
             try:
                 slaves = list(self._submit(
-                    "request_state", position, state, DEFAULT_STATE_TRANSITION_TIMEOUT_US,
+                    "request_state", position, state, MANUAL_STATE_REQUEST_TIMEOUT_US,
                     timeout=60, process_data=False,
                 ))
             except BaseException as exc:
                 try:
                     current = list(self._submit("read_states"))
                 except BaseException:
-                    self.master_state.state_read_failed(str(exc))
+                    self.master_state.state_read_failed("无法读取从站状态")
                 else:
                     if self.master_state.states_updated(current):
                         self.write_plans.clear()
                 self._publish_snapshot()
-                raise
+                if current is not None:
+                    failed = [
+                        slave for slave in current
+                        if (position is None or slave.position == position)
+                        and slave.state_error is None
+                        and (slave.state is not state or (slave.raw_state or 0) & 0x10 or slave.al_status)
+                    ]
+                    if failed:
+                        write_unconfirmed = isinstance(exc, AlControlWriteError)
+                        timed_out = isinstance(exc, StateTransitionTimeoutError)
+
+                        def describe(slave: SlaveInfo) -> str:
+                            source = starting_states.get(slave.position, slave.state)
+                            transition = f"{source.label}→{state.label}"
+                            if write_unconfirmed:
+                                outcome = f"从站 {slave.position}：{transition} 状态请求未得到确认"
+                            elif timed_out:
+                                outcome = f"从站 {slave.position}：等待 {transition}；转换 {MANUAL_STATE_REQUEST_TIMEOUT_US // 1000} ms 后超时"
+                            else:
+                                outcome = f"从站 {slave.position}：{transition} 未完成，当前为 {slave.state.label}"
+                            if slave.al_status:
+                                return f"{outcome}；AL 错误码 0x{slave.al_status:04X}（{al_status_info(slave.al_status).name}）"
+                            return outcome
+
+                        raise StateRequestDisplayError("；".join(describe(slave) for slave in failed)) from exc
+                if current is None:
+                    raise StateRequestDisplayError(f"无法读取从站状态，不能确认是否进入 {state.label}") from exc
+                raise StateRequestDisplayError(f"无法确认从站是否进入 {state.label}，请刷新从站状态") from exc
             self.master_state.states_updated(slaves)
             self._publish_snapshot()
             return slaves
@@ -1452,19 +1517,22 @@ def _handle_request(
             )
         except BaseException as exc:
             snapshot = runtime.snapshot()
+            error = _structured_error(
+                exc,
+                request_id=request_id,
+                method=method,
+                spec=spec,
+                session_id=snapshot["session_id"],
+                snapshot=snapshot,
+            )
+            if isinstance(exc, StateRequestDisplayError) or error["user_message"] != error["message"]:
+                logger.warning("Bridge request %s (%s) failed", request_id, method, exc_info=exc)
             writer.send(
                 {
                     "type": "response",
                     "id": request_id,
                     "ok": False,
-                    "error": _structured_error(
-                        exc,
-                        request_id=request_id,
-                        method=method,
-                        spec=spec,
-                        session_id=snapshot["session_id"],
-                        snapshot=snapshot,
-                    ),
+                    "error": error,
                 }
             )
         else:

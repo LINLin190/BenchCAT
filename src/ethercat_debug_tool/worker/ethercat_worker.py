@@ -234,7 +234,7 @@ class EtherCatWorker:
                 self._cycle_period = 0.0
                 self._needs_safe_state = self._backend.connected
             task.future.set_exception(exc)
-            self._events.put(WorkerEvent("error", exc, task.event_session_id))
+            # The command response reports this failure to its caller.
         finally:
             if self._state is WorkerState.BUSY:
                 self._state = WorkerState.READY

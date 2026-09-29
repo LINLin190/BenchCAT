@@ -36,11 +36,11 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
       <CardContent className="ov-card-body">
         <CardHeading title="EEPROM 诊断" />
         {slave.sii_status === "blank" ? <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>EEPROM 未烧录，可读取原始数据或烧录。</Typography>
-          : slave.sii_error && <Alert severity="warning" sx={{ mb: 1 }}>{slave.sii_error}。仍可读取原始数据或重新烧录。</Alert>}
+          : slave.sii_error && <Alert severity="warning" sx={{ mb: 1 }}>EEPROM 设备信息未能完整读取或解析，仍可读取原始数据。</Alert>}
         <div className="ov-eeprom-pair">
           <section>
             <Typography className="ov-section-title">配置区 · 前 16 字节</Typography>
-            {!prefix ? <Alert severity={slave.eeprom_prefix_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_prefix_error || "无可用 EEPROM 数据"}</Alert> : <>
+            {!prefix ? <Alert severity={slave.eeprom_prefix_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_prefix_error ? "暂时无法读取 EEPROM 配置信息" : "无可用 EEPROM 数据"}</Alert> : <>
               <Box className="ov-raw-row" sx={{ mt: 0.75 }}>
                 <Typography variant="caption" color="text.secondary">0000:</Typography>
                 <Typography variant="body2" className="mono ov-hexline">{prefix.raw}</Typography>
@@ -64,7 +64,7 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
           </section>
           <section>
             <Typography className="ov-section-title">控制 / 状态 · 0x0502–0x0503</Typography>
-            {!status ? <Alert severity={slave.eeprom_status_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_status_error || "无可用寄存器数据"}</Alert> : <>
+            {!status ? <Alert severity={slave.eeprom_status_error ? "warning" : "info"} sx={{ mt: 0.75 }}>{slave.eeprom_status_error ? "暂时无法读取 EEPROM 状态" : "无可用寄存器数据"}</Alert> : <>
               <Box className="ov-raw-row" sx={{ mt: 0.75 }}>
                 <Typography variant="caption" color="text.secondary">Value</Typography>
                 <Typography variant="body2" className="mono ov-strong">{status.raw}</Typography>

@@ -44,7 +44,7 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
       </Box>
       {modelNote}
       {!decoded ? <Alert severity={slave.esc_hardware_error ? "warning" : "info"} sx={{ mt: 1 }}>
-          {slave.esc_hardware_error ? `读取失败：${slave.esc_hardware_error}` : "当前扫描无可用数据"}
+          {slave.esc_hardware_error ? "暂时无法读取硬件信息，可重新扫描。" : "当前扫描无可用数据"}
         </Alert> : <>
         <Stack direction="row" gap={1.5} alignItems="baseline" sx={{ mt: 1, flexWrap: "wrap" }}>
           <Typography variant="body2" color="text.secondary" className="mono">0x0E00–0x0E07</Typography>

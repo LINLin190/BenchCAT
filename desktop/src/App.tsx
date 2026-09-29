@@ -147,16 +147,8 @@ function isEepromOperation(operation?: string): boolean {
   return Boolean(operation?.startsWith("eeprom"));
 }
 
-function cycleFaultMessage(data: unknown): string {
-  if (typeof data === "string") return `周期通信故障：${data}`;
-  if (data && typeof data === "object") {
-    const value = data as Partial<Snapshot> & { message?: unknown };
-    if (typeof value.message === "string") return `周期通信故障：${value.message}`;
-    if (typeof value.actual_wkc === "number" || typeof value.expected_wkc === "number") {
-      return `周期通信故障：WKC ${value.actual_wkc ?? "—"}/${value.expected_wkc ?? "—"}，连续错误 ${value.consecutive_errors ?? "—"}，超时 ${value.timeout_count ?? "—"}`;
-    }
-  }
-  return "周期通信发生未知故障，请停止通信并刷新从站状态。";
+function cycleFaultMessage(_data: unknown): string {
+  return "周期通信已中断，无法继续交换数据。请刷新从站状态后再操作。";
 }
 
 function defaultRegisterProfile(chipModel: string | undefined): string {
@@ -258,7 +250,7 @@ function UpdateDialog({
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm" aria-labelledby="update-dialog-title">
       <DialogTitle id="update-dialog-title" sx={{ pr: 7 }}>
-        {updating ? "正在更新 BenchCAT" : state === "error" ? "在线更新未完成" : state === "checking" ? "正在检查更新" : "发现新版本"}
+        {updating ? "正在更新软件" : state === "error" ? "在线更新未完成" : state === "checking" ? "正在检查更新" : "发现新版本"}
         <IconButton aria-label={updating ? "后台运行" : "关闭更新弹窗"} onClick={onClose} sx={{ position: "absolute", right: 12, top: 12 }}><CloseRounded /></IconButton>
       </DialogTitle>
       <DialogContent dividers>
@@ -363,7 +355,7 @@ function OverviewPage({ slave, status, busy, stateRequestBusy, run, refresh, reg
       {!slave && <PageTitle title="设备概览" subtitle="总线状态与设备信息" actions={<Button disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refresh)}>刷新状态</Button>} />}
       {!slave ? <EmptyState text="连接并扫描后，在左侧选择一个从站" /> : (
         <Stack spacing={1.25} className="overview-cards">
-          {Boolean(slave.scan_errors?.length) && <Alert severity="warning">扫描信息不完整：{slave.scan_errors!.join("；")}</Alert>}
+          {Boolean(slave.scan_errors?.length) && <Alert severity="warning">部分设备信息未能读取，可重新扫描。</Alert>}
           <Box className="overview-grid">
             <Card sx={cardSx} className="ov-runtime"><CardContent className="ov-card-body">
               <CardHeading title="状态" />
@@ -537,7 +529,7 @@ function RegistersPage({ slave, run, registerProfile, deviceOperationsBlocked }:
     setCatalog([]); setCatalogError("");
     bridgeRequest<RegisterDefinition[]>("register_catalog", { position: slave.position, profile: registerProfile })
       .then((value) => { if (active) setCatalog(value); })
-      .catch((error) => { if (active) setCatalogError(error instanceof Error ? error.message : String(error)); });
+      .catch((error) => { if (active) setCatalogError(error instanceof BridgeRequestError ? error.message : "无法加载寄存器说明，请稍后重试。"); });
     return () => { active = false; };
   }, [identityKey, registerProfile]);
   useEffect(() => {
@@ -609,7 +601,7 @@ function RegistersPage({ slave, run, registerProfile, deviceOperationsBlocked }:
           setWatchError("");
         }
       } catch (error) {
-        if (active) { setWatching(false); setWatchError(error instanceof Error ? error.message : String(error)); }
+        if (active) { setWatching(false); setWatchError(error instanceof BridgeRequestError ? error.message : "无法继续读取寄存器，请刷新设备状态。"); }
       } finally { if (active) timer = window.setTimeout(poll, intervalMs); }
     };
     void poll();
@@ -763,7 +755,7 @@ function RegistersPage({ slave, run, registerProfile, deviceOperationsBlocked }:
         <Button variant="contained" disabled={deviceOperationsBlocked || !writeDataValid || writing} onClick={executeWrite}>{writing ? "写入中…" : "写入"}</Button>
       </DialogActions>
     </Dialog>
-    <Dialog open={resetConfirm} onClose={() => setResetConfirm(false)}><DialogTitle>确认复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">将独占 Worker，以三个连续、独立 FPWR 向 0x0040 写入 52、45、53；从站会短暂掉线。</Alert></DialogContent><DialogActions><Button onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" disabled={deviceOperationsBlocked} onClick={async () => { const value = await run(() => bridgeRequest("register_reset", { position: slave?.position, profile: registerProfile }), "RES 复位序列已发送"); if (value) setResetConfirm(false); }}>确认并发送</Button></DialogActions></Dialog>
+    <Dialog open={resetConfirm} onClose={() => setResetConfirm(false)}><DialogTitle>确认复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">复位会暂时中断与从站的连接，请确认设备当前可以停止通信。</Alert></DialogContent><DialogActions><Button onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" disabled={deviceOperationsBlocked} onClick={async () => { const value = await run(() => bridgeRequest("register_reset", { position: slave?.position, profile: registerProfile }), "复位命令已发送"); if (value) setResetConfirm(false); }}>确认并发送</Button></DialogActions></Dialog>
   </>;
 }
 
@@ -853,7 +845,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
   const configDecoded = decodeConfigData(configData);
   const operationInProgress = isEepromOperation(progress?.operation) && progress!.percent < 100;
   const canFlash = Boolean(slave && target && targetContextRef.current === contextKey && !status.cycle_running && !operationInProgress && !deviceOperationsBlocked);
-  const blockers = [deviceOperationsBlocked && "正在更新 BenchCAT", operationInProgress && "已有 EEPROM 操作正在执行", !target && "需要选择有效 XML", status.cycle_running && "需要停止周期通信"].filter(Boolean) as string[];
+  const blockers = [deviceOperationsBlocked && "软件正在更新", operationInProgress && "已有 EEPROM 操作正在执行", !target && "需要选择有效 XML", status.cycle_running && "需要停止周期通信"].filter(Boolean) as string[];
   useEffect(() => {
     generationRequestRef.current += 1;
     loadRequestRef.current += 1;
@@ -871,7 +863,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
     const value = await run(async () => {
       try { return await bridgeRequest<TargetResult>("sii_generate", { document_id: document.document_id, ordinal: selectedOrdinal, position: slave?.position, ...(normalized ? { config_data: normalized } : {}) }); }
       catch (error) {
-        if (generationRequestRef.current === requestId && contextRef.current === context) setGenerationError(error instanceof Error ? error.message : String(error));
+        if (generationRequestRef.current === requestId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法生成烧录目标，请检查所选 XML。");
         throw error;
       }
     });
@@ -945,21 +937,21 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
       if (flashPayload && typeof flashPayload === "object" && "success" in flashPayload) {
         if (!flashPayload.success) {
           const title = "烧录失败";
-          setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: flashPayload.result.image_verification, tone: "error" });
-          setOperationResult({ title, severity: "error", payload: flashPayload });
+          setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: "写入后的内容与目标不一致，或设备信息未能解析。请重新读取设备确认结果。", tone: "error" });
+          setOperationResult({ title, severity: "error", payload: flashPayload, error: "写入后的内容与目标不一致，或设备信息未能解析。请重新读取设备确认结果。" });
           return value;
         }
         const reloadFailed = flashPayload.result.reload_verified === false;
         const title = reloadFailed ? "镜像校验成功；复位后复核失败" : success;
         setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: reloadFailed ? "EEPROM 镜像已通过校验，但复位后的重新加载复核未通过。" : success, tone: reloadFailed ? "info" : "success" });
-        setOperationResult({ title, severity: reloadFailed ? "warning" : "success", payload: flashPayload, error: flashPayload.result.reload_error ?? undefined });
+        setOperationResult({ title, severity: reloadFailed ? "warning" : "success", payload: flashPayload, error: reloadFailed ? "复位后未能确认设备已加载新内容，请重新读取设备。" : undefined });
       } else {
         setProgress({ operation: "eeprom", stage: success, completed: 100, total: 100, percent: 100, detail: success, tone: "success" });
         setOperationResult({ title: success, severity: "success" });
       }
       return value;
     } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
+      const text = error instanceof BridgeRequestError ? error.message : "EEPROM 操作未完成，请检查文件与当前连接。";
       if (error instanceof BridgeRequestError && error.code === "CANCELLED") {
         setProgress({ operation: "eeprom", stage: "已取消", completed: 100, total: 100, percent: 100, detail: text, tone: "info" });
         setOperationResult({ title: "操作已取消", severity: "info", error: text });
@@ -1013,8 +1005,8 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
         </CardContent></Card>
       </Box>
       <Card sx={cardSx}><CardContent><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(300px, .85fr)", gap: 2, alignItems: "start" }}><Box><Typography variant="h6">读取与恢复</Typography><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.25 }}>完整读取只刷新 Smart/Hex View；备份 BIN 会保存原始数据（空白或损坏 BIN 不能直接恢复）。</Typography><TextField size="small" fullWidth label="读取长度（字节，可选）" value={readLength} disabled={operationInProgress} error={invalidReadLength} helperText={readLengthHint} onChange={(event) => setReadLength(event.target.value)} sx={{ mb: 1.25 }} /><Stack direction="row" gap={0.75} flexWrap="wrap"><Tooltip title={status.cycle_running ? "完整读取前必须停止周期通信" : readLengthRequired ? "请先填写读取长度" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress || invalidReadLength || readLengthRequired} onClick={readFull}>完整读取</Button></span></Tooltip><Tooltip title={status.cycle_running ? "备份前必须停止周期通信" : readLengthRequired ? "请先填写读取长度" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress || invalidReadLength || readLengthRequired} startIcon={<SaveAltRounded />} onClick={backup}>备份 BIN</Button></span></Tooltip><Tooltip title={status.cycle_running ? "恢复前必须停止周期通信" : ""}><span><Button size="small" color="warning" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress} onClick={restore}>从 BIN 恢复</Button></span></Tooltip>{backupPath && <Button size="small" onClick={() => revealPath(backupPath)} startIcon={<FolderOpenRounded />}>打开备份位置</Button>}</Stack></Box><Box sx={{ borderLeft: { sm: 1 }, borderColor: "divider", pl: { sm: 2 } }}><Typography variant="h6">烧录</Typography><Stack direction="row" gap={0.6} flexWrap="wrap" sx={{ my: 1 }}><Chip color={target ? "success" : "default"} label={target ? "目标已生成" : "缺少目标"} /><Chip color={!status.cycle_running ? "success" : "warning"} label={!status.cycle_running ? "周期已停止" : "周期运行中"} /></Stack><Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={flash}>烧录</Button></span></Tooltip>{blockers.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{blockers.join("；")}</Typography>}</Box></Box></CardContent></Card>
-      {readResult && <Card sx={cardSx}><CardContent><Typography variant="h6">最近 EEPROM 读取</Typography><Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.25, mt: 1.25 }}>{[["读取时间", new Date(readResult.read_at).toLocaleString()], ["读取长度", `${readResult.size} B`], ["SII 结构", readResult.sii_valid ? `${readResult.category_count ?? 0} 个 Category` : fullSiiRead ? "无效" : "未解析"], ["差异", readResult.comparison ? `${readResult.comparison.differing_bytes} byte` : "未选择目标"], ["Vendor ID（厂商 ID）", readResult.identity ? hex(readResult.identity.vendor_id, 8) : "—"], ["Product Code（产品代码）", readResult.identity ? hex(readResult.identity.product_code, 8) : "—"], ["Revision（修订版本）", readResult.identity ? hex(readResult.identity.revision, 8) : "—"], ["SHA-256", readResult.sha256]].map(([label, value]) => <Box key={label} minWidth={0}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={label === "SHA-256" || label.includes("Code") ? "mono" : ""} noWrap title={value}>{value}</Typography></Box>)}</Box>{!readResult.sii_valid && fullSiiRead && <Alert severity="warning" sx={{ mt: 1.25 }}>原始 BIN 已完整读取，但 SII 解析失败：{readResult.sii_error}</Alert>}<Accordion disableGutters sx={{ mt: 1.25 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>Hex View（只读）</Typography></AccordionSummary><AccordionDetails><Box component="pre" className="mono data-surface" sx={{ m: 0, p: 1.25, maxHeight: 320, overflow: "auto", fontSize: 12 }}>{formatHexView(readResult.data)}</Box></AccordionDetails></Accordion></CardContent></Card>}
-      {operationResult && <Card sx={cardSx}><CardContent><Alert severity={operationResult.severity}><Typography fontWeight={700}>{operationResult.title}</Typography>{operationResult.error ?? operationResult.payload?.result.image_verification}</Alert>{operationResult.payload && <Accordion disableGutters sx={{ mt: 1.2 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>技术详情</Typography></AccordionSummary><AccordionDetails><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>{[["写入 Word", operationResult.payload.result.words_written], ["完整回读", `${operationResult.payload.result.bytes_read_back} B`], ["差异字节", operationResult.payload.result.comparison.differing_bytes], ["目标 SHA-256", operationResult.payload.result.comparison.target_sha256], ["回读 SHA-256", operationResult.payload.result.comparison.readback_sha256], ["SII 结构", operationResult.payload.result.sii_valid ? "通过" : "失败"], ["XML 语义", operationResult.payload.result.semantic_valid ? "通过" : "失败"], ["RES 序列", operationResult.payload.result.reset_sequence == null ? "未执行" : operationResult.payload.result.reset_sequence.every(Boolean) ? "三帧成功" : "未完成"], ["重新发现", operationResult.payload.result.rediscovered == null ? "未执行" : operationResult.payload.result.rediscovered ? "成功" : "失败"], ["重新加载复核", operationResult.payload.result.reload_verified == null ? "未执行" : operationResult.payload.result.reload_verified ? "成功" : "失败"]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("SHA") ? "mono" : ""} noWrap title={String(value)}>{String(value)}</Typography></Box>)}</Box></AccordionDetails></Accordion>}</CardContent></Card>}
+      {readResult && <Card sx={cardSx}><CardContent><Typography variant="h6">最近 EEPROM 读取</Typography><Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.25, mt: 1.25 }}>{[["读取时间", new Date(readResult.read_at).toLocaleString()], ["读取长度", `${readResult.size} B`], ["SII 结构", readResult.sii_valid ? `${readResult.category_count ?? 0} 个 Category` : fullSiiRead ? "无效" : "未解析"], ["差异", readResult.comparison ? `${readResult.comparison.differing_bytes} byte` : "未选择目标"], ["Vendor ID（厂商 ID）", readResult.identity ? hex(readResult.identity.vendor_id, 8) : "—"], ["Product Code（产品代码）", readResult.identity ? hex(readResult.identity.product_code, 8) : "—"], ["Revision（修订版本）", readResult.identity ? hex(readResult.identity.revision, 8) : "—"], ["SHA-256", readResult.sha256]].map(([label, value]) => <Box key={label} minWidth={0}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={label === "SHA-256" || label.includes("Code") ? "mono" : ""} noWrap title={value}>{value}</Typography></Box>)}</Box>{!readResult.sii_valid && fullSiiRead && <Alert severity="warning" sx={{ mt: 1.25 }}>原始数据已读取，但设备信息未能解析。可在下方查看原始内容。</Alert>}<Accordion disableGutters sx={{ mt: 1.25 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>Hex View（只读）</Typography></AccordionSummary><AccordionDetails><Box component="pre" className="mono data-surface" sx={{ m: 0, p: 1.25, maxHeight: 320, overflow: "auto", fontSize: 12 }}>{formatHexView(readResult.data)}</Box></AccordionDetails></Accordion></CardContent></Card>}
+      {operationResult && <Card sx={cardSx}><CardContent><Alert severity={operationResult.severity}><Typography fontWeight={700}>{operationResult.title}</Typography>{operationResult.error}</Alert>{operationResult.payload && <Accordion disableGutters sx={{ mt: 1.2 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>技术详情</Typography></AccordionSummary><AccordionDetails><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>{[["写入 Word", operationResult.payload.result.words_written], ["完整回读", `${operationResult.payload.result.bytes_read_back} B`], ["差异字节", operationResult.payload.result.comparison.differing_bytes], ["目标 SHA-256", operationResult.payload.result.comparison.target_sha256], ["回读 SHA-256", operationResult.payload.result.comparison.readback_sha256], ["SII 结构", operationResult.payload.result.sii_valid ? "通过" : "失败"], ["XML 语义", operationResult.payload.result.semantic_valid ? "通过" : "失败"], ["RES 序列", operationResult.payload.result.reset_sequence == null ? "未执行" : operationResult.payload.result.reset_sequence.every(Boolean) ? "三帧成功" : "未完成"], ["重新发现", operationResult.payload.result.rediscovered == null ? "未执行" : operationResult.payload.result.rediscovered ? "成功" : "失败"], ["重新加载复核", operationResult.payload.result.reload_verified == null ? "未执行" : operationResult.payload.result.reload_verified ? "成功" : "失败"]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("SHA") ? "mono" : ""} noWrap title={String(value)}>{String(value)}</Typography></Box>)}</Box></AccordionDetails></Accordion>}</CardContent></Card>}
     </Stack>}</>;
 }
 
@@ -1030,7 +1022,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [bridgeAvailable, setBridgeAvailable] = useState(true);
   const [bridgeExit, setBridgeExit] = useState<BridgeExitInfo>();
-  const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" }>();
+  const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" | "warning" }>();
   const [settings, setSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState(0);
   const [updateState, setUpdateState] = useState<UpdateState>("idle");
@@ -1075,7 +1067,7 @@ export default function App() {
     : hardwareBusy || stateRequestBusy ? "设备操作进行中，完成后即可更新。" : "";
   const busState = minimumBusState(status.slaves);
   const busStateBlockedReason = !bridgeAvailable
-    ? "通信核心不可用"
+    ? "通信服务暂不可用"
     : !status.connected
       ? "请先连接 EtherCAT 网卡"
       : !status.slaves.length
@@ -1119,7 +1111,7 @@ export default function App() {
       if (success) setMessage({ text: success, severity: "success" });
       return result;
     } catch (error) {
-      const text = error instanceof Error ? error.message : String(error);
+      const text = error instanceof BridgeRequestError ? error.message : "操作未完成，请检查当前连接和操作条件。";
       const cancelled = error instanceof BridgeRequestError && error.code === "CANCELLED";
       setMessage({ text: cancelled ? `已取消：${text}` : text, severity: cancelled ? "info" : "error" });
       if (cancelled) return undefined;
@@ -1161,19 +1153,19 @@ export default function App() {
     }
 
     if (!result.adapters.length) {
-      setMessage({ text: "未枚举到网卡：pySOEM 没有返回可用适配器。请检查 Npcap、WinPcap 兼容模式和网卡驱动。", severity: "error" });
+      setMessage({ text: "未找到可用网卡。请确认网卡已启用并重新扫描。", severity: "error" });
       return;
     }
     const failed = result.attempts.filter((attempt) => attempt.error);
     const openedWithoutSlaves = result.attempts.filter((attempt) => !attempt.error && attempt.slave_count === 0);
     if (failed.length && failed.length === result.attempts.length) {
-      setMessage({ text: `已枚举到 ${result.adapters.length} 个网卡，但全部扫描失败：${failed[0].error}`, severity: "error" });
+      setMessage({ text: "网卡扫描未完成。请检查网卡连接；如果反复出现，请记录操作步骤并反馈。", severity: "error" });
     } else if (failed.length && openedWithoutSlaves.length) {
-      setMessage({ text: `未扫描到从站；另有网卡扫描失败：${failed[0].error}`, severity: "warning" });
+      setMessage({ text: "未扫描到从站，部分网卡的扫描也未完成。请检查网卡连接后重试。", severity: "warning" });
     } else if (openedWithoutSlaves.length) {
       setMessage({ text: "未扫描到从站", severity: "info" });
     } else {
-      setMessage({ text: `自动扫描未发现从站：已尝试 ${result.attempts.length} 个网卡。请检查 Npcap 权限、链路和从站供电。`, severity: "info" });
+      setMessage({ text: "自动扫描未发现从站。请确认设备已连接并通电，再重新扫描。", severity: "info" });
     }
   }, [run]);
 
@@ -1215,7 +1207,7 @@ export default function App() {
           setBridgeAvailable(false);
           setSelectedPosition(undefined);
         }
-        setMessage({ text, severity: "error" });
+        setMessage({ text: error instanceof BridgeRequestError ? text : "暂时无法读取设备状态，请稍后重试。", severity: "error" });
       } finally {
         bootstrapInFlight = false;
         if (active && bootstrapPending) {
@@ -1228,16 +1220,15 @@ export default function App() {
       if (["ready", "host_ready"].includes(event.kind)) {
         setBridgeAvailable(true);
         setBridgeExit(undefined);
-        setMessage((current) => current?.text.includes("通信核心") ? undefined : current);
+        setMessage((current) => current?.text.includes("通信服务") ? undefined : current);
         const generation = event.host_generation
           ?? (event.data as { host_generation?: number } | undefined)?.host_generation;
         if (generation !== undefined && generation !== bootstrappedGeneration) bootstrappedGeneration = undefined;
         void bootstrap();
       }
       if (event.kind === "host_restart_failed") {
-        const data = event.data as { message?: string };
         setBridgeAvailable(false);
-        setMessage({ text: `通信核心启动失败：${data.message ?? "未知错误"}；监督器将在后台重试。`, severity: "error" });
+        setMessage({ text: "通信服务启动失败，软件正在尝试恢复。", severity: "error" });
       }
       if (event.kind === "heartbeat") {
         // Heartbeat is telemetry only. Command responses and bus_snapshot events
@@ -1245,14 +1236,14 @@ export default function App() {
       }
       if (event.kind === "cycle_fault") setMessage({ text: cycleFaultMessage(event.data), severity: "error" });
       if (event.kind === "worker_fatal") {
-        const text = typeof event.data === "string" ? event.data : JSON.stringify(event.data);
+        const text = "通信服务已停止，请重新启动软件后连接设备。";
         setBridgeAvailable(false);
         operationStore.invalidate("WORKER_FATAL", text);
         setSelectedPosition(undefined);
         setSnapshot(undefined);
         setRegisterProfileOverrides({});
-        setProgress((previous) => previous && previous.percent < 100 ? { ...previous, completed: previous.total, percent: 100, stage: "通信 Worker 已停止", detail: text, tone: "error", cancellable: false } : previous);
-        setMessage({ text: `EtherCAT Worker 无法启动或已停止：${text}`, severity: "error" });
+        setProgress((previous) => previous && previous.percent < 100 ? { ...previous, completed: previous.total, percent: 100, stage: "通信服务已停止", detail: text, tone: "error", cancellable: false } : previous);
+        setMessage({ text, severity: "error" });
       }
       if (event.kind === "process_data") setSnapshot(event.data as Snapshot);
       if (event.kind === "scan_discovered") {
@@ -1291,27 +1282,26 @@ export default function App() {
           return { ...next, stage: labels[next.stage] ?? next.stage, percent: Math.max(previous?.percent ?? 0, calculated), tone: "info" };
         });
       }
-      if (event.kind === "error") setMessage({ text: event.data instanceof Error ? event.data.message : typeof event.data === "string" ? event.data : JSON.stringify(event.data), severity: "error" });
+      if (event.kind === "error") setMessage({ text: "后台操作遇到问题。请刷新状态；如果反复出现，请记录操作步骤并反馈。", severity: "error" });
     }).then((value) => { if (active) unlisten = value; else value(); });
     const exitReady = onBridgeExited((info) => {
       if (!active) return;
       setBridgeAvailable(false);
       setBridgeExit(info);
-      operationStore.invalidate("PROCESS_EXITED", info.message);
+      operationStore.invalidate("PROCESS_EXITED", "通信服务已退出");
       setProgress((previous) => previous && previous.percent < 100 ? {
         ...previous,
         completed: previous.total,
         percent: 100,
-        stage: "通信核心已退出",
-        detail: info.last_method ? `${info.message}；最后操作：${info.last_method}` : info.message,
+        stage: "通信服务已退出",
+        detail: "通信服务已退出，写入结果可能需要重新确认。",
         tone: "error",
         cancellable: false,
       } : previous);
       setSelectedPosition(undefined);
       setSnapshot(undefined);
       setRegisterProfileOverrides({});
-      const detail = info.stderr_tail?.trim().split(/\r?\n/).at(-1);
-      setMessage({ text: `${info.message}${detail ? `：${detail}` : ""}。通信核心将以未连接状态重建；写操作结果未知时请先重新读取设备。`, severity: "error" });
+      setMessage({ text: "通信服务已退出，软件将尝试恢复。重新连接后请先读取设备状态，确认此前写入的结果。", severity: "error" });
     }).then((value) => { if (active) unlistenExit = value; else value(); });
     Promise.all([eventReady, exitReady]).then(() => { if (active) bootstrap(); });
     return () => { active = false; unlisten?.(); unlistenExit?.(); };
@@ -1345,7 +1335,7 @@ export default function App() {
         if (!ignored && autoCheckUpdatesRef.current) {
           setPendingUpdateReminder(true);
         } else if (!ignored) {
-          setMessage({ text: `发现 BenchCAT v${update.version} 更新，可在“关于”页面查看。`, severity: "info" });
+          setMessage({ text: `发现 v${update.version} 更新，可在“关于”页面查看。`, severity: "info" });
         }
       } else {
         setUpdateDialogOpen(true);
@@ -1457,8 +1447,8 @@ export default function App() {
   };
 
   const visit = (url: string) => {
-    openExternal(url).catch((error) => setMessage({
-      text: error instanceof Error ? error.message : String(error),
+    openExternal(url).catch((_error) => setMessage({
+      text: "无法打开链接，请稍后重试。",
       severity: "error",
     }));
   };
@@ -1512,7 +1502,7 @@ export default function App() {
                     <DeveloperBoardRounded className="slave-state-icon" data-state={item.state_error ? 0 : item.state} sx={{ fontSize: 22 }} />
                     {!item.state_error && Boolean((item.raw_state ?? item.state) & 0x10) && <WarningAmberRounded titleAccess="状态错误" color="error" sx={{ position: "absolute", right: -4, top: -5, fontSize: 13, bgcolor: "background.paper", borderRadius: "50%" }} />}
                   </Box>
-                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${item.state_error || item.state === 0 ? "—" : stateLabel(item.state)}${!item.state_error && (item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · SM Size IN ${item.input_size ?? "—"} B OUT ${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
+                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${item.state_error ? "状态暂不可用" : item.state === 0 ? "—" : stateLabel(item.state)}${!item.state_error && (item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · SM Size IN ${item.input_size ?? "—"} B OUT ${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, py: page === "overview" ? 1.5 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
@@ -1521,7 +1511,7 @@ export default function App() {
             {page !== "overview" && (slave.state_error ? <Chip size="small" label="—" /> : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />)}
             {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refreshStates)}>刷新状态</Button>}
           </Stack>}
-        <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto", p: { xs: 1.5, xl: 2 } }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto" }}>{bridgeExit && <Alert severity="error" action={bridgeExit.log_path ? <Button color="inherit" size="small" onClick={() => revealPath(bridgeExit.log_path!)}>打开日志</Button> : undefined} sx={{ mb: 1.25 }}><Typography fontWeight={700}>通信核心已退出</Typography><Typography variant="body2">{bridgeExit.message}</Typography>{bridgeExit.log_path && <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>日志：{bridgeExit.log_path}</Typography>}</Alert>}{content}</Box></Box>
+        <Box component="main" sx={{ flex: 1, minWidth: 0, overflow: "auto", p: { xs: 1.5, xl: 2 } }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto" }}>{bridgeExit && <Alert severity="error" action={bridgeExit.log_path ? <Button color="inherit" size="small" onClick={() => revealPath(bridgeExit.log_path!)}>打开日志</Button> : undefined} sx={{ mb: 1.25 }}><Typography fontWeight={700}>通信服务已退出</Typography><Typography variant="body2">软件将尝试恢复连接，请重新读取设备状态后再操作。</Typography>{bridgeExit.log_path && <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>日志：{bridgeExit.log_path}</Typography>}</Alert>}{content}</Box></Box>
         </Box>
       </Box>
     </Box>
@@ -1566,8 +1556,8 @@ export default function App() {
             <Button variant="outlined" startIcon={updateState === "checking" ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={updateState === "checking" || updating} onClick={() => void checkUpdate()}>{updateState === "checking" ? "正在检查…" : "检查更新"}</Button>
           </Stack>
           {updateState === "latest" && <Alert severity="success">当前已是最新版本。</Alert>}
-          {updateState === "error" && updateError && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button>} sx={{ overflowWrap: "anywhere" }}>{UPDATE_ERROR_LABELS[updateError.stage]}：{updateError.message}</Alert>}
-          {availableUpdate && updateState === "available" && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }}>查看更新</Button>}>{ignoredUpdateVersion === availableUpdate.version ? `已忽略 v${availableUpdate.version} 的自动提醒，仍可手动更新。` : `发现 BenchCAT v${availableUpdate.version} 更新。${pendingUpdateReminder ? "设备操作结束后将显示更新弹窗。" : ""}`}</Alert>}
+          {updateState === "error" && updateError && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button>} sx={{ overflowWrap: "anywhere" }}>软件更新未完成，可查看详情或稍后重试。</Alert>}
+          {availableUpdate && updateState === "available" && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }}>查看更新</Button>}>{ignoredUpdateVersion === availableUpdate.version ? `已忽略 v${availableUpdate.version} 的自动提醒，仍可手动更新。` : `发现 v${availableUpdate.version} 更新。${pendingUpdateReminder ? "设备操作结束后将显示更新弹窗。" : ""}`}</Alert>}
           {updating && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>}>{UPDATE_STAGE_LABELS[updateState]}，请保持软件运行。</Alert>}
           <Typography variant="caption" color="text.secondary">Copyright © BenchCAT contributors</Typography>
         </Stack>}

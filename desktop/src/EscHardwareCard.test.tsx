@@ -46,8 +46,8 @@ describe("hardware scan snapshot card", () => {
 
   it("keeps failures and unavailable scan data distinct from zero", () => {
     const html = renderToStaticMarkup(<EscHardwareCard slave={{ ...slave, esc_hardware: null, esc_hardware_error: "timeout" }} profile="LAN9253" />);
-    expect(html).toContain("读取失败");
-    expect(html).toContain("timeout");
+    expect(html).toContain("暂时无法读取硬件信息");
+    expect(html).not.toContain("timeout");
     expect(html).not.toContain("0x0000000000000000");
     expect(html).not.toContain("Product ID：");
   });

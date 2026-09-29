@@ -43,10 +43,12 @@ describe("overview EEPROM card", () => {
 
   it("keeps failures distinct from a zero prefix", () => {
     const html = renderToStaticMarkup(<OverviewEeprom slave={{ ...slave, eeprom_prefix: null, eeprom_prefix_error: "timeout" }} profile="LAN9252" />);
-    expect(html).toContain("timeout");
+    expect(html).toContain("暂时无法读取 EEPROM 配置信息");
+    expect(html).not.toContain("timeout");
     expect(html).not.toContain("0x8D");
     const statusHtml = renderToStaticMarkup(<OverviewEeprom slave={{ ...slave, eeprom_status: null, eeprom_status_error: "busy" }} profile="LAN9252" />);
-    expect(statusHtml).toContain("busy");
+    expect(statusHtml).toContain("暂时无法读取 EEPROM 状态");
+    expect(statusHtml).not.toContain("busy");
     expect(statusHtml).not.toContain("0000 0000 1100 0000");
   });
 

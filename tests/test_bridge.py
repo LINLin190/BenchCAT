@@ -9,9 +9,11 @@ from typing import Any
 
 import pytest
 
+from ethercat_debug_tool.backends.pysoem_backend import AlControlWriteError, StateTransitionTimeoutError
 from ethercat_debug_tool.bridge import (
     BridgeRuntime,
     EepromExclusiveError,
+    StateRequestDisplayError,
     _handle_request,
     _json_value,
     _ordered_adapters,
@@ -507,6 +509,9 @@ def test_mutating_transport_failure_has_unknown_result() -> None:
     )
     assert error["operation_result"] == "unknown"
     assert error["request_id"] == 7
+    assert error["message"] == "native call lost"
+    assert "native call lost" not in error["user_message"]
+    assert "BenchCAT" not in error["user_message"]
 
 
 def test_eeprom_exclusive_error_is_busy_and_not_unknown() -> None:
@@ -798,5 +803,57 @@ def test_overview_state_requests_do_not_start_cycle(monkeypatch):
         assert not runtime.cycle_running
         assert runtime.slaves[0].state is EtherCatState.PRE_OP
         assert not runtime.cycle_running
+    finally:
+        runtime.shutdown()
+
+
+@pytest.mark.parametrize("al_code", [0, 0x0011])
+def test_state_request_failure_reports_al_error_without_raw_transport_detail(monkeypatch, al_code):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        submit = runtime._submit
+
+        def fail_state_request(operation, *args, **kwargs):
+            if operation == "request_state":
+                raise AlControlWriteError("APWR 0x0120 写入失败，WKC=0")
+            if operation == "read_states":
+                return [replace(slave, state=EtherCatState.INIT, raw_state=1, al_status=al_code)
+                        for slave in submit(operation, *args, **kwargs)]
+            return submit(operation, *args, **kwargs)
+
+        monkeypatch.setattr(runtime, "_submit", fail_state_request)
+        with pytest.raises(StateRequestDisplayError) as caught:
+            runtime.dispatch("request_state", {"position": 1, "state": 4})
+        message = str(caught.value)
+        assert "SAFE-OP" in message
+        assert "AL 状态 0x0001" not in message
+        assert "APWR" not in message and "WKC" not in message
+        assert "状态请求未得到确认" in message
+        if al_code:
+            assert "AL 错误码 0x0011" in message
+        else:
+            assert "AL 错误码" not in message
+    finally:
+        runtime.shutdown()
+
+
+def test_state_request_timeout_uses_actual_wait_and_transition(monkeypatch):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        runtime.dispatch("request_state", {"position": 1, "state": int(EtherCatState.INIT)})
+        submit = runtime._submit
+
+        def time_out(operation, *args, **kwargs):
+            if operation == "request_state":
+                assert args[2] == 2_000_000
+                raise StateTransitionTimeoutError("AL status 0x0001, AL status code 0x0000")
+            return submit(operation, *args, **kwargs)
+
+        monkeypatch.setattr(runtime, "_submit", time_out)
+        with pytest.raises(StateRequestDisplayError) as caught:
+            runtime.dispatch("request_state", {"position": 1, "state": int(EtherCatState.PRE_OP)})
+        assert str(caught.value) == "从站 1：等待 INIT→PRE-OP；转换 2000 ms 后超时"
     finally:
         runtime.shutdown()

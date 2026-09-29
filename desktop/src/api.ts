@@ -54,7 +54,7 @@ export class BridgeRequestError extends Error {
   readonly failure: ReturnType<typeof normalizeBridgeFailure>;
 
   constructor(failure: ReturnType<typeof normalizeBridgeFailure>) {
-    super(failure.message);
+    super(failure.user_message ?? (failure.code === "CANCELLED" ? "操作已取消" : "操作未完成，请检查当前连接和操作条件。"));
     this.name = "BridgeRequestError";
     this.code = failure.code;
     this.failure = failure;
