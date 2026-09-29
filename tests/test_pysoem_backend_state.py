@@ -141,6 +141,9 @@ def test_discovery_register_probes_use_a_short_bounded_timeout(monkeypatch) -> N
         (b"\x11", b"\x00\x00", "ET1100", "ET1100_COMPATIBLE"),
         (b"\x00", b"\x52\x92", "LAN9252", "LAN9252_COMPATIBLE"),
         (b"\x00", b"\x53\x92", "LAN9253", "LAN9253_COMPATIBLE"),
+        (b"\xAE", b"\x52\x92", "E252", "LAN9252_COMPATIBLE"),
+        (b"\xAE", b"\x53\x92", "E252", "LAN9252_COMPATIBLE"),
+        (b"\xAE", b"\x52\xE2", "E252", "LAN9252_COMPATIBLE"),
     ],
 )
 def test_discovery_uses_authoritative_esc_identification_registers(

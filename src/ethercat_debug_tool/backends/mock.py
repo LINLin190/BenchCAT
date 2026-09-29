@@ -15,6 +15,7 @@ from ..models import (
     SlaveIdentity,
     SlaveInfo,
 )
+from ..sii.parser import inspect_sii_header
 from .base import CommunicationError, EepromReadback
 
 
@@ -57,7 +58,7 @@ class MockBackend:
         )
         self._slaves = [
             SlaveInfo(
-                i + 1, f"Demo {model}", identity, EtherCatState.PRE_OP, 0, 6, 6, 0x1001 + i, model, family
+                i + 1, f"Demo {model}", identity, EtherCatState.INIT, 0, 6, 6, 0x1001 + i, model, family
             )
             for i, (identity, (model, family)) in enumerate(zip(identities, models, strict=True))
         ]
@@ -127,21 +128,21 @@ class MockBackend:
         self, on_discovered: Callable[[list[SlaveInfo]], None] | None = None
     ) -> list[SlaveInfo]:
         self._check()
-        if on_discovered is not None:
-            on_discovered(list(self._slaves))
+        headers = [inspect_sii_header(bytes(raw[:128])) for raw in self._eeprom]
         self._slaves = [
             replace(info, esc_hardware=bytes(self._registers[i][0x0E00:0x0E08]).hex(" ").upper(),
                     eeprom_status=int.from_bytes(self._registers[i][0x0502:0x0504], "little"),
-                    eeprom_prefix=bytes(self._eeprom[i][:16]).hex(" ").upper())
+                    eeprom_prefix=bytes(self._eeprom[i][:16]).hex(" ").upper(),
+                    identity=SlaveIdentity(*struct.unpack_from("<IIII", self._eeprom[i], 0x10))
+                    if headers[i].identity_valid else SlaveIdentity(0, 0, 0),
+                    sii_status=headers[i].status, sii_error=headers[i].error,
+                    eeprom_capacity=headers[i].capacity, identity_valid=headers[i].identity_valid,
+                    state_error=None)
             for i, info in enumerate(self._slaves)
         ]
-        self._slaves = [
-            replace(info, state=EtherCatState.INIT, raw_state=int(EtherCatState.INIT))
-            for info in self._slaves
-        ]
-        for registers in self._registers:
-            registers[0x130:0x132] = int(EtherCatState.INIT).to_bytes(2, "little")
         self._mapped = False
+        if on_discovered is not None:
+            on_discovered(list(self._slaves))
         return list(self._slaves)
 
     def read_states(self, refresh_eeprom: bool = False) -> list[SlaveInfo]:
@@ -153,11 +154,13 @@ class MockBackend:
             ]
         return list(self._slaves)
 
-    def request_state(self, position: int | None, state: EtherCatState, timeout_us: int) -> list[SlaveInfo]:
+    def request_state(
+        self, position: int | None, state: EtherCatState, timeout_us: int, *, process_data: bool = True
+    ) -> list[SlaveInfo]:
         self._check(position)
         targets = range(len(self._slaves)) if position is None else (position - 1,)
         for idx in targets:
-            self._slaves[idx] = replace(self._slaves[idx], state=state, al_status=0)
+            self._slaves[idx] = replace(self._slaves[idx], state=state, raw_state=int(state), al_status=0)
             self._registers[idx][0x130:0x132] = int(state).to_bytes(2, "little")
         return list(self._slaves)
 

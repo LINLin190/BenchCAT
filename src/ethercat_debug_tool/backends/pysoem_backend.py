@@ -18,8 +18,17 @@ from ..models import (
     SlaveIdentity,
     SlaveInfo,
 )
-from ..sii.parser import SiiParser
+from ..sii.parser import SiiParser, validate_eeprom_range
 from .base import DEFAULT_STATE_TRANSITION_TIMEOUT_US, CommunicationError, EepromReadback, EnvironmentError
+from .passive_discovery import (
+    NpcapEthercatTransport,
+    PassiveDiscoveryError,
+    PassiveMediaDisconnected,
+    PassiveSlave,
+    _sm_sizes,
+    decode_native_text,
+)
+from .passive_discovery import discover as passive_discover
 
 # Discovery must remain bounded when a slave does not implement an optional
 # ESC register.  EtherCAT round trips are normally below 1 ms; 2 ms leaves
@@ -31,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 def _decode_adapter_description(value: object) -> str:
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+        return decode_native_text(value)
     return str(value)
 
 
@@ -65,6 +74,13 @@ def _chip_from_register(
     return "Generic ESC", "GENERIC"
 
 
+# E252 reports ESC Type 0xAE. Its 0x0E00 Chip ID field may contain the
+# original LAN9252/LAN9253 number or its own E252 id; the displayed model
+# is still E252. Type 0xC0 remains the original Microchip parts.
+_E252_ESC_TYPE = 0xAE
+_E252_CHIP_IDS = {0x9252, 0x9253, 0xE252}
+
+
 def _chip_from_identification_registers(
     esc_type: bytes,
     chip_id: bytes,
@@ -72,12 +88,13 @@ def _chip_from_identification_registers(
     """Resolve the ESC using its authoritative identification registers."""
     if esc_type and esc_type[0] == 0x11:
         return "ET1100", "ET1100_COMPATIBLE"
-    if len(chip_id) >= 2:
-        model = int.from_bytes(chip_id[:2], "little")
-        if model == 0x9252:
-            return "LAN9252", "LAN9252_COMPATIBLE"
-        if model == 0x9253:
-            return "LAN9253", "LAN9253_COMPATIBLE"
+    model = int.from_bytes(chip_id[:2], "little") if len(chip_id) >= 2 else None
+    if esc_type and esc_type[0] == _E252_ESC_TYPE and model in _E252_CHIP_IDS:
+        return "E252", "LAN9252_COMPATIBLE"
+    if model == 0x9252:
+        return "LAN9252", "LAN9252_COMPATIBLE"
+    if model == 0x9253:
+        return "LAN9253", "LAN9253_COMPATIBLE"
     return "Generic ESC", "GENERIC"
 
 
@@ -87,6 +104,8 @@ class PysoemBackend:
     def __init__(self) -> None:
         self._pysoem: Any = None
         self._master: Any = None
+        self._passive: NpcapEthercatTransport | None = None
+        self._adapter_name: str | None = None
         self._connected = False
         self._mapped = False
         self._mapping_attempted = False
@@ -128,27 +147,36 @@ class PysoemBackend:
         pysoem = self._load()
         master = pysoem.Master()
         master.always_release_gil = True
+        passive = NpcapEthercatTransport(adapter_name)
         try:
             master.open(adapter_name)
-        except (ConnectionError, OSError) as exc:
+            passive.open()
+        except (ConnectionError, OSError, PassiveDiscoveryError) as exc:
             try:
                 master.close()
             except Exception:
                 pass
+            passive.close()
             hint = "请检查网卡状态、管理员权限以及 Npcap 的 WinPcap 兼容模式。"
             if ctypes.util.find_library("wpcap") is None:
                 hint = "未检测到 Npcap/wpcap，请安装 Npcap 并启用 WinPcap API-compatible Mode。"
             raise EnvironmentError(f"无法打开 EtherCAT 网卡。{hint}") from exc
         self._master = master
+        self._passive = passive
+        self._adapter_name = adapter_name
         self._connected = True
         self._mapped = False
         self._mapping_attempted = False
 
     def disconnect(self) -> None:
         try:
+            if self._passive is not None:
+                self._passive.close()
             if self._master is not None:
                 self._master.close()
         finally:
+            self._passive = None
+            self._adapter_name = None
             self._master = None
             self._connected = False
             self._mapped = False
@@ -162,9 +190,35 @@ class PysoemBackend:
 
     def _slave(self, position: int) -> Any:
         master = self._require_master()
+        self._ensure_operational()
         if not 1 <= position <= len(master.slaves):
             raise CommunicationError(f"Slave {position} is not available")
         return master.slaves[position - 1]
+
+    def _config_init(self, *, manual_state_change: bool = False) -> int:
+        master = self._require_master()
+        if not manual_state_change:
+            return int(master.config_init(False, release_gil=True))
+        previous = master.manual_state_change
+        try:
+            master.manual_state_change = True
+            return int(master.config_init(False, release_gil=True))
+        finally:
+            master.manual_state_change = previous
+
+    def _ensure_operational(self, *, manual_state_change: bool = False) -> Any:
+        master = self._require_master()
+        if master.slaves:
+            return master
+        try:
+            count = self._config_init(manual_state_change=manual_state_change)
+        except Exception as exc:
+            raise CommunicationError(f"初始化从站运行通道失败：{exc}") from exc
+        if count != len(self._slaves) or count <= 0:
+            raise CommunicationError("从站运行通道拓扑与被动发现结果不一致，请重新扫描总线")
+        self._mapping_attempted = False
+        self._mapped = False
+        return master
 
     def _serial(self, slave: Any) -> int:
         try:
@@ -414,74 +468,103 @@ class PysoemBackend:
     def scan(
         self, on_discovered: Callable[[list[SlaveInfo]], None] | None = None
     ) -> list[SlaveInfo]:
-        master = self._require_master()
+        self._require_master()
+        if self._passive is None or self._adapter_name is None:
+            raise CommunicationError("被动发现通道不可用，请重新连接网卡")
         self._mapped = False
         self._mapping_attempted = False
         self._slaves = []
         try:
-            count = master.config_init(False, release_gil=True)
-        except Exception as exc:
+            discovered = passive_discover(self._adapter_name, transport=self._passive)
+        except PassiveMediaDisconnected:
+            discovered = []
+        except (PassiveDiscoveryError, OSError) as exc:
             raise CommunicationError(f"扫描从站失败：{exc}") from exc
-        if count <= 0:
-            self._slaves = []
-            return []
-        self._slaves = [
-            self._basic_info(i, slave) for i, slave in enumerate(master.slaves, 1)
-        ]
+        self._slaves = [self._passive_info(item) for item in discovered]
         if on_discovered is not None:
             on_discovered(list(self._slaves))
-        master.read_state()
-        self._slaves = [self._info(i, slave) for i, slave in enumerate(master.slaves, 1)]
-        # Keep a power-on information snapshot until the next scan, even after reset.
-        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
-            size = 8
-            if info.chip_model not in {"ET1100", "E101", "LAN9252", "E252", "LAN9253", "E253"}:
-                continue
-            try:
-                data = slave._fprd(0x0E00, size, DISCOVERY_FPRD_TIMEOUT_US)
-                if len(data) != size:
-                    raise ValueError(f"Expected {size} bytes, received {len(data)}")
-                self._slaves[index] = replace(info, esc_hardware=data.hex(" ").upper())
-            except Exception as exc:
-                self._slaves[index] = replace(info, esc_hardware_error=str(exc))
-        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
-            # Preserve the status before read commands can clear error bits.
-            info = self._eeprom_status_info(info, slave)
-            try:
-                if info.eeprom_status is None:
-                    raise CommunicationError("EEPROM 状态不可用，未读取配置区")
-                data = self._read_eeprom_prefix(slave, info.eeprom_status)
-                info = replace(info, eeprom_prefix=data.hex(" ").upper(), eeprom_prefix_error=None)
-            except Exception as exc:
-                info = replace(info, eeprom_prefix=None, eeprom_prefix_error=str(exc))
-            self._slaves[index] = info
-        for index, (info, slave) in enumerate(zip(self._slaves, master.slaves, strict=True)):
-            input_size, output_size, product_type, product_model = self._sii_discovery_info(
-                slave, index + 1
-            )
-            has_sii_sizes = input_size is not None or output_size is not None
-            self._slaves[index] = replace(
-                info,
-                input_size=input_size if input_size is not None else info.input_size,
-                output_size=output_size if output_size is not None else info.output_size,
-                pdo_size_source="sii" if has_sii_sizes else info.pdo_size_source,
-                product_type=product_type,
-                product_model=product_model,
-            )
-        # Establish fixed PDO widths once during discovery while the slave is in PREOP.
+        return list(self._slaves)
+
+    def _passive_info(self, item: PassiveSlave) -> SlaveInfo:
         try:
-            self.map_process_data()
-            master.read_state()
-            self._slaves = [
-                replace(info, state=EtherCatState(int(slave.state) & 0x0F), raw_state=int(slave.state))
-                for info, slave in zip(self._slaves, master.slaves, strict=True)
-            ]
-        except Exception:
-            self._mapped = False
-        return list(self.request_state(None, EtherCatState.INIT, DEFAULT_STATE_TRANSITION_TIMEOUT_US))
+            state = EtherCatState(item.state & 0x0F)
+        except ValueError:
+            state = EtherCatState.NONE
+        chip_model, family = _chip_from_identification_registers(item.esc_type, item.chip_id)
+        return SlaveInfo(
+            item.position,
+            item.name or f"Slave {item.position}",
+            SlaveIdentity(*item.identity),
+            state,
+            item.al_status,
+            item.sm_input_size,
+            item.sm_output_size,
+            configured_address=item.configured_address,
+            chip_model=chip_model,
+            register_family=family,
+            raw_state=item.state,
+            pdi_type=item.pdi_type,
+            pdo_size_source="sm" if item.sm_input_size is not None or item.sm_output_size is not None else "unknown",
+            esc_hardware=item.esc_hardware.hex(" ").upper() if item.esc_hardware else None,
+            eeprom_status=item.eeprom_status,
+            eeprom_prefix=item.eeprom_prefix.hex(" ").upper() if item.eeprom_prefix else None,
+            eeprom_prefix_error=item.eeprom_prefix_error,
+            product_type=item.product_type,
+            product_model=item.product_model,
+            sii_status=item.sii_status,
+            sii_error=item.sii_error,
+            eeprom_capacity=item.eeprom_capacity,
+            identity_valid=item.identity_valid,
+            scan_errors=item.scan_errors,
+            state_error="AL 状态或状态码读取无效" if state is EtherCatState.NONE or any(
+                "0x0130" in error or "0x0134" in error for error in item.scan_errors
+            ) else None,
+        )
 
     def read_states(self, refresh_eeprom: bool = False) -> list[SlaveInfo]:
         master = self._require_master()
+        if not self._slaves:
+            return []
+        if self._passive is not None and self._slaves:
+            try:
+                states: list[SlaveInfo] = []
+                for index, info in enumerate(self._slaves):
+                    for attempt in range(3):
+                        try:
+                            raw, raw_wkc = self._passive.aprd(index + 1, 0x0130, 2)
+                            code, code_wkc = self._passive.aprd(index + 1, 0x0134, 2)
+                            if raw_wkc != 1 or code_wkc != 1 or len(raw) != 2 or len(code) != 2:
+                                raise CommunicationError(f"从站 {index + 1} 状态读取 WKC 无效")
+                            raw_state = int.from_bytes(raw, "little")
+                            if (raw_state & 0x0F) not in {1, 2, 3, 4, 8}:
+                                raise CommunicationError(f"从站 {index + 1} AL status 0x{raw_state:04X} 无效")
+                            break
+                        except (CommunicationError, PassiveDiscoveryError):
+                            if attempt == 2:
+                                raise
+                            time.sleep(0.02)
+                    states.append(replace(
+                        info,
+                        state=EtherCatState(raw_state & 0x0F),
+                        raw_state=raw_state,
+                        al_status=int.from_bytes(code, "little"),
+                        state_error=None,
+                    ))
+                self._slaves = [self._sm_info(info) for info in states]
+                if refresh_eeprom:
+                    refreshed = []
+                    for info in self._slaves:
+                        try:
+                            status = self._read_passive_register(info.position, 0x0502, 2)
+                        except CommunicationError as exc:
+                            refreshed.append(replace(info, eeprom_status=None, eeprom_status_error=str(exc)))
+                        else:
+                            refreshed.append(replace(info, eeprom_status=status, eeprom_status_error=None))
+                    self._slaves = refreshed
+                return list(self._slaves)
+            except Exception as exc:
+                raise CommunicationError(f"读取从站状态失败：{exc}") from exc
+        self._ensure_operational()
         master.read_state()
         if len(self._slaves) != len(master.slaves):
             self._slaves = [self._info(i, slave) for i, slave in enumerate(master.slaves, 1)]
@@ -503,27 +586,161 @@ class PysoemBackend:
             ]
         return list(self._slaves)
 
-    def request_state(self, position: int | None, state: EtherCatState, timeout_us: int) -> list[SlaveInfo]:
+    def _read_passive_register(self, position: int, address: int, size: int) -> int:
+        if self._passive is None:
+            raise CommunicationError("被动状态控制通道不可用")
+        try:
+            data, wkc = self._passive.aprd(position, address, size)
+        except PassiveDiscoveryError as exc:
+            raise CommunicationError(f"从站 {position} 寄存器 0x{address:04X} 读取失败：{exc}") from exc
+        if wkc != 1 or len(data) != size:
+            raise CommunicationError(f"从站 {position} 寄存器 0x{address:04X} 读取 WKC 无效")
+        return int.from_bytes(data, "little")
+
+    def _sm_info(self, info: SlaveInfo) -> SlaveInfo:
+        try:
+            count = min(self._read_passive_register(info.position, 0x0005, 1), 16)
+            data = self._read_passive_register(info.position, 0x0800, count * 8).to_bytes(count * 8, "little") if count else b""
+            inputs, outputs = _sm_sizes(data) if count else (0, 0)
+        except CommunicationError:
+            return info
+        return replace(info, input_size=inputs, output_size=outputs,
+                       pdo_size_source="sm")
+
+    def _mailbox_ready(self, position: int) -> bool:
+        assert self._passive is not None
+        try:
+            data, wkc = self._passive.aprd(position, 0x0800, 16)
+        except PassiveDiscoveryError as exc:
+            raise CommunicationError(f"从站 {position} 邮箱 SM 读取失败：{exc}") from exc
+        if wkc != 1 or len(data) != 16:
+            raise CommunicationError(f"从站 {position} 邮箱 SM 读取 WKC 无效")
+        return all(
+            int.from_bytes(data[offset + 2:offset + 4], "little") > 0 and data[offset + 6] & 1
+            for offset in (0, 8)
+        )
+
+    def _write_al_control(
+        self, position: int, control: int, expected: EtherCatState, timeout_us: int, esc_config: int
+    ) -> None:
+        assert self._passive is not None
+        try:
+            self._passive.apwr(position, 0x0120, control.to_bytes(2, "little"))
+        except PassiveDiscoveryError as exc:
+            pending = ""
+            if (esc_config & 1) == 0:
+                try:
+                    if self._read_passive_register(position, 0x0220, 2) & 1:
+                        pending = "；PDI 尚未读取前一次 AL Control（0x0220[0]=1）"
+                except CommunicationError:
+                    pass
+            raise CommunicationError(f"从站 {position} AL Control 写入失败：{exc}{pending}") from exc
+        deadline = time.monotonic() + timeout_us / 1_000_000
+        while True:
+            raw = self._read_passive_register(position, 0x0130, 2)
+            code = self._read_passive_register(position, 0x0134, 2)
+            if raw == int(expected) and ((esc_config & 1) == 0 or code == 0):
+                return
+            if time.monotonic() >= deadline:
+                raise CommunicationError(
+                    f"从站 {position} 请求 {expected.label} 失败："
+                    f"AL status 0x{raw:04X}, AL status code 0x{code:04X}, "
+                    f"ESC configuration 0x{esc_config:02X} (device emulation {esc_config & 1})"
+                )
+            time.sleep(0.001)
+
+    def request_state(
+        self,
+        position: int | None,
+        state: EtherCatState,
+        timeout_us: int,
+        *,
+        process_data: bool = True,
+    ) -> list[SlaveInfo]:
         master = self._require_master()
+        configurations: dict[int, int] = {}
+        if self._passive is not None and self._slaves:
+            positions = range(1, len(self._slaves) + 1) if position is None else (position,)
+            positions = tuple(positions)
+            for target_position in positions:
+                if not 1 <= target_position <= len(self._slaves):
+                    raise CommunicationError(f"从站 {target_position} 不可用")
+                configurations[target_position] = self._read_passive_register(target_position, 0x0141, 1)
+            emulated = all(config & 1 for config in configurations.values())
+            direct_preop = (
+                not process_data and state is EtherCatState.PRE_OP
+                and all(
+                    config & 1 or self._mailbox_ready(index)
+                    # A pending AL event must be handled by the PDI before
+                    # config_init can issue its own INIT request.
+                    or self._read_passive_register(index, 0x0220, 2) & 1
+                    for index, config in configurations.items()
+                )
+            )
+            direct = (
+                emulated and (not process_data or state in (EtherCatState.INIT, EtherCatState.PRE_OP))
+            ) or (not process_data and (state in (EtherCatState.INIT, EtherCatState.OP) or direct_preop))
+            if direct:
+                if state in (EtherCatState.INIT, EtherCatState.PRE_OP):
+                    self._invalidate_mapping()
+                for target_position in positions:
+                    config = configurations[target_position]
+                    if (config & 1) == 0 and state in (EtherCatState.INIT, EtherCatState.PRE_OP):
+                        raw = self._read_passive_register(target_position, 0x0130, 2)
+                        if raw & 0x10:
+                            self._write_al_control(
+                                target_position, (raw & 0x0F) | 0x10,
+                                EtherCatState(raw & 0x0F), timeout_us, config,
+                            )
+                    self._write_al_control(
+                        target_position, int(state), state, timeout_us, config
+                    )
+                return self.read_states()
+            if not master.slaves and not process_data and any(config & 1 for config in configurations.values()):
+                raise CommunicationError("混合设备仿真与正常从站时，SOEM 广播初始化会改变仿真从站状态")
+            if not master.slaves and not process_data and any(
+                self._read_passive_register(index, 0x0141, 1) & 1
+                for index in range(1, len(self._slaves) + 1) if index not in configurations
+            ):
+                raise CommunicationError("总线含设备仿真从站，SOEM 广播初始化会改变其状态")
+        self._ensure_operational(manual_state_change=True)
         target = master if position is None else self._slave(position)
         master.read_state()
         if any((int(s.state) & 0x0F) in (0, 1) for s in master.slaves):
             self._invalidate_mapping()
-        candidates = master.slaves if position is None else [target]
-        for slave in candidates:
-            self._acknowledge_error(slave, state, timeout_us)
+        # Direct OP is an AL-control operation; do not turn its ErrorInd bit into
+        # a PREOP acknowledgement cycle before writing the requested state.
+        if process_data or state is not EtherCatState.OP:
+            for index, slave in enumerate(master.slaves, 1):
+                if (position is None or index == position) and not (configurations.get(index, 0) & 1):
+                    self._acknowledge_error(slave, state, timeout_us)
 
         if state in (EtherCatState.INIT, EtherCatState.PRE_OP):
             self._invalidate_mapping()
-        if state in (EtherCatState.SAFE_OP, EtherCatState.OP) and not self._mapped:
+        if process_data and state in (EtherCatState.SAFE_OP, EtherCatState.OP) and not self._mapped:
             self.map_process_data()
             target = master if position is None else self._slave(position)
-        if state is EtherCatState.OP:
+        if state is EtherCatState.OP and process_data:
             self._transition(target, EtherCatState.SAFE_OP, timeout_us)
-        self._transition(target, state, timeout_us)
+        self._transition(target, state, timeout_us, process_data=process_data)
         return self.read_states()
 
     def clear_error(self, position: int, timeout_us: int) -> list[SlaveInfo]:
+        self._require_master()
+        if self._passive is not None and self._slaves:
+            if not 1 <= position <= len(self._slaves):
+                raise CommunicationError(f"从站 {position} 不可用")
+            esc_config = self._read_passive_register(position, 0x0141, 1)
+            raw = self._read_passive_register(position, 0x0130, 2)
+            code = self._read_passive_register(position, 0x0134, 2)
+            if raw & 0x10 or (esc_config & 1 and code):
+                try:
+                    state = EtherCatState(raw & 0x0F)
+                except ValueError as exc:
+                    raise CommunicationError(f"从站 {position} AL status 0x{raw:04X} 无法确认") from exc
+                control = int(state) if esc_config & 1 else int(state) | 0x10
+                self._write_al_control(position, control, state, timeout_us, esc_config)
+            return self.read_states()
         master = self._require_master()
         slave = self._slave(position)
         master.read_state()
@@ -540,7 +757,9 @@ class PysoemBackend:
             )
             original_error = self._state_transition_error(slave, state, raw, timeout_us)
             slave.state = (raw & 0x0F) | 0x10
-            slave.write_state()
+            wkc = slave.write_state()
+            if wkc is not None and wkc <= 0:
+                raise CommunicationError(f"AL Control 错误确认写入失败，WKC={wkc}：{original_error}")
             deadline = time.monotonic() + timeout_us / 1_000_000
             while True:
                 actual = self._check_state(slave, raw & 0x0F, min(1000, timeout_us))
@@ -552,10 +771,14 @@ class PysoemBackend:
             if actual != (raw & 0x0F):
                 raise CommunicationError(f"Error acknowledgement failed: {original_error}")
 
-    def _transition(self, target: Any, state: EtherCatState, timeout_us: int) -> None:
+    def _transition(
+        self, target: Any, state: EtherCatState, timeout_us: int, *, process_data: bool = True
+    ) -> None:
         target.state = int(state)
-        target.write_state()
-        if state is EtherCatState.OP:
+        wkc = target.write_state()
+        if wkc is not None and wkc <= 0:
+            raise CommunicationError(f"请求 {state.label} 时 AL Control 写入失败，WKC={wkc}")
+        if state is EtherCatState.OP and process_data:
             deadline = time.monotonic() + timeout_us / 1_000_000
             while True:
                 snapshot = self.exchange_process_data(min(2000, timeout_us))
@@ -615,6 +838,13 @@ class PysoemBackend:
             detail = f"{name} AL status 0x{al_status:04X}"
             detail += f", AL status code 0x{al_code:04X}"
             detail += f" ({al_status_info(al_code).name})"
+            if self._passive is not None and master is not None:
+                position = next((number for number, item in enumerate(master.slaves, 1) if item is slave), index)
+                try:
+                    esc_config = self._read_passive_register(position, 0x0141, 1)
+                    detail += f", ESC configuration 0x{esc_config:02X} (device emulation {esc_config & 1})"
+                except CommunicationError:
+                    pass
             diagnostics.append(detail)
 
         details = "; ".join(diagnostics) or "AL status unavailable"
@@ -689,12 +919,13 @@ class PysoemBackend:
 
     def map_process_data(self) -> int:
         master = self._require_master()
+        self._ensure_operational(manual_state_change=True)
         if self._mapped:
             return sum(len(slave.input) + len(slave.output) for slave in master.slaves)
         if self._mapping_attempted:
             # config_map appends FMMUs; config_init resets SOEM's allocation context.
             expected = [(s.identity.vendor_id, s.identity.product_code, s.identity.revision) for s in self._slaves]
-            count = master.config_init(False, release_gil=True)
+            count = self._config_init(manual_state_change=True)
             actual = [(int(s.man), int(s.id), int(s.rev)) for s in master.slaves]
             if count != len(expected) or actual != expected:
                 raise CommunicationError("PDO 重建时从站拓扑发生变化，请重新扫描总线")
@@ -710,6 +941,9 @@ class PysoemBackend:
         finally:
             master.manual_state_change = manual
         self._mapped = True
+        if self._passive is not None:
+            self._slaves = [self._sm_info(info) for info in self._slaves]
+            return size
         resolved: list[SlaveInfo] = []
         for info, slave in zip(self._slaves, master.slaves, strict=True):
             mapped_input = len(slave.input)
@@ -782,6 +1016,28 @@ class PysoemBackend:
     ) -> EepromReadback:
         if byte_count <= 0 or byte_count % 2:
             raise ValueError("EEPROM read length must be a positive whole-word size")
+        validate_eeprom_range(word_address, byte_count)
+        self._require_master()
+        if self._passive is not None and self._slaves:
+            if not 1 <= position <= len(self._slaves):
+                raise CommunicationError(f"从站 {position} 不可用")
+            status: int | None = None
+            try:
+                data = self._passive.eeprom_read(position, word_address, byte_count // 2)
+                if len(data) != byte_count:
+                    raise CommunicationError("EEPROM 数据读取不完整")
+                status = self._read_passive_register(position, 0x0502, 2)
+                return EepromReadback(data, 1, status)
+            except (PassiveDiscoveryError, CommunicationError) as exc:
+                try:
+                    status = self._read_passive_register(position, 0x0502, 2)
+                except CommunicationError:
+                    pass
+                raise self._normalize_error(
+                    exc,
+                    f"EEPROM read word 0x{word_address:04X} "
+                    f"(0x0502={f'0x{status:04X}' if status is not None else 'unavailable'})",
+                ) from exc
         slave = self._slave(position)
         timeout_us = 20_000
         status: int | None = None
@@ -858,6 +1114,16 @@ class PysoemBackend:
     def eeprom_write(self, position: int, word_address: int, data: bytes) -> None:
         if len(data) != 2:
             raise ValueError("EEPROM writes are exactly one 16-bit word")
+        validate_eeprom_range(word_address, len(data))
+        self._require_master()
+        if self._passive is not None and self._slaves:
+            if not 1 <= position <= len(self._slaves):
+                raise CommunicationError(f"从站 {position} 不可用")
+            try:
+                self._passive.eeprom_write(position, word_address, bytes(data))
+            except PassiveDiscoveryError as exc:
+                raise self._normalize_error(exc, f"EEPROM write word 0x{word_address:04X}") from exc
+            return
         try:
             self._slave(position).eeprom_write(word_address, bytes(data))
         except Exception as exc:
@@ -866,6 +1132,17 @@ class PysoemBackend:
     def register_read(self, position: int, address: int, size: int, timeout_us: int) -> bytes:
         if not 1 <= size <= 256 or not 0 <= address <= 0xFFFF or address + size > 0x10000:
             raise ValueError("Register range is invalid")
+        self._require_master()
+        if self._passive is not None and self._slaves:
+            if not 1 <= position <= len(self._slaves):
+                raise CommunicationError(f"从站 {position} 不可用")
+            try:
+                data, wkc = self._passive.aprd(position, address, size)
+            except PassiveDiscoveryError as exc:
+                raise self._normalize_error(exc, f"APRD 0x{address:04X}") from exc
+            if wkc != 1 or len(data) != size:
+                raise CommunicationError(f"APRD 0x{address:04X} WKC={wkc}，读取长度 {len(data)}/{size}")
+            return data
         try:
             return self._slave(position)._fprd(address, size, timeout_us)
         except Exception as exc:
@@ -876,6 +1153,15 @@ class PysoemBackend:
             raise ValueError("Register range is invalid")
         if address < 0x0900 and address + len(data) > 0x0600:
             self._invalidate_mapping()
+        self._require_master()
+        if self._passive is not None and self._slaves:
+            if not 1 <= position <= len(self._slaves):
+                raise CommunicationError(f"从站 {position} 不可用")
+            try:
+                self._passive.apwr(position, address, bytes(data))
+            except PassiveDiscoveryError as exc:
+                raise self._normalize_error(exc, f"APWR 0x{address:04X}") from exc
+            return
         try:
             self._slave(position)._fpwr(address, bytes(data), timeout_us)
         except Exception as exc:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterable
+from dataclasses import replace
 
 from .models import BackendMode, EtherCatState, MasterPhase, MasterSnapshot, SlaveInfo
 
@@ -254,7 +255,7 @@ class MasterStateMachine:
             self._replace(
                 phase=self._phase,
                 adapter=self._adapter,
-                slaves=self._slaves,
+                slaves=tuple(replace(slave, state_error=message) for slave in self._slaves),
                 last_error=message,
             )
 

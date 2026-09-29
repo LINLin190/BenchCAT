@@ -52,6 +52,9 @@ def test_state_read_failure_does_not_claim_a_running_cycle_stopped() -> None:
     assert snapshot.cycle_running is True
     assert snapshot.slaves[0].state is EtherCatState.OP
     assert snapshot.last_error == "temporary read failure"
+    assert snapshot.slaves[0].state_error == "temporary read failure"
+    machine.states_updated((_slave(EtherCatState.OP),), expected_session=session_id)
+    assert machine.snapshot().slaves[0].state_error is None
 
 
 def test_stale_worker_event_cannot_change_current_session() -> None:
