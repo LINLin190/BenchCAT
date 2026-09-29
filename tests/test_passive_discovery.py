@@ -22,7 +22,7 @@ class DiscoveryTransport:
         self.registers = {
             0x0000: b"\x11\x00", 0x0130: b"\x08\x00", 0x0134: bytes(2),
             0x0010: bytes(2), 0x0140: b"\x05", 0x0005: b"\x03", 0x0502: b"\xC0\x00",
-            0x0E00: b"\x4C\x24",
+            0x0E00: b"\x4C\x24" + bytes(6),
             # Nonstandard placement/direction: SM0 IN, SM1 OUT, SM2 mailbox.
             0x0800: b"".join(struct.pack("<HHBBBB", 0x1000 + i * 256, size, control, 0, 1, 0)
                              for i, (size, control) in enumerate([(232, 0x20), (226, 0x24), (128, 0x26)])),
@@ -52,7 +52,7 @@ def test_discovery_uses_live_sm_and_never_writes_al_or_configuration(sample_esi)
     assert info.sii_status == "header_valid" and info.identity_valid
     assert info.eeprom_capacity == 2048
     assert 0x0E02 not in channel.reads and 0x0E00 in channel.reads
-    assert info.esc_hardware == b"\x4C\x24"
+    assert info.esc_hardware == b"\x4C\x24" + bytes(6)
     assert channel.eeprom_reads == [(0, 64), (0x40, 256)]
 
 

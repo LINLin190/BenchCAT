@@ -3,10 +3,10 @@ import { decodeEscHardware } from "./escHardware";
 
 describe("ESC power-on decoding", () => {
   it("decodes ET1100 ports, including logical port 3 as the third port", () => {
-    const result = decodeEscHardware("ET1100", "1E 62")!;
+    const result = decodeEscHardware("ET1100", "1E 62 00 00 00 00 00 00")!;
     expect(result.value).toBe("0x621E");
-    expect(result.bytes).toEqual(["1E", "62"]);
-    expect(result.chipId).toBeUndefined();
+    expect(result.bytes).toEqual(["1E", "62", "00", "00", "00", "00", "00", "00"]);
+    expect(result.chipId).toBe("0x0000");
     expect(result.fields.find((field) => field.name === "P_CONF[2]")?.meaning).toBe("Port 3 · MII");
     expect(result.fields.find((field) => field.name === "P_CONF[3]")?.meaning).toBe("端口未启用");
     expect(result.fields.find((field) => field.name === "C25_SHI")?.meaning).toContain("20 ns");

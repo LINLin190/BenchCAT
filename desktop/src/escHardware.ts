@@ -17,11 +17,10 @@ export function decodeEscHardware(profile: string, raw: string) {
   const family = hardwareFamily(profile);
   if (family !== "ET1100" && family !== "LAN9252" && family !== "LAN9253") return undefined;
   const parts = raw.trim().split(/\s+/);
-  const size = family === "ET1100" ? 2 : 8;
-  if ((parts.length !== size && !(family === "ET1100" && parts.length === 8))
-    || parts.some((part) => !/^[\da-f]{2}$/i.test(part))) return undefined;
-  const bytes = parts.slice(0, size).map((part) => parseInt(part, 16));
-  const value = `0x${parts.slice(0, size).reverse().join("").toUpperCase()}`;
+  const size = 8;
+  if (parts.length !== size || parts.some((part) => !/^[\da-f]{2}$/i.test(part))) return undefined;
+  const bytes = parts.map((part) => parseInt(part, 16));
+  const value = `0x${parts.slice(0, family === "ET1100" ? 2 : size).reverse().join("").toUpperCase()}`;
   const numeric = BigInt(value);
   const hex = (value: number, digits = 4) => `0x${value.toString(16).toUpperCase().padStart(digits, "0")}`;
   const fields: HardwareField[] = definitions[family].map((field) => {
@@ -46,12 +45,10 @@ export function decodeEscHardware(profile: string, raw: string) {
       field.meaning = active ? `Port ${port} · ${field.meaning}` : "端口未启用";
     }
   }
-  const chip = (bytes[2] ?? 0) | ((bytes[3] ?? 0) << 8);
+  const chip = bytes[2] | (bytes[3] << 8);
   const revision = bytes[0] | (bytes[1] << 8);
-  const strap = (bytes[4] ?? 0) | ((bytes[5] ?? 0) << 8);
+  const strap = family === "ET1100" ? bytes[0] : bytes[4] | (bytes[5] << 8);
   return { family, bytes: parts.slice(0, size).map((part) => part.toUpperCase()), fields, value,
-    revision: family === "ET1100" ? undefined : hex(revision),
-    chipId: family === "ET1100" ? undefined : hex(chip),
-    strap: family === "ET1100" ? undefined : hex(strap),
+    revision: hex(revision), chipId: hex(chip), strap: hex(strap),
     mismatch: profile === family && family !== "ET1100" && chip !== (family === "LAN9252" ? 0x9252 : 0x9253) };
 }

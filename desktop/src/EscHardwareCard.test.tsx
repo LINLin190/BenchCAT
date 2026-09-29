@@ -52,13 +52,12 @@ describe("hardware scan snapshot card", () => {
     expect(html).not.toContain("Product ID：");
   });
   it("does not invent unscanned ET1100 bytes or fetch after a profile change", () => {
-    const et = { ...slave, chip_model: "ET1100", esc_hardware: "4C 24" };
+    const et = { ...slave, chip_model: "ET1100", esc_hardware: "4C 24 00 00 00 00 00 00" };
     const etHtml = renderToStaticMarkup(<EscHardwareCard slave={et} profile="ET1100" />);
-    expect(etHtml).toContain("0x0E00–0x0E01");
+    expect(etHtml).toContain("0x0E00–0x0E07");
     expect(etHtml).toContain("4C 24");
-    expect(etHtml).toContain("Power-On Values");
-    expect(etHtml).not.toContain("Chip ID");
-    expect(etHtml).not.toContain("硅版本");
+    expect(etHtml).toContain("Product ID");
+    expect(etHtml).toContain("硅版本");
     expect(etHtml).not.toContain("Reserved");
     expect(etHtml).not.toContain("EEPROM size strap");
     expect(renderToStaticMarkup(<EscHardwareCard slave={{ ...et, esc_hardware: "4C 24" }} profile="LAN9253" />)).toContain("当前扫描无可用数据");

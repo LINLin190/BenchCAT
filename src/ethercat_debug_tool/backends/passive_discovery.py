@@ -448,7 +448,7 @@ def discover(adapter_name: str, *, transport: NpcapEthercatTransport | None = No
             configured = read(0x0010, 2)
             pdi = read(0x0140, 1)
             chip_id = read(0x0E02, 2) if esc_type[0] != 0x11 else b""
-            hardware = read(0x0E00, 2 if esc_type[0] == 0x11 else 8)
+            hardware = read(0x0E00, 8)
             sm_count = read(0x0005, 1)
             sm_data = read(0x0800, min(sm_count[0], 16) * 8) if sm_count and sm_count[0] else b""
             sm_input_size, sm_output_size = (0, 0) if sm_count == b"\x00" else _sm_sizes(sm_data)
