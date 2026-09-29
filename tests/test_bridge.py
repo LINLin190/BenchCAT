@@ -185,7 +185,7 @@ def test_bridge_demo_core_commands(tmp_path) -> None:
                 "known_register": True,
             },
         )
-        assert prepared["expires_in_seconds"] == 60
+        assert "expires_in_seconds" not in prepared
         written = runtime.dispatch("register_execute_write", {"plan_id": prepared["plan_id"]})
         assert written.verified is True
         with pytest.raises(ValueError, match="exactly 4 bytes"):
@@ -434,7 +434,7 @@ def test_register_write_plan_is_invalidated_by_rescan(tmp_path) -> None:
         )
         runtime.dispatch("scan", {})
 
-        with pytest.raises(RuntimeError, match="总线会话变化"):
+        with pytest.raises(RuntimeError, match="写入失败"):
             runtime.dispatch("register_execute_write", {"plan_id": prepared["plan_id"]})
     finally:
         runtime.shutdown()
@@ -668,6 +668,12 @@ def test_esi_full_flash_flow_uses_scan_init_and_config_override(tmp_path, worksp
         assert flash.reset_sequence == (True, True, True)
         assert flash.rediscovered is True and flash.reload_verified is True
 
+        with pytest.raises(RuntimeError, match="已变化"):
+            runtime.dispatch("eeprom_flash", {"position": 1, "target_id": target["target_id"]})
+        target = runtime.dispatch(
+            "sii_generate",
+            {"document_id": loaded["document_id"], "ordinal": 0, "config_data": override_config, "position": 1},
+        )
         repeated = runtime.dispatch(
             "eeprom_flash",
             {"position": 1, "target_id": target["target_id"], "auto_reset": True},
@@ -720,6 +726,43 @@ def test_sii_generate_keeps_xml_capacity_when_connected_eeprom_size_differs(tmp_
         runtime.shutdown()
 
 
+def test_blank_eeprom_raw_read_and_bound_flash_do_not_require_init(tmp_path, workspace) -> None:
+    runtime = BridgeRuntime(
+        RecordingWriter(), BackendMode.DEMO, audit_path=tmp_path / "audit.jsonl", stability_wait_s=0,
+    )
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        runtime._submit(lambda backend: backend._eeprom[0].__setitem__(slice(None), b"\xff" * 2048))
+        runtime.dispatch("scan", {})
+        header = runtime.dispatch("eeprom_header", {"position": 1})
+        assert header["sii_status"] == "blank" and header["size"] is None
+        assert header["config_data"] == b"\xff" * 10
+        with pytest.raises(ValueError, match="容量未知"):
+            runtime.dispatch("eeprom_read", {"position": 1})
+        raw = runtime.dispatch("eeprom_read", {"position": 1, "capacity": 2048})
+        assert raw["data"] == b"\xff" * 2048 and not raw["sii_valid"]
+        loaded = runtime.dispatch("esi_load", {"path": str(workspace / "ESI示例" / "SlaveCTT_900e80.xml")})
+        with pytest.raises(ValueError, match="XML Device"):
+            runtime.dispatch("sii_generate", {"document_id": loaded["document_id"], "ordinal": -1})
+        target = runtime.dispatch("sii_generate", {"document_id": loaded["document_id"], "ordinal": 0, "position": 1})
+        with pytest.raises(RuntimeError, match="已变化"):
+            runtime.dispatch("eeprom_flash", {"position": 2, "target_id": target["target_id"]})
+        original_hardware = runtime._submit("register_read", 1, 0x0E00, 8, 2000)
+        runtime._submit("register_write", 1, 0x0E00, b"\x00" * 8, 2000)
+        with pytest.raises(RuntimeError, match="目标从站已变化"):
+            runtime.dispatch("eeprom_flash", {"position": 1, "target_id": target["target_id"]})
+        runtime._submit("register_write", 1, 0x0E00, original_hardware, 2000)
+        runtime.dispatch("request_state", {"position": 1, "state": 2})
+        result = runtime.dispatch("eeprom_flash", {"position": 1, "target_id": target["target_id"], "auto_reset": False})
+        assert result["success"] and runtime.slaves[0].state is EtherCatState.PRE_OP
+        runtime.dispatch("scan", {})
+        assert runtime.slaves[0].state is EtherCatState.PRE_OP
+        with pytest.raises(RuntimeError, match="已变化"):
+            runtime.dispatch("eeprom_flash", {"position": 1, "target_id": target["target_id"]})
+    finally:
+        runtime.shutdown()
+
+
 def test_esi_library_list_returns_all_devices(workspace) -> None:
     runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)  # type: ignore[arg-type]
     try:
@@ -732,13 +775,13 @@ def test_esi_library_list_returns_all_devices(workspace) -> None:
         runtime.shutdown()
 
 
-def test_overview_op_runs_cycle_and_downgrade_stops_it(monkeypatch):
+def test_overview_state_requests_do_not_start_cycle(monkeypatch):
     runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
     try:
         runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
         states = runtime.dispatch("request_state", {"position": 1, "state": 8})
         assert states[0].state is EtherCatState.OP
-        assert runtime.cycle_running
+        assert not runtime.cycle_running
         submit = runtime._submit
         calls = []
 
@@ -753,8 +796,6 @@ def test_overview_op_runs_cycle_and_downgrade_stops_it(monkeypatch):
         assert "__start_cycle__" not in calls
         runtime.dispatch("request_state", {"position": 1, "state": 2})
         assert not runtime.cycle_running
-        # Allow old start/stop events to arrive after the PREOP result.
-        time.sleep(0.06)
         assert runtime.slaves[0].state is EtherCatState.PRE_OP
         assert not runtime.cycle_running
     finally:

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ethercat_debug_tool.backends.passive_discovery import PassiveSlave
 from ethercat_debug_tool.backends.pysoem_backend import PysoemBackend
 from ethercat_debug_tool.models import EtherCatState, SlaveIdentity, SlaveInfo
 
@@ -126,20 +127,33 @@ def test_scan_keeps_pre_read_status_and_refresh_does_not_read_eeprom(monkeypatch
     backend = PysoemBackend()
     backend._master = SimpleNamespace(slaves=[slave], config_init=lambda *a, **kw: 1, read_state=lambda: None)
     backend._connected = True
-    info = SlaveInfo(1, "test", SlaveIdentity(1, 2, 3), EtherCatState.PRE_OP, 0, 0, 0, chip_model="LAN9252")
-    monkeypatch.setattr(backend, "_basic_info", lambda *a: info)
-    monkeypatch.setattr(backend, "_info", lambda *a: info)
-    monkeypatch.setattr(backend, "map_process_data", lambda: None)
-    monkeypatch.setattr(backend, "request_state", lambda *a: backend._slaves)
+    backend._adapter_name = "mock"
+
+    class Passive:
+        def aprd(self, _position, address, _size):
+            if address == 0x0005:
+                return b"\x00", 1
+            return {0x0130: b"\x02\x00", 0x0134: b"\x00\x00", 0x0502: b"\xC0\x00"}[address], 1
+
+    backend._passive = Passive()
+    monkeypatch.setattr(
+        "ethercat_debug_tool.backends.pysoem_backend.passive_discover",
+        lambda *_args, **_kwargs: [
+            PassiveSlave(
+                1, 2, 0, (1, 2, 3, 0), 0x1001, 0x80, b"\x00", b"\x52\x92",
+                b"", 0x40C0, 0, 0, "test", eeprom_prefix=slave.data,
+            )
+        ],
+    )
     first = backend.scan()[0]
     assert first.eeprom_status == 0x40C0
     assert first.eeprom_prefix == slave.data.hex(" ").upper()
-    assert slave.status == 0x00C0
+    assert slave.status == 0x40C0
     slave.events.clear()
     assert backend.read_states()[0] == replace(first, raw_state=2)
     assert not slave.events
     assert backend.read_states(refresh_eeprom=True)[0].eeprom_status == 0x00C0
-    assert slave.events == [("read", 0x502, 2)]
+    assert not slave.events
     assert backend._slaves[0].eeprom_prefix == first.eeprom_prefix
     slave.data = bytes(16)
     assert backend.scan()[0].eeprom_prefix == bytes(16).hex(" ").upper()

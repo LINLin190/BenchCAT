@@ -2,7 +2,7 @@ from dataclasses import replace
 
 import pytest
 
-from ethercat_debug_tool.backends.base import CommunicationError, EepromReadback
+from ethercat_debug_tool.backends.base import CommunicationError
 from ethercat_debug_tool.backends.mock import MockBackend
 from ethercat_debug_tool.backends.pysoem_backend import (
     _chip_from_identification_registers,
@@ -41,7 +41,7 @@ def test_full_read_uses_bounded_blocks(monkeypatch) -> None:
 
         monkeypatch.setattr(backend, "eeprom_read_block", tracked_read)
         assert len(EepromService(backend).read_full(1)) == 2048
-        assert requests == [(0x3E, 4)] + [(word, 128) for word in range(0, 1024, 64)]
+        assert requests == [(0, 128)] + [(word, 128) for word in range(0, 1024, 64)]
     finally:
         backend.disconnect()
 
@@ -90,7 +90,8 @@ def test_flash_uses_xml_length_when_current_capacity_declaration_is_corrupt(samp
         backend._eeprom[0][0] ^= 1  # Current configuration CRC is invalid.
         backend._eeprom[0][0x7C:0x7E] = b"\xf0\x90"  # Declares 4,749,440 bytes.
         service = EepromService(backend, stability_wait_s=0)
-        assert service.read_capacity(1) == 4_749_440
+        with pytest.raises(ValueError, match="容量未知"):
+            service.read_capacity(1)
 
         result = service.flash(1, target, device, auto_reset=False)
 
@@ -187,8 +188,8 @@ def test_changed_flash_waits_half_second_before_full_verification(sample_esi) ->
         backend.disconnect()
 
 
-@pytest.mark.parametrize("first_read", ["mismatch", "wkc_error"])
-def test_flash_recovers_when_second_word_read_is_correct(sample_esi, monkeypatch, first_read) -> None:
+@pytest.mark.parametrize("first_write", ["dropped", "wkc_error"])
+def test_flash_rewrites_differences_after_full_read(sample_esi, monkeypatch, first_write) -> None:
     backend = MockBackend()
     backend.connect("demo0")
     try:
@@ -196,29 +197,30 @@ def test_flash_recovers_when_second_word_read_is_correct(sample_esi, monkeypatch
         device = replace(sample_esi.devices[0], vendor_id=slave.identity.vendor_id,
                          product_code=slave.identity.product_code, revision=slave.identity.revision)
         target = SiiGenerator().generate(device).image
+        backend._eeprom[0][:] = target
         backend._eeprom[0][0:2] = b"\x00\x00"
-        original_read = backend.eeprom_read_checked
+        original_write = backend.eeprom_write
         calls = 0
         sleeps = []
 
-        def transient_read(position, word):
+        def transient_write(position, word, data):
             nonlocal calls
-            result = original_read(position, word)
             if word == 0:
                 calls += 1
                 if calls == 1:
-                    if first_read == "wkc_error":
-                        raise CommunicationError("FPRD WKC != 1")
-                    return EepromReadback(b"\x00\x00" + result.data[2:], 1, 0x00C0)
-            return result
+                    if first_write == "wkc_error":
+                        raise CommunicationError("APWR WKC != 1")
+                    return
+            original_write(position, word, data)
 
-        monkeypatch.setattr(backend, "eeprom_read_checked", transient_read)
+        monkeypatch.setattr(backend, "eeprom_write", transient_write)
         result = EepromService(backend, stability_wait_s=0, sleep=sleeps.append).flash(
             1, target, device, auto_reset=False
         )
         assert result.image_success
         assert calls == 2
-        assert sleeps == [0.02, 0]
+        assert result.attempts == 2
+        assert sleeps == [0, 0]
     finally:
         backend.disconnect()
 
@@ -248,18 +250,23 @@ def test_flash_persistent_mismatch_finishes_writes_then_reports_diagnostics(samp
         assert len(writes) > 2
         assert not result.image_success
         assert result.comparison.differing_bytes > 0
-        for field in ("expected=", "actual=", "WKC=1", "word_retries=3", "full_retries=2", "0x0502="):
+        assert result.attempts == 3 and writes.count(0) == 3
+        assert result.reset_sequence is None
+        for field in ("烧录失败", "expected=", "actual=", "word 0x0000"):
             assert field in result.image_verification
     finally:
         backend.disconnect()
 
 
-def test_rediscovery_polls_until_slave_returns(monkeypatch) -> None:
+def test_rediscovery_polls_until_slave_returns(monkeypatch, sample_esi) -> None:
     backend = MockBackend()
     backend.connect("demo0")
     clock = [0.0]
     scans = 0
     original_scan = backend.scan
+    slave = original_scan()[0]
+    device = replace(sample_esi.devices[0], vendor_id=slave.identity.vendor_id,
+                     product_code=slave.identity.product_code, revision=slave.identity.revision)
 
     def delayed_scan():
         nonlocal scans
@@ -278,7 +285,7 @@ def test_rediscovery_polls_until_slave_returns(monkeypatch) -> None:
             sleep=advance,
             monotonic=lambda: clock[0],
         )
-        assert service._rediscover(1) is True
+        assert service._rediscover(1, device) is True
         assert scans == 3
         assert clock[0] == 1.0
     finally:
@@ -329,10 +336,136 @@ def test_corrupt_sii_can_still_be_backed_up_as_raw_bin(tmp_path) -> None:
     try:
         slave = backend.scan()[0]
         backend._eeprom[0][0] ^= 0xFF
-        backup = EepromService(backend).backup(1, tmp_path, slave)
+        backup = EepromService(backend).backup(1, tmp_path, slave, capacity=2048)
         assert backup.binary_path.read_bytes()[0] != 0x90
         assert backup.sha256
         assert list(tmp_path.glob("*.json")) == []
+    finally:
+        backend.disconnect()
+
+
+def test_backups_do_not_overwrite_same_second(tmp_path) -> None:
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        slave = backend.scan()[0]
+        service = EepromService(backend)
+        first = service.backup(1, tmp_path, slave)
+        second = service.backup(1, tmp_path, slave)
+        assert first.binary_path != second.binary_path
+        assert first.binary_path.read_bytes() == second.binary_path.read_bytes()
+    finally:
+        backend.disconnect()
+
+
+@pytest.mark.parametrize("fill", [0, 255])
+def test_blank_eeprom_supports_explicit_raw_read_and_reflash(sample_esi, fill):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        backend._eeprom[0][:] = bytes([fill]) * 2048
+        service = EepromService(backend, stability_wait_s=0)
+        with pytest.raises(ValueError, match="容量未知"):
+            service.read_full(1)
+        assert service.read_full(1, capacity=2048) == bytes([fill]) * 2048
+        device = sample_esi.devices[0]
+        target = SiiGenerator().generate(device).image
+        assert service.flash(1, target, device, auto_reset=False).image_success
+    finally:
+        backend.disconnect()
+
+
+def test_initial_read_failure_does_not_prohibit_reprogramming(sample_esi, monkeypatch):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        device = sample_esi.devices[0]
+        target = SiiGenerator().generate(device).image
+        read = backend.eeprom_read_block
+        calls = 0
+
+        def unavailable_initially(*args):
+            nonlocal calls
+            calls += 1
+            if calls <= 3:
+                raise CommunicationError("read unavailable")
+            return read(*args)
+
+        monkeypatch.setattr(backend, "eeprom_read_block", unavailable_initially)
+        result = EepromService(backend, stability_wait_s=0, sleep=lambda _: None).flash(
+            1, target, device, auto_reset=False,
+        )
+        assert result.image_success and result.words_written == len(target) // 2
+        assert result.bytes_read_back == len(target)
+    finally:
+        backend.disconnect()
+
+
+def test_partial_write_failure_retries_remaining_words(sample_esi, monkeypatch):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        device = sample_esi.devices[0]
+        target = SiiGenerator().generate(device).image
+        backend._eeprom[0][:] = bytes(2048)
+        write = backend.eeprom_write
+        calls = []
+
+        def dropped_write(position, word, data):
+            calls.append(word)
+            if len(calls) == 5:
+                raise CommunicationError("write failed halfway")
+            write(position, word, data)
+
+        monkeypatch.setattr(backend, "eeprom_write", dropped_write)
+        result = EepromService(backend, stability_wait_s=0).flash(1, target, device, auto_reset=False)
+        assert result.image_success and result.attempts == 2
+        assert calls.count(calls[0]) == 1  # Completed words are not rolled back or rewritten.
+        assert calls.count(calls[4]) == 2
+    finally:
+        backend.disconnect()
+
+
+def test_permanent_full_read_failure_is_programming_failure(sample_esi, monkeypatch):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        def unreadable(*args):
+            raise CommunicationError("no EEPROM response")
+
+        monkeypatch.setattr(backend, "eeprom_read_block", unreadable)
+        device = sample_esi.devices[0]
+        with pytest.raises(CommunicationError, match="烧录失败.*3 轮.*完整回读失败"):
+            EepromService(backend, stability_wait_s=0, sleep=lambda _: None).flash(
+                1, SiiGenerator().generate(device).image, device, auto_reset=False,
+            )
+    finally:
+        backend.disconnect()
+
+
+def test_reset_failure_is_separate_from_completed_image(sample_esi, monkeypatch):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        def failed_reset(*args):
+            raise CommunicationError("RES write failed")
+
+        monkeypatch.setattr(backend, "register_write", failed_reset)
+        device = sample_esi.devices[0]
+        result = EepromService(backend, stability_wait_s=0, rediscovery_timeout_s=0).flash(
+            1, SiiGenerator().generate(device).image, device,
+        )
+        assert result.image_success and result.reload_verified is False
+        assert "RES write failed" in result.reload_error
+    finally:
+        backend.disconnect()
+
+
+def test_rediscovery_does_not_accept_a_different_slave_at_same_position(sample_esi):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        assert not EepromService(backend, rediscovery_timeout_s=0)._rediscover(1, sample_esi.devices[0])
     finally:
         backend.disconnect()
 
@@ -371,6 +504,11 @@ def test_authoritative_esc_identification_registers() -> None:
         "Generic ESC",
         "GENERIC",
     )
+    for chip_id in (b"\x52\x92", b"\x53\x92", b"\x52\xE2"):
+        assert _chip_from_identification_registers(b"\xAE", chip_id) == (
+            "E252",
+            "LAN9252_COMPATIBLE",
+        )
 
 
 def test_register_catalog_error_counters_and_pdi_registers() -> None:
@@ -397,7 +535,7 @@ def test_register_write_semantics_and_concurrent_change_guard() -> None:
         assert result.verified and result.readback == b"\x12\x34"
         stale = service.prepare_write(1, 0x0100, b"\x56\x78", AccessSemantics.RW, True)
         backend.register_write(1, 0x0100, b"\x00\x00", 2000)
-        with pytest.raises(RuntimeError, match="changed"):
+        with pytest.raises(RuntimeError, match="写入失败：寄存器当前值已变化"):
             service.execute_write(stale)
         with pytest.raises(PermissionError):
             service.prepare_write(1, 0x0000, b"\x01", AccessSemantics.RO, True)

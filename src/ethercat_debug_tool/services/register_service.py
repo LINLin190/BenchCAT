@@ -148,7 +148,7 @@ class RegisterService:
         if plan.semantics is not AccessSemantics.WO:
             current = self.read(plan.position, plan.address, len(plan.target), timeout_us).data
             if current != plan.current:
-                raise RuntimeError("Register changed after editing; refresh the write plan and confirm again")
+                raise RuntimeError("写入失败：寄存器当前值已变化，请重新操作。")
         self.backend.register_write(plan.position, plan.address, plan.target, timeout_us)
         if plan.semantics in {AccessSemantics.WO, AccessSemantics.SELF_CLEARING}:
             return RegisterWriteResult(1, None, None, "FPWR 成功，无法通过静态回读确认语义结果")

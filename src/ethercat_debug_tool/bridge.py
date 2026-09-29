@@ -19,7 +19,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .backends.base import DEFAULT_STATE_TRANSITION_TIMEOUT_US
+from .backends.base import CommunicationError, DEFAULT_STATE_TRANSITION_TIMEOUT_US
 from .backends.mock import MockBackend
 from .backends.pysoem_backend import PysoemBackend
 from .command_registry import CommandSpec, load_command_registry
@@ -28,11 +28,11 @@ from .esi import EsiParser
 from .framing import FrameError, IncrementalFrameReader, write_frame
 from .infrastructure import AuditLogger, default_audit_path
 from .master_state import MasterStateMachine, StaleMasterSession
-from .models import AccessSemantics, BackendMode, EtherCatState, OperationProgress, PdoDirection
+from .models import AccessSemantics, BackendMode, EtherCatState, OperationProgress, PdoDirection, SlaveInfo
 from .services.eeprom_service import EepromService, compare_images
 from .services.register_service import RegisterService, RegisterWritePlan, ResetService
 from .sii.generator import SiiGenerationReport, SiiGenerator
-from .sii.parser import SiiParser, crc8
+from .sii.parser import SiiParser, crc8, inspect_sii_header
 from .worker import EtherCatWorker
 from .worker.ethercat_worker import Priority
 
@@ -255,7 +255,6 @@ class _StoredRegisterPlan:
     plan: RegisterWritePlan
     session_id: int
     slave_signature: tuple[int, int, int, int, int | None]
-    created_at: float
 
 
 class BridgeRuntime:
@@ -277,7 +276,7 @@ class BridgeRuntime:
         self.worker = self._new_worker(self.mode)
         self.cancel = threading.Event()
         self.documents: dict[str, Any] = {}
-        self.targets: dict[str, tuple[bytes, Any]] = {}
+        self.targets: dict[str, tuple[bytes, Any, int, int | None, SlaveInfo | None]] = {}
         self.write_plans: dict[str, _StoredRegisterPlan] = {}
         self._asset_lock = threading.Lock()
         self.profiles = ProfileRegistry()
@@ -486,7 +485,7 @@ class BridgeRuntime:
                     "slave_count": 0,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000),
                     "timed_out": True,
-                    "error": f"网卡 {description} 探测超过 {AUTO_SCAN_ADAPTER_TIMEOUT_S:g} 秒",
+                    "error": f"网卡 {description} 扫描超过 {AUTO_SCAN_ADAPTER_TIMEOUT_S:g} 秒",
                 }
                 attempts.append(attempt)
                 self.writer.event(
@@ -540,26 +539,6 @@ class BridgeRuntime:
             raise ValueError(f"Slave {position} is not available")
         return self.slaves[position - 1]
 
-    def _ensure_slave_init(self, position: int, operation: str) -> tuple[Any, bool]:
-        slave = self._slave(position)
-        if slave.state is EtherCatState.INIT:
-            return slave, False
-        self._progress(
-            OperationProgress(operation, "prepare-init", 0, 1, "正在将目标从站切换到 INIT", True)
-        )
-        slaves = list(self._submit("request_state", position, EtherCatState.INIT, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60))
-        current = next((item for item in slaves if item.position == position), None)
-        if current is None or current.state is not EtherCatState.INIT:
-            actual = current.state.name if current is not None else "未发现"
-            raise RuntimeError(f"从站 {position} 未能进入 INIT，当前状态：{actual}")
-        if self.master_state.states_updated(slaves):
-            self.write_plans.clear()
-        self._publish_snapshot()
-        self._progress(
-            OperationProgress(operation, "prepare-init", 1, 1, "目标从站已进入 INIT", True)
-        )
-        return current, True
-
     def _slave_signature(self, position: int) -> tuple[int, int, int, int, int | None]:
         slave = self._slave(position)
         identity = slave.identity
@@ -570,6 +549,40 @@ class BridgeRuntime:
             int(identity.serial_number),
             slave.configured_address,
         )
+
+    def _assert_eeprom_target(self, position: int, expected: SlaveInfo) -> None:
+        """Reject a changed physical target before starting any EEPROM write."""
+
+        def check(backend: Any) -> None:
+            def register(address: int, size: int) -> bytes:
+                return backend.register_read(position, address, size, 2000)
+
+            register(0x0000, 2)
+            if expected.configured_address is not None and int.from_bytes(register(0x0010, 2), "little") != expected.configured_address:
+                raise RuntimeError("烧录失败：目标从站已变化，请重新扫描。")
+            if expected.pdi_type is not None and register(0x0140, 1)[0] != expected.pdi_type:
+                raise RuntimeError("烧录失败：目标从站已变化，请重新扫描。")
+            if expected.esc_hardware:
+                hardware = bytes.fromhex(expected.esc_hardware)
+                if register(0x0E00, len(hardware)) != hardware:
+                    raise RuntimeError("烧录失败：目标从站已变化，请重新扫描。")
+            if expected.eeprom_prefix or expected.identity_valid:
+                length = 32 if expected.identity_valid else 16
+                actual = backend.eeprom_read_block(position, 0, length).data
+                if expected.eeprom_prefix and actual[:16] != bytes.fromhex(expected.eeprom_prefix):
+                    raise RuntimeError("烧录失败：目标从站 EEPROM 已变化，请重新扫描。")
+                if expected.identity_valid:
+                    identity = expected.identity
+                    stored = b"".join(value.to_bytes(4, "little") for value in (
+                        identity.vendor_id, identity.product_code, identity.revision, identity.serial_number,
+                    ))
+                    if actual[16:32] != stored:
+                        raise RuntimeError("烧录失败：目标从站已变化，请重新扫描。")
+
+        try:
+            self._submit(check)
+        except CommunicationError as exc:
+            raise CommunicationError(f"烧录失败：无法确认目标从站：{exc}") from exc
 
     def _register_definition(
         self, params: dict[str, Any], *, default_position: Any | None = None
@@ -810,18 +823,36 @@ class BridgeRuntime:
                     ):
                         return slaves
                 self._dispatch_serial("stop_cycle", {})
-            current = min((slave.state for slave in self.slaves), default=state)
-            downgrade = {
-                EtherCatState.INIT: {EtherCatState.OP: (EtherCatState.SAFE_OP, EtherCatState.PRE_OP), EtherCatState.SAFE_OP: (EtherCatState.PRE_OP,)},
-                EtherCatState.PRE_OP: {EtherCatState.OP: (EtherCatState.SAFE_OP,)},
-            }
-            for intermediate in downgrade.get(state, {}).get(current, ()):
-                self._submit("request_state", position, intermediate, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60)
             if state is EtherCatState.OP:
-                self._dispatch_serial("start_cycle", {"period_ms": 5, "position": position})
-                return list(self.slaves)
+                try:
+                    slaves = list(
+                        self._submit(
+                            "request_state",
+                            position,
+                            state,
+                            DEFAULT_STATE_TRANSITION_TIMEOUT_US,
+                            timeout=60,
+                            process_data=False,
+                        )
+                    )
+                except BaseException as exc:
+                    try:
+                        current = list(self._submit("read_states"))
+                    except BaseException:
+                        self.master_state.state_read_failed(str(exc))
+                    else:
+                        if self.master_state.states_updated(current):
+                            self.write_plans.clear()
+                    self._publish_snapshot()
+                    raise
+                self.master_state.states_updated(slaves)
+                self._publish_snapshot()
+                return slaves
             try:
-                slaves = list(self._submit("request_state", position, state, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60))
+                slaves = list(self._submit(
+                    "request_state", position, state, DEFAULT_STATE_TRANSITION_TIMEOUT_US,
+                    timeout=60, process_data=False,
+                ))
             except BaseException as exc:
                 try:
                     current = list(self._submit("read_states"))
@@ -832,10 +863,7 @@ class BridgeRuntime:
                         self.write_plans.clear()
                 self._publish_snapshot()
                 raise
-            if state in {EtherCatState.SAFE_OP, EtherCatState.OP}:
-                self.master_state.pdo_configured(slaves)
-            else:
-                self.master_state.states_updated(slaves)
+            self.master_state.states_updated(slaves)
             self._publish_snapshot()
             return slaves
         if method in {"reconfig", "recover"}:
@@ -1018,29 +1046,22 @@ class BridgeRuntime:
                 )
             )
             plan_id = uuid.uuid4().hex
-            now = time.monotonic()
-            for expired_id, stored in list(self.write_plans.items()):
-                if now - stored.created_at > 60:
-                    self.write_plans.pop(expired_id, None)
             if len(self.write_plans) >= MAX_STORED_WRITE_PLANS:
                 self.write_plans.pop(next(iter(self.write_plans)))
             self.write_plans[plan_id] = _StoredRegisterPlan(
                 plan,
                 self.session_id,
                 self._slave_signature(plan.position),
-                now,
             )
-            return {"plan_id": plan_id, "plan": plan, "expires_in_seconds": 60}
+            return {"plan_id": plan_id, "plan": plan}
         if method == "register_execute_write":
             stored = self.write_plans.pop(str(params["plan_id"]), None)
             if stored is None:
-                raise RuntimeError("寄存器写入计划不存在、已执行或已因总线会话变化而失效")
-            if time.monotonic() - stored.created_at > 60:
-                raise RuntimeError("寄存器写入确认已过期，请重新读取并确认")
+                raise RuntimeError("写入失败：本次操作无法继续，请重新操作。")
             if stored.session_id != self.session_id:
-                raise RuntimeError("总线会话已变化，拒绝执行旧寄存器写入计划")
+                raise RuntimeError("写入失败：目标从站连接已变化，请重新操作。")
             if stored.slave_signature != self._slave_signature(stored.plan.position):
-                raise RuntimeError("目标从站身份或配置地址已变化，拒绝执行旧寄存器写入计划")
+                raise RuntimeError("写入失败：目标从站已变化，请重新操作。")
             plan = stored.plan
             details = {
                 "position": plan.position,
@@ -1083,7 +1104,8 @@ class BridgeRuntime:
             self.cancel.clear()
             raw = self._submit(
                 lambda backend: EepromService(backend).read_full(
-                    int(params["position"]), progress=self._progress, cancel=self.cancel.is_set
+                    int(params["position"]), progress=self._progress, cancel=self.cancel.is_set,
+                    capacity=int(params["capacity"]) if params.get("capacity") is not None else None,
                 ),
                 timeout=300,
             )
@@ -1115,28 +1137,31 @@ class BridgeRuntime:
             target_id = str(params.get("target_id") or "")
             if target_id:
                 try:
-                    target, _ = self._get_asset(self.targets, target_id)
+                    target = self._get_asset(self.targets, target_id)[0]
                 except KeyError:
                     pass
                 else:
                     response["comparison"] = compare_images(target, raw)
             return response
         if method == "eeprom_capacity":
+            if self.cycle_running:
+                raise RuntimeError("读取 EEPROM 前必须先停止周期通信")
             size = self._submit(lambda backend: EepromService(backend).read_capacity(int(params["position"])))
             return {"size": size}
         if method == "eeprom_header":
+            if self.cycle_running:
+                raise RuntimeError("读取 EEPROM 前必须先停止周期通信")
             position = int(params["position"])
-            header, size = self._submit(
-                lambda backend: (
-                    EepromService(backend).read_configuration_header(position),
-                    EepromService(backend).read_capacity(position),
-                )
-            )
+            fixed = self._submit(lambda backend: backend.eeprom_read_block(position, 0, 128).data)
+            description = inspect_sii_header(fixed)
+            header = fixed[:16]
             return {
                 "header": header,
                 "config_data": header[:10],
                 "crc_valid": crc8(header) == 0,
-                "size": size,
+                "size": description.capacity,
+                "sii_status": description.status,
+                "sii_error": description.error,
             }
         if method == "eeprom_backup":
             if self.cycle_running:
@@ -1148,6 +1173,7 @@ class BridgeRuntime:
                     position,
                     Path(params["directory"]),
                     self._slave(position),
+                    capacity=int(params["capacity"]) if params.get("capacity") is not None else None,
                     progress=self._progress,
                     cancel=self.cancel.is_set,
                 ),
@@ -1197,6 +1223,8 @@ class BridgeRuntime:
         if method == "sii_generate":
             document = self._get_asset(self.documents, str(params["document_id"]))
             ordinal = int(params["ordinal"])
+            if not 0 <= ordinal < len(document.devices):
+                raise ValueError("请明确选择一个有效的 XML Device")
             device = document.devices[ordinal]
             original_config_data = device.config_data
             if params.get("config_data") is not None:
@@ -1209,7 +1237,13 @@ class BridgeRuntime:
                 device = dataclasses.replace(device, config_data=config_data)
             report: SiiGenerationReport = SiiGenerator().generate(device)
             target_id = uuid.uuid4().hex
-            self._remember_asset(self.targets, target_id, (report.image, device), MAX_STORED_SII_TARGETS)
+            selected_position = int(params["position"]) if params.get("position") else None
+            selected_slave = self._slave(selected_position) if selected_position is not None else None
+            self._remember_asset(
+                self.targets, target_id,
+                (report.image, device, self.session_id, selected_position, selected_slave),
+                MAX_STORED_SII_TARGETS,
+            )
             parsed = SiiParser().parse(report.image)
             category_names = {
                 0x000A: "Strings",
@@ -1265,7 +1299,9 @@ class BridgeRuntime:
             slave = self._slave(position)
             if self.cycle_running:
                 raise RuntimeError("必须先安全停止周期通信")
-            target, device = self._get_asset(self.targets, str(params["target_id"]))
+            target, device, target_session, target_position, target_slave = self._get_asset(self.targets, str(params["target_id"]))
+            if target_session != self.session_id or target_position not in (None, position):
+                raise RuntimeError("烧录失败：目标从站或连接已变化，请重新操作。")
             self.cancel.clear()
             details = {
                 "position": position,
@@ -1277,8 +1313,8 @@ class BridgeRuntime:
                 "revision": device.revision,
             }
             try:
-                _, state_changed = self._ensure_slave_init(position, "eeprom-flash")
-                details["auto_init"] = state_changed
+                self._assert_eeprom_target(position, target_slave or slave)
+                details["auto_init"] = False
                 result = self._submit(
                     lambda backend: EepromService(
                         backend,
@@ -1333,8 +1369,8 @@ class BridgeRuntime:
             path = Path(params["path"])
             details = {"position": position, "path": str(path), "initial_state": slave.state.name}
             try:
-                _, state_changed = self._ensure_slave_init(position, "eeprom-restore")
-                details["auto_init"] = state_changed
+                self._assert_eeprom_target(position, slave)
+                details["auto_init"] = False
                 result = self._submit(
                     lambda backend: EepromService(
                         backend,
