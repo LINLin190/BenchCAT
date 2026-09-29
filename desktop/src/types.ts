@@ -27,7 +27,7 @@ export interface SlaveInfo {
   register_family: string;
   raw_state?: number | null;
   pdi_type?: number | null;
-  pdo_size_source?: "mapped" | "cache" | "sii" | "unknown";
+  pdo_size_source?: "mapped" | "cache" | "sii" | "sm" | "unknown";
   esc_hardware?: string | null;
   esc_hardware_error?: string | null;
   eeprom_status?: number | null;
@@ -36,6 +36,12 @@ export interface SlaveInfo {
   eeprom_prefix_error?: string | null;
   product_type?: string | null;
   product_model?: string | null;
+  sii_status?: "unknown" | "unreadable" | "blank" | "invalid" | "header_valid";
+  sii_error?: string | null;
+  eeprom_capacity?: number | null;
+  identity_valid?: boolean | null;
+  scan_errors?: string[];
+  state_error?: string | null;
 }
 
 export interface WorkbenchStatus {
@@ -159,7 +165,7 @@ export interface EsiDevice {
 }
 
 export const stateLabel = (state: number) =>
-  ({ 0: "NONE", 1: "INIT", 2: "PRE-OP", 3: "BOOT", 4: "SAFE-OP", 8: "OP" })[state] ??
+  ({ 0: "未知", 1: "INIT", 2: "PRE-OP", 3: "BOOT", 4: "SAFE-OP", 8: "OP" })[state] ??
   `0x${state.toString(16).toUpperCase()}`;
 
 export const hex = (value: number, width = 4) =>

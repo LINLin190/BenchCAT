@@ -35,6 +35,8 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
     <Card variant="outlined">
       <CardContent className="ov-card-body">
         <CardHeading title="EEPROM 诊断" />
+        {slave.sii_status === "blank" ? <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>EEPROM 未烧录，可读取原始数据或烧录。</Typography>
+          : slave.sii_error && <Alert severity="warning" sx={{ mb: 1 }}>{slave.sii_error}。仍可读取原始数据或重新烧录。</Alert>}
         <div className="ov-eeprom-pair">
           <section>
             <Typography className="ov-section-title">配置区 · 前 16 字节</Typography>

@@ -54,4 +54,11 @@ describe("overview EEPROM card", () => {
     const html = renderToStaticMarkup(<OverviewEeprom slave={{ ...slave, register_family: "ET1100", chip_model: "ET1100" }} profile="ET1100" />);
     expect(html).not.toContain("Enhanced Link Port 1");
   });
+
+  it("keeps a readable blank image distinct from a read failure", () => {
+    const html = renderToStaticMarkup(<OverviewEeprom slave={{ ...slave, sii_status: "blank", sii_error: "EEPROM 配置区空白", eeprom_prefix: "00 ".repeat(16).trim() }} profile="ET1100" />);
+    expect(html).toContain("EEPROM 未烧录，可读取原始数据或烧录");
+    expect(html).not.toContain("role=\"alert\"");
+    expect(html).not.toContain("无可用 EEPROM 数据");
+  });
 });

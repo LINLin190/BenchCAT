@@ -11,7 +11,7 @@ const DISPLAY_FIELD_NAMES: Record<string, string> = {
   LINK_POL_STRAP_MII: "MII_LinkPOL",
 };
 
-/** ESC hardware identification from the scanned 0x0E00–0x0E07 snapshot. Renders its own card
+/** ESC hardware information from the scanned ESC-specific register snapshot. Renders its own card
  *  so it can be dropped into the overview grid as one grid item. */
 export function EscHardwareCard({ slave, profile, modelControl, modelNote, identity }: { slave: SlaveInfo; profile: string; modelControl?: ReactNode; modelNote?: ReactNode; identity?: ReactNode }) {
   const disclosure = useDisclosure("详情", "esc-hardware-details");
@@ -30,13 +30,17 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
           <Box className="ov-model-control">{modelControl}</Box>
         </>}
         {decoded && <>
-          {/* ET1100 has no Microchip Chip ID at 0x0E02; that word is its own Power-On value. */}
-          <Typography className="section-label">{decoded.family === "ET1100" ? "Product ID" : "Chip ID"}</Typography>
-          <Typography variant="body2" className="mono ov-strong">{decoded.chipId}</Typography>
-          <Typography className="section-label">硅版本</Typography>
-          <Typography variant="body2" className="mono ov-strong">{decoded.revision}</Typography>
-          <Typography className="section-label">Strap</Typography>
-          <Typography variant="body2" className="mono ov-strong">{decoded.strap}</Typography>
+          {decoded.family === "ET1100" ? <>
+            <Typography className="section-label">Power-On Values</Typography>
+            <Typography variant="body2" className="mono ov-strong">{decoded.value}</Typography>
+          </> : <>
+            <Typography className="section-label">Chip ID</Typography>
+            <Typography variant="body2" className="mono ov-strong">{decoded.chipId}</Typography>
+            <Typography className="section-label">硅版本</Typography>
+            <Typography variant="body2" className="mono ov-strong">{decoded.revision}</Typography>
+            <Typography className="section-label">Strap</Typography>
+            <Typography variant="body2" className="mono ov-strong">{decoded.strap}</Typography>
+          </>}
           {eepromSize && <>
             <Typography className="section-label">EEPROM size strap</Typography>
             <Typography variant="body2" className="mono ov-strong">{eepromSize.meaning.replace("EEPROM 容量范围 ", "")}</Typography>
@@ -45,14 +49,14 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
       </Box>
       {modelNote}
       {!decoded ? <Alert severity={slave.esc_hardware_error ? "warning" : "info"} sx={{ mt: 1 }}>
-        {slave.esc_hardware_error ? `读取失败：${slave.esc_hardware_error}` : "当前扫描无可用数据"}
-      </Alert> : <>
+          {slave.esc_hardware_error ? `读取失败：${slave.esc_hardware_error}` : "当前扫描无可用数据"}
+        </Alert> : <>
         <Stack direction="row" gap={1.5} alignItems="baseline" sx={{ mt: 1, flexWrap: "wrap" }}>
-          <Typography variant="body2" color="text.secondary" className="mono">0x0E00–0x0E07</Typography>
+          <Typography variant="body2" color="text.secondary" className="mono">{decoded.family === "ET1100" ? "0x0E00–0x0E01" : "0x0E00–0x0E07"}</Typography>
           <Typography variant="body2" className="mono ov-strong ov-hexline">{decoded.bytes.join(" ")}</Typography>
         </Stack>
 
-        {decoded.mismatch && <Alert severity="warning" sx={{ mt: 0.75 }}>芯片标识与所选型号不一致，请核对 ESC 型号；不会自动切换或重配置。</Alert>}
+        {decoded.mismatch && slave.chip_model !== "E252" && <Alert severity="warning" sx={{ mt: 0.75 }}>芯片标识与所选型号不一致，请核对 ESC 型号；不会自动切换或重配置。</Alert>}
         <span className="ov-card-tail">{disclosure.button}</span>
         <Collapse in={disclosure.expanded} id={disclosure.controls}>
           <TableContainer sx={{ mt: 0.75 }}>
