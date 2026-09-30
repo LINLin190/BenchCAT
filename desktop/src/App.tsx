@@ -330,7 +330,6 @@ function OverviewPage({ slave, status, busy, stateRequestBusy, run, refresh, reg
   const [switchingProfile, setSwitchingProfile] = useState<string>();
   const requestState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: slave?.position ?? 0, state }),
-    `已请求 ${stateLabel(state)}`,
   );
   const repair = (method: "reconfig" | "recover", success: string) => slave && run(
     () => bridgeRequest<{ slaves: SlaveInfo[] }>(method, { position: slave.position }),
@@ -1414,7 +1413,6 @@ export default function App() {
   };
   const requestBusState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: 0, state }),
-    `全部 ${status.slaves.length} 个从站已进入 ${stateLabel(state)}`,
   );
   const selectAdapter = (value: string) => {
     setAdapter(value);
