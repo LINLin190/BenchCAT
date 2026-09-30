@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from ethercat_debug_tool.backends.passive_discovery import PassiveDiscoveryError
-from ethercat_debug_tool.backends.pysoem_backend import PysoemBackend
+from ethercat_debug_tool.backends.pysoem_backend import PysoemBackend, StateRequestFailure
 from ethercat_debug_tool.models import EtherCatState, SlaveIdentity, SlaveInfo
 from ethercat_debug_tool.services.register_service import ResetService
 
@@ -90,6 +92,7 @@ class AlMaster:
         self.transport.apwr(1, 0x0120, b"\x01\x00")
         if not self.manual_state_change:
             self.transport.apwr(1, 0x0120, b"\x12\x00")
+        self.transport.mailbox_ready = True
         self.slaves = [AlSlave(self)]
         return 1
 
@@ -155,8 +158,11 @@ def test_standard_preop_uses_existing_mailbox_without_soem_initialization() -> N
 def test_pending_al_event_does_not_trigger_soem_initialization() -> None:
     device, transport, master = backend(0, 1, mailbox_ready=False)
     transport.pending_al = True
-    with pytest.raises(Exception, match="PDI 尚未读取前一次 AL Control"):
+    with pytest.raises(StateRequestFailure) as caught:
         device.request_state(1, EtherCatState.PRE_OP, 1000, process_data=False)
+    assert caught.value.timed_out
+    assert caught.value.phase == "transition"
+    assert caught.value.target is EtherCatState.PRE_OP
     assert transport.writes == []
     assert master.config_init_calls == []
 
@@ -170,12 +176,241 @@ def test_emulated_state_request_reports_nonzero_al_code() -> None:
 
 
 def test_standard_state_request_reports_rejected_al_write() -> None:
-    device, transport, master = backend(0, 1, mailbox_ready=False)
+    device, transport, master = backend(0, 1)
     master.slaves = [AlSlave(master)]
-    master.slaves[0].write_state = lambda: 0  # type: ignore[method-assign]
-    with pytest.raises(Exception, match="AL Control 写入失败，WKC=0"):
+
+    def reject_write(*args):
+        raise PassiveDiscoveryError("APWR 0x0120 写入失败，WKC=0")
+
+    transport.apwr = reject_write
+    with pytest.raises(StateRequestFailure, match="AL Control 写入失败.*WKC=0"):
         device.request_state(1, EtherCatState.PRE_OP, 1000, process_data=False)
     assert transport.writes == []
+
+
+@pytest.fixture
+def state_clock(monkeypatch):
+    from ethercat_debug_tool.backends import pysoem_backend
+
+    class Clock:
+        now = 0.0
+        on_sleep = staticmethod(lambda: None)
+
+        def sleep(self, seconds):
+            self.now += seconds
+            self.on_sleep()
+
+    clock = Clock()
+    monkeypatch.setattr(pysoem_backend.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(pysoem_backend.time, "sleep", clock.sleep)
+    return clock
+
+
+def test_pending_al_timeout_never_writes_or_initializes(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    transport.pending_al = True
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.SAFE_OP, 2_000_000, process_data=False)
+    assert state_clock.now == pytest.approx(2)
+    assert caught.value.timed_out and caught.value.target is EtherCatState.PRE_OP
+    assert caught.value.sources == {1: EtherCatState.INIT}
+    assert transport.writes == master.config_init_calls == []
+
+
+def test_request_to_current_state_does_not_fill_al_mailbox(state_clock):
+    device, transport, master = backend(0, 1)
+    transport.pending_al = True
+    assert device.request_state(1, EtherCatState.INIT, 2_000_000, process_data=False)[0].state is EtherCatState.INIT
+    assert state_clock.now == 0 and transport.writes == master.config_init_calls == []
+
+
+def test_earlier_pending_request_reaching_target_is_success(state_clock):
+    device, transport, master = backend(0, 1)
+    transport.pending_al = True
+    state_clock.on_sleep = lambda: setattr(transport, "state", 2)
+    assert device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)[0].state is EtherCatState.PRE_OP
+    assert transport.writes == master.config_init_calls == []
+
+
+def test_pending_wait_and_transition_share_deadline(state_clock):
+    device, transport, master = backend(0, 1)
+    transport.pending_al = True
+    state_clock.on_sleep = lambda: setattr(transport, "pending_al", state_clock.now < 1.2)
+    transport.apwr = lambda position, address, data: transport.writes.append(int.from_bytes(data, "little"))
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)
+    assert state_clock.now == pytest.approx(2, abs=0.001)
+    assert caught.value.timed_out and transport.writes == [2]
+    assert master.config_init_calls == []
+
+
+def test_initialization_pending_init_is_consumed_before_preop(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    write = transport.apwr
+
+    def no_firmware(position, address, data):
+        write(position, address, data)
+        transport.pending_al = True
+
+    transport.apwr = no_firmware
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)
+    assert caught.value.timed_out and caught.value.target is EtherCatState.PRE_OP
+    assert state_clock.now == pytest.approx(2, abs=0.001)
+    assert transport.writes == [1] and master.config_init_calls == [True]
+
+
+def test_manual_safeop_requires_preop_and_mapping(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    calls = []
+
+    def config_map():
+        assert master.manual_state_change and transport.state == 2
+        calls.append("map")
+        return 0
+
+    master.config_map = config_map
+    assert device.request_state(1, EtherCatState.SAFE_OP, 2_000_000, process_data=False)[0].state is EtherCatState.SAFE_OP
+    assert transport.writes == [1, 2, 4] and calls == ["map"]
+    assert device._mapped and master.manual_state_change is False
+
+
+@pytest.mark.parametrize("target", [EtherCatState.PRE_OP, EtherCatState.SAFE_OP])
+def test_native_discovery_failure_waits_for_pending_state_request(state_clock, target):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+
+    def incomplete_init(*args, **kwargs):
+        master.config_init_calls.append(master.manual_state_change)
+        transport.apwr(1, 0x0120, b"\x01\x00")
+        transport.pending_al = True
+        return 0
+
+    master.config_init = incomplete_init
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, target, 2_000_000, process_data=False)
+    assert caught.value.timed_out
+    assert caught.value.initial_states == {1: EtherCatState.INIT}
+    assert caught.value.observed == {1: (1, 0)}
+    assert state_clock.now == pytest.approx(2, abs=0.001)
+    assert transport.writes == [1] and master.config_init_calls == [True]
+
+
+def test_native_discovery_failure_without_pending_request_is_not_timeout(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    master.config_init = lambda *args, **kwargs: 0
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)
+    assert not caught.value.timed_out
+    assert state_clock.now == 0 and transport.writes == []
+
+
+def test_native_discovery_failure_preserves_al_rejection(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+
+    def rejected_init(*args, **kwargs):
+        transport.pending_al = True
+        transport.state, transport.code = 0x11, 0x0016
+        return 0
+
+    master.config_init = rejected_init
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)
+    assert not caught.value.timed_out
+    assert caught.value.observed == {1: (0x11, 0x0016)}
+    assert state_clock.now == 0 and transport.writes == []
+
+
+def test_manual_state_uses_live_registers_over_stale_native_state(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    master.slaves = [AlSlave(master)]
+    master.slaves[0].state = 0
+    master.read_state = lambda: pytest.fail("reading stale native state")
+    assert device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)[0].state is EtherCatState.PRE_OP
+    assert master.config_init_calls == [] and transport.writes == [2]
+
+
+def test_manual_safeop_downgrade_does_not_reconfigure_bus(state_clock):
+    device, transport, master = backend(0, 8)
+    assert device.request_state(1, EtherCatState.SAFE_OP, 2_000_000, process_data=False)[0].state is EtherCatState.SAFE_OP
+    assert master.config_init_calls == [] and transport.writes == [4]
+
+
+def test_manual_safeop_preop_failure_stops_before_mapping(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    write = transport.apwr
+
+    def leave_preop_pending(position, address, data):
+        if int.from_bytes(data, "little") == 2:
+            transport.writes.append(2)
+            transport.pending_al = True
+        else:
+            write(position, address, data)
+
+    transport.apwr = leave_preop_pending
+    master.config_map = lambda: pytest.fail("mapping before PRE-OP")
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.SAFE_OP, 2_000_000, process_data=False)
+    assert caught.value.target is EtherCatState.PRE_OP and caught.value.timed_out
+    assert transport.writes == [1, 2]
+
+
+def test_initialization_consumes_request_budget(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    initialize = master.config_init
+
+    def slow_init(*args, **kwargs):
+        state_clock.now += 2.1
+        return initialize(*args, **kwargs)
+
+    master.config_init = slow_init
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)
+    assert caught.value.phase == "initialization" and caught.value.timed_out
+    assert transport.writes == [1] and master.manual_state_change is False
+
+
+def test_state_read_failure_stops_before_any_write(state_clock):
+    device, transport, master = backend(0, 1)
+    read = transport.aprd
+
+    def fail_read(position, address, size):
+        if address == 0x0130:
+            raise PassiveDiscoveryError("no response")
+        return read(position, address, size)
+
+    transport.aprd = fail_read
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)
+    assert caught.value.read_failed and not caught.value.timed_out
+    assert transport.writes == master.config_init_calls == []
+
+
+@pytest.mark.parametrize("mapping_fails", [False, True])
+def test_native_configuration_waits_use_remaining_budget_and_restore_settings(state_clock, mapping_fails):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    original = dict(ret=2000, safe=20_000, eeprom=20_000, tx_mailbox=20_000, rx_mailbox=700_000, state=9_000_000)
+    timeouts = SimpleNamespace(**original)
+    device._pysoem = SimpleNamespace(settings=SimpleNamespace(timeouts=timeouts))
+    initialize = master.config_init
+
+    def slow_init(*args, **kwargs):
+        assert timeouts.state <= 2_000_000
+        state_clock.now += 1.4
+        return initialize(*args, **kwargs)
+
+    def config_map():
+        assert timeouts.state == timeouts.rx_mailbox == 600_000
+        if mapping_fails:
+            raise RuntimeError("configuration failed")
+        state_clock.now += 0.7
+        return 0
+
+    master.config_init, master.config_map = slow_init, config_map
+    with pytest.raises(StateRequestFailure) as caught:
+        device.request_state(1, EtherCatState.SAFE_OP, 2_000_000, process_data=False)
+    assert caught.value.phase == "pdo_mapping" and caught.value.timed_out is not mapping_fails
+    assert vars(timeouts) == original and master.manual_state_change is False
+    assert transport.writes == [1, 2] and device._mapped is not mapping_fails
 
 
 def test_direct_op_reports_slave_rejection() -> None:

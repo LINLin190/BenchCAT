@@ -9,7 +9,13 @@ from typing import Any
 
 import pytest
 
-from ethercat_debug_tool.backends.pysoem_backend import AlControlWriteError, StateTransitionTimeoutError
+from ethercat_debug_tool.backends.pysoem_backend import (
+    AlControlWriteError,
+    StateRegisterReadError,
+    StateRequestFailure,
+    StateTransitionTimeoutError,
+    _StateRequest,
+)
 from ethercat_debug_tool.bridge import (
     BridgeRuntime,
     EepromExclusiveError,
@@ -829,7 +835,7 @@ def test_state_request_failure_reports_al_error_without_raw_transport_detail(mon
         assert "SAFE-OP" in message
         assert "AL 状态 0x0001" not in message
         assert "APWR" not in message and "WKC" not in message
-        assert "状态请求未得到确认" in message
+        assert "状态请求写入失败" in message
         if al_code:
             assert "AL 错误码 0x0011" in message
         else:
@@ -854,6 +860,105 @@ def test_state_request_timeout_uses_actual_wait_and_transition(monkeypatch):
         monkeypatch.setattr(runtime, "_submit", time_out)
         with pytest.raises(StateRequestDisplayError) as caught:
             runtime.dispatch("request_state", {"position": 1, "state": int(EtherCatState.PRE_OP)})
-        assert str(caught.value) == "从站 1：等待 INIT→PRE-OP；转换 2000 ms 后超时"
+        assert str(caught.value) == "从站 1：等待 INIT→PRE-OP；转换 2000 ms 后超时；当前为 INIT"
+    finally:
+        runtime.shutdown()
+
+
+@pytest.mark.parametrize("phase,cause,requested,step,current,expected", [
+    ("transition", StateTransitionTimeoutError("pending PDI"), 4, 2, 1,
+     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 INIT"),
+    ("transition", StateTransitionTimeoutError("target state not reached"), 4, 4, 2,
+     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 PRE-OP"),
+    ("pdo_mapping", StateTransitionTimeoutError("mapping deadline reached"), 4, 4, 2,
+     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 PRE-OP"),
+    ("initialization", StateTransitionTimeoutError("initialization deadline reached"), 4, 2, 1,
+     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 INIT"),
+    ("transition", StateTransitionTimeoutError("pending PDI"), 2, 2, 1,
+     "从站 1：等待 INIT→PRE-OP；转换 2000 ms 后超时；当前为 INIT"),
+    ("initialization", RuntimeError("native initialization failed"), 4, 2, 1,
+     "从站 1：请求 SAFE-OP 未完成；设备初始化未完成，当前为 INIT"),
+    ("pdo_mapping", RuntimeError("config_map failed"), 4, 4, 2,
+     "从站 1：请求 SAFE-OP 未完成；PDO 配置未完成，当前为 PRE-OP"),
+    ("transition", StateRegisterReadError("APRD WKC=0"), 2, 2, 1,
+     "从站 1：请求 PRE-OP 未完成；状态转换所需的设备信息读取失败"),
+    ("refresh", RuntimeError("state read failed"), 2, 2, 2,
+     "从站 1：已进入 PRE-OP；设备状态信息刷新未完成"),
+])
+def test_manual_state_failure_reports_actual_stage(monkeypatch, phase, cause, requested, step, current, expected):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        submit = runtime._submit
+        request = _StateRequest(2_000_000, time.monotonic() + 2, EtherCatState(step))
+        request.initial_states = {1: EtherCatState.INIT}
+        request.observed = {1: (current, 0)}
+        request.begin(phase, EtherCatState(step), (1,))
+
+        def fail_request(operation, *args, **kwargs):
+            if operation == "request_state":
+                raise StateRequestFailure(request, cause)
+            if operation == "read_states":
+                return [replace(slave, state=EtherCatState(current), raw_state=current, al_status=0)
+                        for slave in submit(operation, *args, **kwargs)]
+            return submit(operation, *args, **kwargs)
+
+        monkeypatch.setattr(runtime, "_submit", fail_request)
+        with pytest.raises(StateRequestDisplayError) as caught:
+            runtime.dispatch("request_state", {"position": 1, "state": requested})
+        assert str(caught.value) == expected
+    finally:
+        runtime.shutdown()
+
+
+@pytest.mark.parametrize("refresh_fails", [False, True])
+def test_manual_state_failure_keeps_al_code_when_later_refresh_clears_or_fails(monkeypatch, refresh_fails):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        submit = runtime._submit
+        request = _StateRequest(2_000_000, time.monotonic() + 2, EtherCatState.PRE_OP)
+        request.observed = {1: (1, 0)}
+        request.begin("transition", EtherCatState.PRE_OP, (1,))
+        request.observed[1] = (0x11, 0x0016)
+
+        def fail_request(operation, *args, **kwargs):
+            if operation == "request_state":
+                raise StateRequestFailure(request, RuntimeError("slave AL error"))
+            if operation == "read_states":
+                if refresh_fails:
+                    raise RuntimeError("no state response")
+                return [replace(slave, state=EtherCatState.INIT, raw_state=1, al_status=0)
+                        for slave in submit(operation, *args, **kwargs)]
+            return submit(operation, *args, **kwargs)
+
+        monkeypatch.setattr(runtime, "_submit", fail_request)
+        with pytest.raises(StateRequestDisplayError) as caught:
+            runtime.dispatch("request_state", {"position": 1, "state": 2})
+        assert "AL 错误码 0x0016" in str(caught.value)
+        assert "AL 状态" not in str(caught.value)
+    finally:
+        runtime.shutdown()
+
+
+def test_manual_state_request_keeps_worker_failure_as_service_error(monkeypatch):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+
+        def stall(operation, *args, **kwargs):
+            assert operation == "request_state"
+            runtime._worker_stalled = True
+            raise TimeoutError("native call did not return")
+
+        monkeypatch.setattr(runtime, "_submit", stall)
+        with pytest.raises(TimeoutError) as caught:
+            runtime.dispatch("request_state", {"position": 1, "state": 2})
+        error = _structured_error(
+            caught.value, request_id=1, method="request_state",
+            spec=runtime.registry.require("request_state"), session_id=runtime.session_id,
+        )
+        assert error["code"] == "WORKER_STALLED"
+        assert "通信服务无响应" in error["user_message"]
     finally:
         runtime.shutdown()

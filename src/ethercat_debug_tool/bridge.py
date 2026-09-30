@@ -23,7 +23,12 @@ from typing import Any
 from .al_status import al_status_info
 from .backends.base import DEFAULT_STATE_TRANSITION_TIMEOUT_US, CommunicationError
 from .backends.mock import MockBackend
-from .backends.pysoem_backend import AlControlWriteError, PysoemBackend, StateTransitionTimeoutError
+from .backends.pysoem_backend import (
+    AlControlWriteError,
+    PysoemBackend,
+    StateRequestFailure,
+    StateTransitionTimeoutError,
+)
 from .command_registry import CommandSpec, load_command_registry
 from .esc_profiles.profiles import ProfileRegistry
 from .esi import EsiParser
@@ -892,6 +897,9 @@ class BridgeRuntime:
                     timeout=60, process_data=False,
                 ))
             except BaseException as exc:
+                if self._worker_stalled:
+                    # Keep the communication-service failure and its restart guidance.
+                    raise
                 try:
                     current = list(self._submit("read_states"))
                 except BaseException:
@@ -900,12 +908,25 @@ class BridgeRuntime:
                     if self.master_state.states_updated(current):
                         self.write_plans.clear()
                 self._publish_snapshot()
+                failure = exc if isinstance(exc, StateRequestFailure) else None
+                if current is None and failure is not None:
+                    # Use only observations made during this request, never stale cached states.
+                    current = [
+                        dataclasses.replace(
+                            slave, state=EtherCatState(failure.observed[slave.position][0] & 0x0F),
+                            raw_state=failure.observed[slave.position][0],
+                            al_status=failure.observed[slave.position][1], state_error=None,
+                        )
+                        for slave in self.slaves if slave.position in failure.observed
+                    ] or None
                 if current is not None:
                     failed = [
                         slave for slave in current
-                        if (position is None or slave.position == position)
+                        if (slave.position == failure.position if failure is not None and failure.position is not None
+                            else position is None or slave.position == position)
                         and slave.state_error is None
-                        and (slave.state is not state or (slave.raw_state or 0) & 0x10 or slave.al_status)
+                        and (failure is not None or slave.state is not state
+                             or (slave.raw_state or 0) & 0x10 or slave.al_status)
                     ]
                     if failed:
                         write_unconfirmed = isinstance(exc, AlControlWriteError)
@@ -913,15 +934,51 @@ class BridgeRuntime:
 
                         def describe(slave: SlaveInfo) -> str:
                             source = starting_states.get(slave.position, slave.state)
-                            transition = f"{source.label}→{state.label}"
-                            if write_unconfirmed:
-                                outcome = f"从站 {slave.position}：{transition} 状态请求未得到确认"
+                            step = state
+                            al_code = slave.al_status
+                            if failure is not None:
+                                source = failure.sources.get(slave.position, source)
+                                step = failure.target
+                                al_code = failure.observed.get(slave.position, (0, 0))[1] or al_code
+                            prefix = f"从站 {slave.position}："
+                            if failure is not None:
+                                duration = failure.timeout_us // 1000
+                                if failure.phase == "refresh":
+                                    outcome = f"{prefix}已进入 {step.label}；设备状态信息刷新未完成"
+                                elif failure.timed_out:
+                                    initial = failure.initial_states.get(
+                                        slave.position, starting_states.get(slave.position, source),
+                                    )
+                                    outcome = (f"{prefix}等待 {initial.label}→{state.label}；"
+                                               f"转换 {duration} ms 后超时；当前为 {slave.state.label}")
+                                elif failure.read_failed:
+                                    outcome = f"{prefix}请求 {state.label} 未完成；状态转换所需的设备信息读取失败"
+                                elif failure.phase in {"initialization", "pdo_mapping", "acknowledgement"}:
+                                    action = {
+                                        "initialization": "设备初始化",
+                                        "pdo_mapping": "PDO 配置",
+                                        "acknowledgement": "清除原有状态错误",
+                                    }[failure.phase]
+                                    outcome = (f"{prefix}请求 {state.label} 未完成；{action}未完成，"
+                                               f"当前为 {slave.state.label}")
+                                elif failure.write_failed:
+                                    outcome = (f"{prefix}请求 {state.label} 未完成；状态请求写入失败，"
+                                               f"当前为 {slave.state.label}")
+                                elif failure.phase == "transition" and al_code:
+                                    outcome = f"{prefix}未进入 {step.label}，当前为 {slave.state.label}"
+                                else:
+                                    outcome = f"{prefix}请求 {state.label} 未完成，当前为 {slave.state.label}"
+                            elif write_unconfirmed:
+                                outcome = f"{prefix}请求 {state.label} 未完成；状态请求写入失败，当前为 {slave.state.label}"
                             elif timed_out:
-                                outcome = f"从站 {slave.position}：等待 {transition}；转换 {MANUAL_STATE_REQUEST_TIMEOUT_US // 1000} ms 后超时"
+                                transition = f"{starting_states.get(slave.position, source).label}→{state.label}"
+                                outcome = (f"{prefix}等待 {transition}；"
+                                           f"转换 {MANUAL_STATE_REQUEST_TIMEOUT_US // 1000} ms 后超时；"
+                                           f"当前为 {slave.state.label}")
                             else:
-                                outcome = f"从站 {slave.position}：{transition} 未完成，当前为 {slave.state.label}"
-                            if slave.al_status:
-                                return f"{outcome}；AL 错误码 0x{slave.al_status:04X}（{al_status_info(slave.al_status).name}）"
+                                outcome = f"{prefix}请求 {state.label} 未完成，当前为 {slave.state.label}"
+                            if al_code:
+                                return f"{outcome}；AL 错误码 0x{al_code:04X}（{al_status_info(al_code).name}）"
                             return outcome
 
                         raise StateRequestDisplayError("；".join(describe(slave) for slave in failed)) from exc

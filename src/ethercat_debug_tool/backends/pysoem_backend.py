@@ -4,7 +4,8 @@ import ctypes.util
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import replace
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ..al_status import al_status_info
@@ -44,6 +45,61 @@ class AlControlWriteError(CommunicationError):
 
 class StateTransitionTimeoutError(CommunicationError):
     """The requested AL state was not reached before the transition deadline."""
+
+
+class StateRegisterReadError(CommunicationError):
+    """A state-control register could not be read."""
+
+
+@dataclass(slots=True)
+class _StateRequest:
+    timeout_us: int
+    deadline: float
+    target: EtherCatState
+    phase: str = "read"
+    position: int | None = None
+    initial_states: dict[int, EtherCatState] = field(default_factory=dict)
+    sources: dict[int, EtherCatState] = field(default_factory=dict)
+    observed: dict[int, tuple[int, int]] = field(default_factory=dict)
+
+    def begin(self, phase: str, target: EtherCatState, positions: tuple[int, ...]) -> None:
+        self.phase, self.target = phase, target
+        self.position = positions[0] if len(positions) == 1 else None
+        self.sources = {
+            position: EtherCatState(self.observed[position][0] & 0x0F)
+            for position in positions if position in self.observed
+        }
+
+    def remaining_us(self) -> int:
+        remaining = int((self.deadline - time.monotonic()) * 1_000_000)
+        if remaining <= 0:
+            raise StateTransitionTimeoutError(f"State request deadline reached during {self.phase}")
+        return remaining
+
+
+class StateRequestFailure(CommunicationError):
+    """Keep the failed stage and its AL observations across a later refresh."""
+
+    def __init__(self, request: _StateRequest, cause: Exception) -> None:
+        observed = ", ".join(
+            f"slave {position}: state=0x{raw:04X}, code=0x{code:04X}"
+            for position, (raw, code) in request.observed.items()
+        )
+        elapsed_ms = int((time.monotonic() - request.deadline) * 1000 + request.timeout_us / 1000)
+        super().__init__(
+            f"{request.phase} ({request.target.label}), slave={request.position}, "
+            f"budget={request.timeout_us // 1000} ms, elapsed={elapsed_ms} ms; {observed}: {cause}"
+        )
+        self.phase = request.phase
+        self.position = request.position
+        self.target = request.target
+        self.initial_states = dict(request.initial_states)
+        self.sources = dict(request.sources)
+        self.observed = dict(request.observed)
+        self.timeout_us = request.timeout_us
+        self.timed_out = isinstance(cause, StateTransitionTimeoutError)
+        self.read_failed = isinstance(cause, StateRegisterReadError)
+        self.write_failed = isinstance(cause, AlControlWriteError)
 
 
 def _decode_adapter_description(value: object) -> str:
@@ -203,23 +259,56 @@ class PysoemBackend:
             raise CommunicationError(f"Slave {position} is not available")
         return master.slaves[position - 1]
 
-    def _config_init(self, *, manual_state_change: bool = False) -> int:
+    def _config_init(
+        self, *, manual_state_change: bool = False, _request: _StateRequest | None = None
+    ) -> int:
         master = self._require_master()
+        if _request is not None:
+            positions = tuple(info.position for info in self._slaves)
+            _request.begin("initialization", EtherCatState.PRE_OP, positions)
+            for position in positions:
+                _request.position = position
+                config = self._read_passive_register(position, 0x0141, 1)
+                if config & 1:
+                    # config_init broadcasts INIT and cannot preserve emulated states.
+                    raise CommunicationError("总线含设备仿真从站，不能执行广播初始化")
+                _request.begin("transition", EtherCatState.PRE_OP, (position,))
+                self._wait_al_control_ready(position, config, _request.deadline, _request)
+            _request.begin("initialization", EtherCatState.PRE_OP, positions)
+            _request.remaining_us()
         if not manual_state_change:
             return int(master.config_init(False, release_gil=True))
         previous = master.manual_state_change
         try:
             master.manual_state_change = True
-            return int(master.config_init(False, release_gil=True))
+            with self._configuration_timeouts(_request):
+                count = int(master.config_init(False, release_gil=True))
+            if _request is not None:
+                _request.remaining_us()
+                if count != len(self._slaves) or count <= 0:
+                    # Native discovery can return early after issuing INIT. A
+                    # pending PDI request still needs its original deadline.
+                    for position in positions:
+                        raw, code = self._read_al(position, _request)
+                        if not (raw & 0x10 or code):
+                            self._wait_al_control_ready(
+                                position, self._read_passive_register(position, 0x0141, 1),
+                                _request.deadline, _request,
+                            )
+            return count
         finally:
             master.manual_state_change = previous
 
-    def _ensure_operational(self, *, manual_state_change: bool = False) -> Any:
+    def _ensure_operational(
+        self, *, manual_state_change: bool = False, _request: _StateRequest | None = None,
+    ) -> Any:
         master = self._require_master()
         if master.slaves:
             return master
         try:
-            count = self._config_init(manual_state_change=manual_state_change)
+            count = self._config_init(manual_state_change=manual_state_change, _request=_request)
+        except (StateTransitionTimeoutError, StateRegisterReadError):
+            raise
         except Exception as exc:
             raise CommunicationError(f"初始化从站运行通道失败：{exc}") from exc
         if count != len(self._slaves) or count <= 0:
@@ -227,6 +316,26 @@ class PysoemBackend:
         self._mapping_attempted = False
         self._mapped = False
         return master
+
+    @contextmanager
+    def _configuration_timeouts(self, request: _StateRequest | None):
+        if request is None or self._pysoem is None:
+            yield
+            return
+        # Native configuration is synchronous. Bound its individual waits and
+        # check the shared deadline when it returns; never abandon a running call.
+        remaining = request.remaining_us()
+        timeouts = self._pysoem.settings.timeouts
+        original = {name: getattr(timeouts, name) for name in (
+            "ret", "safe", "eeprom", "tx_mailbox", "rx_mailbox", "state",
+        )}
+        try:
+            for name, value in original.items():
+                setattr(timeouts, name, min(value, remaining))
+            yield
+        finally:
+            for name, value in original.items():
+                setattr(timeouts, name, value)
 
     def _serial(self, slave: Any) -> int:
         try:
@@ -600,9 +709,9 @@ class PysoemBackend:
         try:
             data, wkc = self._passive.aprd(position, address, size)
         except PassiveDiscoveryError as exc:
-            raise CommunicationError(f"从站 {position} 寄存器 0x{address:04X} 读取失败：{exc}") from exc
+            raise StateRegisterReadError(f"从站 {position} 寄存器 0x{address:04X} 读取失败：{exc}") from exc
         if wkc != 1 or len(data) != size:
-            raise CommunicationError(f"从站 {position} 寄存器 0x{address:04X} 读取 WKC 无效")
+            raise StateRegisterReadError(f"从站 {position} 寄存器 0x{address:04X} 读取 WKC 无效")
         return int.from_bytes(data, "little")
 
     def _sm_info(self, info: SlaveInfo) -> SlaveInfo:
@@ -616,46 +725,77 @@ class PysoemBackend:
                        pdo_size_source="sm")
 
     def _mailbox_ready(self, position: int) -> bool:
-        assert self._passive is not None
-        try:
-            data, wkc = self._passive.aprd(position, 0x0800, 16)
-        except PassiveDiscoveryError as exc:
-            raise CommunicationError(f"从站 {position} 邮箱 SM 读取失败：{exc}") from exc
-        if wkc != 1 or len(data) != 16:
-            raise CommunicationError(f"从站 {position} 邮箱 SM 读取 WKC 无效")
+        data = self._read_passive_register(position, 0x0800, 16).to_bytes(16, "little")
         return all(
             int.from_bytes(data[offset + 2:offset + 4], "little") > 0 and data[offset + 6] & 1
             for offset in (0, 8)
         )
 
+    def _read_al(self, position: int, request: _StateRequest | None = None) -> tuple[int, int]:
+        if request is not None:
+            request.position = position
+            request.remaining_us()
+        raw = self._read_passive_register(position, 0x0130, 2)
+        code = self._read_passive_register(position, 0x0134, 2)
+        if (raw & 0x0F) not in {1, 2, 3, 4, 8}:
+            raise StateRegisterReadError(f"从站 {position} AL status 0x{raw:04X} 无效")
+        if request is not None:
+            request.initial_states.setdefault(position, EtherCatState(raw & 0x0F))
+            request.sources.setdefault(position, EtherCatState(raw & 0x0F))
+            request.observed[position] = (raw, code)
+        return raw, code
+
+    def _wait_al_control_ready(
+        self, position: int, esc_config: int, deadline: float, request: _StateRequest | None = None,
+        *, expected: EtherCatState | None = None,
+    ) -> bool:
+        if esc_config & 1:
+            return True
+        # AL Control is a PDI mailbox. Only the PDI can release its pending event.
+        while self._read_passive_register(position, 0x0220, 2) & 1:
+            raw, code = self._read_al(position, request)
+            if expected is not None and raw == int(expected) and code == 0:
+                return False  # An earlier request already reached the desired state.
+            if time.monotonic() >= deadline:
+                raise StateTransitionTimeoutError(
+                    f"从站 {position} AL Control 等待 PDI 处理超时；"
+                    f"AL status 0x{raw:04X}, AL status code 0x{code:04X}"
+                )
+            time.sleep(min(0.001, max(0, deadline - time.monotonic())))
+        return True
+
     def _write_al_control(
-        self, position: int, control: int, expected: EtherCatState, timeout_us: int, esc_config: int
+        self, position: int, control: int, expected: EtherCatState, timeout_us: int, esc_config: int,
+        *, _request: _StateRequest | None = None,
     ) -> None:
         assert self._passive is not None
+        deadline = _request.deadline if _request is not None else time.monotonic() + timeout_us / 1_000_000
+        if _request is not None:
+            _request.begin("acknowledgement" if control & 0x10 else "transition", expected, (position,))
+        if not self._wait_al_control_ready(
+            position, esc_config, deadline, _request, expected=None if control & 0x10 else expected,
+        ):
+            return
+        if _request is not None:
+            _request.remaining_us()
         try:
             self._passive.apwr(position, 0x0120, control.to_bytes(2, "little"))
         except PassiveDiscoveryError as exc:
-            pending = ""
-            if (esc_config & 1) == 0:
-                try:
-                    if self._read_passive_register(position, 0x0220, 2) & 1:
-                        pending = "；PDI 尚未读取前一次 AL Control（0x0220[0]=1）"
-                except CommunicationError:
-                    pass
-            raise AlControlWriteError(f"从站 {position} AL Control 写入失败：{exc}{pending}") from exc
-        deadline = time.monotonic() + timeout_us / 1_000_000
+            raise AlControlWriteError(f"从站 {position} AL Control 写入失败：{exc}") from exc
         while True:
-            raw = self._read_passive_register(position, 0x0130, 2)
-            code = self._read_passive_register(position, 0x0134, 2)
-            if raw == int(expected) and ((esc_config & 1) == 0 or code == 0):
+            raw, code = self._read_al(position, _request)
+            if raw == int(expected) and code == 0:
                 return
+            detail = (
+                f"从站 {position} 请求 {expected.label} 失败："
+                f"AL status 0x{raw:04X}, AL status code 0x{code:04X}, "
+                f"ESC configuration 0x{esc_config:02X} (device emulation {esc_config & 1})"
+            )
+            if not control & 0x10 and (raw & 0x10 or code):
+                raise CommunicationError(detail)
             if time.monotonic() >= deadline:
-                raise StateTransitionTimeoutError(
-                    f"从站 {position} 请求 {expected.label} 失败："
-                    f"AL status 0x{raw:04X}, AL status code 0x{code:04X}, "
-                    f"ESC configuration 0x{esc_config:02X} (device emulation {esc_config & 1})"
-                )
-            time.sleep(0.001)
+                raise StateTransitionTimeoutError(detail)
+            time.sleep(min(0.001, max(0, deadline - time.monotonic())))
 
     def request_state(
         self,
@@ -664,73 +804,124 @@ class PysoemBackend:
         timeout_us: int,
         *,
         process_data: bool = True,
+        _request: _StateRequest | None = None,
     ) -> list[SlaveInfo]:
+        if not process_data and _request is None:
+            request = _StateRequest(timeout_us, time.monotonic() + timeout_us / 1_000_000, state)
+            try:
+                return self.request_state(position, state, timeout_us, process_data=False, _request=request)
+            except Exception as exc:
+                raise StateRequestFailure(request, exc) from exc
         master = self._require_master()
+        if _request is not None and (self._passive is None or not self._slaves):
+            raise CommunicationError("未发现可用于状态请求的从站")
         configurations: dict[int, int] = {}
         if self._passive is not None and self._slaves:
             positions = range(1, len(self._slaves) + 1) if position is None else (position,)
             positions = tuple(positions)
+            if _request is not None:
+                _request.begin("read", state, positions)
             for target_position in positions:
                 if not 1 <= target_position <= len(self._slaves):
                     raise CommunicationError(f"从站 {target_position} 不可用")
+                if _request is not None:
+                    self._read_al(target_position, _request)
                 configurations[target_position] = self._read_passive_register(target_position, 0x0141, 1)
+            if _request is not None:
+                if all(_request.observed[index] == (int(state), 0) for index in positions):
+                    return self._state_request_result(state, _request)
+                for index in positions:
+                    step = EtherCatState.PRE_OP if state is EtherCatState.SAFE_OP and (
+                        _request.observed[index][0] & 0x0F
+                    ) == int(EtherCatState.INIT) else state
+                    _request.begin("transition", step, (index,))
+                    self._wait_al_control_ready(
+                        index, configurations[index], _request.deadline, _request, expected=state,
+                    )
+                    _request.remaining_us()
+                if all(_request.observed[index] == (int(state), 0) for index in positions):
+                    return self._state_request_result(state, _request)
             emulated = all(config & 1 for config in configurations.values())
             direct_preop = (
                 not process_data and state is EtherCatState.PRE_OP
                 and all(
                     config & 1 or self._mailbox_ready(index)
-                    # A pending AL event must be handled by the PDI before
-                    # config_init can issue its own INIT request.
-                    or self._read_passive_register(index, 0x0220, 2) & 1
                     for index, config in configurations.items()
                 )
             )
             direct = (
                 emulated and (not process_data or state in (EtherCatState.INIT, EtherCatState.PRE_OP))
-            ) or (not process_data and (state in (EtherCatState.INIT, EtherCatState.OP) or direct_preop))
+            ) or (not process_data and (
+                state in (EtherCatState.INIT, EtherCatState.OP) or direct_preop
+                or state is EtherCatState.SAFE_OP and all(
+                    (_request.observed[index][0] & 0x0F) in (4, 8) for index in positions
+                )
+            ))
             if direct:
                 if state in (EtherCatState.INIT, EtherCatState.PRE_OP):
                     self._invalidate_mapping()
                 for target_position in positions:
                     config = configurations[target_position]
+                    if _request is not None and _request.observed[target_position] == (int(state), 0):
+                        continue
                     if (config & 1) == 0 and state in (EtherCatState.INIT, EtherCatState.PRE_OP):
                         raw = self._read_passive_register(target_position, 0x0130, 2)
                         if raw & 0x10:
                             self._write_al_control(
                                 target_position, (raw & 0x0F) | 0x10,
-                                EtherCatState(raw & 0x0F), timeout_us, config,
+                                EtherCatState(raw & 0x0F), timeout_us, config, _request=_request,
                             )
                     self._write_al_control(
-                        target_position, int(state), state, timeout_us, config
+                        target_position, int(state), state, timeout_us, config, _request=_request,
                     )
-                return self.read_states()
-            if not master.slaves and not process_data and any(config & 1 for config in configurations.values()):
-                raise CommunicationError("混合设备仿真与正常从站时，SOEM 广播初始化会改变仿真从站状态")
-            if not master.slaves and not process_data and any(
-                self._read_passive_register(index, 0x0141, 1) & 1
-                for index in range(1, len(self._slaves) + 1) if index not in configurations
-            ):
-                raise CommunicationError("总线含设备仿真从站，SOEM 广播初始化会改变其状态")
-        self._ensure_operational(manual_state_change=True)
+                return self._state_request_result(state, _request)
+        self._ensure_operational(manual_state_change=True, _request=_request)
         target = master if position is None else self._slave(position)
-        master.read_state()
-        if any((int(s.state) & 0x0F) in (0, 1) for s in master.slaves):
+        if _request is None:
+            master.read_state()
+        in_init = (
+            any((raw & 0x0F) == 1 for raw, _code in _request.observed.values())
+            if _request is not None else any((int(s.state) & 0x0F) in (0, 1) for s in master.slaves)
+        )
+        if in_init:
             self._invalidate_mapping()
         # Direct OP is an AL-control operation; do not turn its ErrorInd bit into
         # a PREOP acknowledgement cycle before writing the requested state.
         if process_data or state is not EtherCatState.OP:
             for index, slave in enumerate(master.slaves, 1):
                 if (position is None or index == position) and not (configurations.get(index, 0) & 1):
-                    self._acknowledge_error(slave, state, timeout_us)
+                    if _request is not None:
+                        raw, _code = self._read_al(index, _request)
+                        if raw & 0x10:
+                            self._write_al_control(
+                                index, (raw & 0x0F) | 0x10, EtherCatState(raw & 0x0F),
+                                timeout_us, configurations[index], _request=_request,
+                            )
+                    else:
+                        self._acknowledge_error(slave, state, timeout_us)
 
         if state in (EtherCatState.INIT, EtherCatState.PRE_OP):
             self._invalidate_mapping()
-        if process_data and state in (EtherCatState.SAFE_OP, EtherCatState.OP) and not self._mapped:
-            self.map_process_data()
+        if not self._mapped and (state is EtherCatState.SAFE_OP or process_data and state is EtherCatState.OP):
+            self.map_process_data(_request=_request)
             target = master if position is None else self._slave(position)
+        if _request is not None and self._passive is not None:
+            for index in positions:
+                raw, code = self._read_al(index, _request)
+                if raw == int(state) and code == 0:
+                    continue
+                self._write_al_control(
+                    index, int(state), state, timeout_us, configurations[index], _request=_request,
+                )
+            return self._state_request_result(state, _request)
         if state is EtherCatState.OP and process_data:
             self._transition(target, EtherCatState.SAFE_OP, timeout_us)
         self._transition(target, state, timeout_us, process_data=process_data)
+        return self.read_states()
+
+    def _state_request_result(self, state: EtherCatState, request: _StateRequest | None) -> list[SlaveInfo]:
+        if request is not None:
+            request.begin("refresh", state, tuple(request.observed))
         return self.read_states()
 
     def clear_error(self, position: int, timeout_us: int) -> list[SlaveInfo]:
@@ -929,30 +1120,42 @@ class PysoemBackend:
                 bit_offset += bits
         return result
 
-    def map_process_data(self) -> int:
+    def map_process_data(self, *, _request: _StateRequest | None = None) -> int:
         master = self._require_master()
-        self._ensure_operational(manual_state_change=True)
+        self._ensure_operational(manual_state_change=True, _request=_request)
         if self._mapped:
             return sum(len(slave.input) + len(slave.output) for slave in master.slaves)
         if self._mapping_attempted:
             # config_map appends FMMUs; config_init resets SOEM's allocation context.
             expected = [(s.identity.vendor_id, s.identity.product_code, s.identity.revision) for s in self._slaves]
-            count = self._config_init(manual_state_change=True)
+            count = self._config_init(manual_state_change=True, _request=_request)
             actual = [(int(s.man), int(s.id), int(s.rev)) for s in master.slaves]
             if count != len(expected) or actual != expected:
                 raise CommunicationError("PDO 重建时从站拓扑发生变化，请重新扫描总线")
-        self.request_state(None, EtherCatState.PRE_OP, DEFAULT_STATE_TRANSITION_TIMEOUT_US)
+        if _request is None:
+            self.request_state(None, EtherCatState.PRE_OP, DEFAULT_STATE_TRANSITION_TIMEOUT_US)
+        else:
+            self.request_state(
+                None, EtherCatState.PRE_OP, _request.remaining_us(), process_data=False, _request=_request,
+            )
+            _request.begin("pdo_mapping", EtherCatState.SAFE_OP, tuple(info.position for info in self._slaves))
+            _request.remaining_us()
         manual = master.manual_state_change
         try:
             # The caller explicitly requests SAFEOP after configuration succeeds.
             master.manual_state_change = True
             self._mapping_attempted = True
-            size = int(master.config_map())
+            with self._configuration_timeouts(_request):
+                size = int(master.config_map())
+        except StateTransitionTimeoutError:
+            raise
         except Exception as exc:
             raise self._normalize_error(exc, "PDO mapping") from exc
         finally:
             master.manual_state_change = manual
         self._mapped = True
+        if _request is not None:
+            _request.remaining_us()
         if self._passive is not None:
             self._slaves = [self._sm_info(info) for info in self._slaves]
             return size
