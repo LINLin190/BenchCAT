@@ -111,6 +111,7 @@ def backend(
     result._connected = True
     result._passive = transport
     result._master = master
+    result._master_open = True
     result._slaves = [
         SlaveInfo(1, "Slave", SlaveIdentity(1, 1, 1), EtherCatState(state & 0x0F), code, 0, 0)
     ]
@@ -146,6 +147,31 @@ def test_standard_preop_initializes_mailbox_without_automatic_preop_ack() -> Non
     assert master.config_init_calls == [True]
     assert master.manual_state_change is False
     assert transport.writes == [1, 2]
+
+
+def test_first_preop_request_opens_soem_only_when_mailbox_configuration_is_needed(state_clock):
+    device, transport, master = backend(0, 1, mailbox_ready=False)
+    device._master_open = False
+    device._adapter_name = "mock"
+    opened = []
+    master.open = lambda adapter: opened.append(adapter)
+    initialize = master.config_init
+
+    def init_after_open(*args, **kwargs):
+        assert opened == ["mock"] and device._master_open
+        return initialize(*args, **kwargs)
+
+    master.config_init = init_after_open
+    assert device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)[0].raw_state == 2
+    assert opened == ["mock"] and transport.writes == [1, 2]
+
+
+def test_direct_preop_with_existing_mailbox_leaves_soem_closed(state_clock):
+    device, transport, master = backend(0, 1)
+    device._master_open = False
+    assert device.request_state(1, EtherCatState.PRE_OP, 2_000_000, process_data=False)[0].raw_state == 2
+    assert not device._master_open and master.config_init_calls == []
+    assert transport.writes == [2]
 
 
 def test_standard_preop_uses_existing_mailbox_without_soem_initialization() -> None:
@@ -208,6 +234,7 @@ def state_clock(monkeypatch):
 
 def test_pending_al_timeout_never_writes_or_initializes(state_clock):
     device, transport, master = backend(0, 1, mailbox_ready=False)
+    device._master_open = False
     transport.pending_al = True
     with pytest.raises(StateRequestFailure) as caught:
         device.request_state(1, EtherCatState.SAFE_OP, 2_000_000, process_data=False)
@@ -215,6 +242,7 @@ def test_pending_al_timeout_never_writes_or_initializes(state_clock):
     assert caught.value.timed_out and caught.value.target is EtherCatState.PRE_OP
     assert caught.value.sources == {1: EtherCatState.INIT}
     assert transport.writes == master.config_init_calls == []
+    assert not device._master_open
 
 
 def test_request_to_current_state_does_not_fill_al_mailbox(state_clock):

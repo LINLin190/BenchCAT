@@ -199,6 +199,7 @@ def test_disconnect_clears_internal_state_even_when_master_close_fails() -> None
 
     backend = PysoemBackend()
     backend._master = BrokenMaster()
+    backend._master_open = True
     backend._connected = True
     backend._mapped = True
     backend._slaves = [object()]

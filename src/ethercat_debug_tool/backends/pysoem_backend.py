@@ -168,6 +168,7 @@ class PysoemBackend:
     def __init__(self) -> None:
         self._pysoem: Any = None
         self._master: Any = None
+        self._master_open = False
         self._passive: NpcapEthercatTransport | None = None
         self._adapter_name: str | None = None
         self._connected = False
@@ -213,19 +214,15 @@ class PysoemBackend:
         master.always_release_gil = True
         passive = NpcapEthercatTransport(adapter_name)
         try:
-            master.open(adapter_name)
             passive.open()
         except (ConnectionError, OSError, PassiveDiscoveryError) as exc:
-            try:
-                master.close()
-            except Exception:
-                pass
             passive.close()
             hint = "请检查网卡状态、管理员权限以及 Npcap 的 WinPcap 兼容模式。"
             if ctypes.util.find_library("wpcap") is None:
                 hint = "未检测到 Npcap/wpcap，请安装 Npcap 并启用 WinPcap API-compatible Mode。"
             raise EnvironmentError(f"无法打开 EtherCAT 网卡。{hint}") from exc
         self._master = master
+        self._master_open = False
         self._passive = passive
         self._adapter_name = adapter_name
         self._connected = True
@@ -236,12 +233,13 @@ class PysoemBackend:
         try:
             if self._passive is not None:
                 self._passive.close()
-            if self._master is not None:
+            if self._master is not None and self._master_open:
                 self._master.close()
         finally:
             self._passive = None
             self._adapter_name = None
             self._master = None
+            self._master_open = False
             self._connected = False
             self._mapped = False
             self._mapping_attempted = False
@@ -251,6 +249,13 @@ class PysoemBackend:
         if not self._connected or self._master is None:
             raise CommunicationError("Master is not connected")
         return self._master
+
+    def _open_master(self) -> None:
+        master = self._require_master()
+        if self._master_open:
+            return
+        master.open(self._adapter_name)
+        self._master_open = True
 
     def _slave(self, position: int) -> Any:
         master = self._require_master()
@@ -275,6 +280,9 @@ class PysoemBackend:
                 _request.begin("transition", EtherCatState.PRE_OP, (position,))
                 self._wait_al_control_ready(position, config, _request.deadline, _request)
             _request.begin("initialization", EtherCatState.PRE_OP, positions)
+            _request.remaining_us()
+        self._open_master()
+        if _request is not None:
             _request.remaining_us()
         if not manual_state_change:
             return int(master.config_init(False, release_gil=True))
@@ -585,12 +593,16 @@ class PysoemBackend:
     def scan(
         self, on_discovered: Callable[[list[SlaveInfo]], None] | None = None
     ) -> list[SlaveInfo]:
-        self._require_master()
+        master = self._require_master()
         if self._passive is None or self._adapter_name is None:
             raise CommunicationError("被动发现通道不可用，请重新连接网卡")
         self._mapped = False
         self._mapping_attempted = False
         self._slaves = []
+        if self._master_open:
+            master.close()
+            self._master_open = False
+        master.slaves = []
         try:
             discovered = passive_discover(self._adapter_name, transport=self._passive)
         except PassiveMediaDisconnected:
