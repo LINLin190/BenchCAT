@@ -109,6 +109,25 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 @keyframes slave-preop-icon { 0%, 100% { color: #22c55e; filter: drop-shadow(0 0 3px #22c55e80); } 50% { color: #64748b; filter: none; } }
 @keyframes slave-safeop-icon { 0%, 100% { color: #22c55e; filter: drop-shadow(0 0 3px #22c55e80); } 20% { color: #64748b; filter: none; } }
 
+/* Register segments stay anchored and share a single sliding selection surface. */
+.register-workspace .register-view-tabs { flex-shrink: 0; width: 184px; min-height: 34px; padding: 2px; background: #eaf0f8; border-radius: 6px; }
+.register-view-tabs .MuiTabs-flexContainer { min-height: 30px; }
+.register-view-tabs .MuiTab-root { z-index: 1; flex: 1; min-width: 0; min-height: 30px; padding: 4px 10px; font-size: 12px; border-radius: 4px; transition: color 200ms ease-out; }
+.register-view-tabs .MuiTab-root.Mui-selected { background: transparent; color: #365ccf; }
+.register-view-tabs .MuiTab-root.Mui-focusVisible { outline-offset: -2px; }
+.register-view-tabs .MuiTabs-indicator { bottom: 0; height: 30px; border-radius: 4px; background: #fff; box-shadow: 0 1px 3px #17203312; transition: left 200ms ease-out, width 200ms ease-out; pointer-events: none; }
+
+/* Feedback belongs to the affected icon; buttons keep their position and size. */
+.register-star-selected { animation: register-star-confirm 160ms ease-out; }
+.register-copy-confirmed { animation: register-copy-confirm 120ms ease-out; }
+@keyframes register-star-confirm { 0% { transform: scale(1); } 55% { transform: scale(1.15); } 100% { transform: scale(1); } }
+@keyframes register-copy-confirm { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .register-view-tabs .MuiTabs-indicator, .register-view-tabs .MuiTab-root { transition: none; }
+  .register-star-selected, .register-copy-confirmed { animation: none; }
+  .register-workspace .MuiCollapse-root, .register-workspace .MuiAccordionSummary-expandIconWrapper { transition-duration: 0ms; }
+}
+
 @media (max-width: 1180px) {
   .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
