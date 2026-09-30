@@ -1,3 +1,4 @@
+import ctypes
 import struct
 
 import pytest
@@ -6,6 +7,7 @@ from ethercat_debug_tool.backends.passive_discovery import (
     NpcapEthercatTransport,
     PassiveDiscoveryError,
     PassiveMediaDisconnected,
+    _PcapPacketHeader,
     _sii_summary,
     discover,
 )
@@ -137,3 +139,47 @@ def test_matching_response_preserves_zero_wkc():
     response = bytearray(request)
     struct.pack_into("<H", response, 18, 1)
     assert NpcapEthercatTransport._response(bytes(response), request, 1, 7, 2) == (bytes(2), 0)
+
+
+def test_passive_indices_never_overlap_soem_and_wrap_rejects_old_response(monkeypatch):
+    nonce = iter(bytes([value]) * 5 for value in range(10))
+    monkeypatch.setattr("ethercat_debug_tool.backends.passive_discovery.secrets.token_bytes",
+                        lambda size: next(nonce))
+    channel = NpcapEthercatTransport("mock")
+    monkeypatch.setattr(channel, "open", lambda: None)
+    requests = []
+    responses = []
+    old_response = None
+
+    class Pcap:
+        def pcap_sendpacket(self, handle, buffer, size):
+            nonlocal old_response
+            request = bytes(buffer)
+            requests.append(request)
+            response = bytearray(request)
+            struct.pack_into("<H", response, 18, 1)
+            struct.pack_into("<H", response, 26, len(requests))
+            struct.pack_into("<H", response, 28, 1)
+            if len(requests) == 1:
+                old_response = bytes(response)
+            if len(requests) == 241:
+                responses.append(old_response)
+            responses.append(bytes(response))
+            return 0
+
+        def pcap_next_ex(self, handle, header_out, packet_out):
+            response = responses.pop(0)
+            self.header = _PcapPacketHeader(caplen=len(response), length=len(response))
+            self.packet = (ctypes.c_ubyte * len(response)).from_buffer_copy(response)
+            ctypes.cast(header_out, ctypes.POINTER(ctypes.POINTER(_PcapPacketHeader)))[0] = ctypes.pointer(self.header)
+            ctypes.cast(packet_out, ctypes.POINTER(ctypes.POINTER(ctypes.c_ubyte)))[0] = ctypes.cast(
+                self.packet, ctypes.POINTER(ctypes.c_ubyte),
+            )
+            return 1
+
+    channel._pcap = Pcap()
+    for sequence in range(1, 481):
+        assert channel.aprd(1, 0x0130, 2) == (sequence.to_bytes(2, "little"), 1)
+    assert [request[17] for request in requests] == list(range(16, 256)) * 2
+    assert requests[0][6:12] != requests[240][6:12]
+    assert responses == []

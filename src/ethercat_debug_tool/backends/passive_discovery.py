@@ -28,6 +28,10 @@ class PassiveNoResponse(PassiveDiscoveryError):
 # Windows ERROR_NDIS_MEDIA_DISCONNECTED (0x8034001F) in Npcap's error text.
 _MEDIA_DISCONNECTED_CODE = b"(2150891551)"
 
+# pySOEM 1.1.13 reserves indices 0..15 (EC_MAXBUF=16) for its native channel.
+PASSIVE_INDEX_MIN = 16
+PASSIVE_INDEX_MAX = 0xFF
+
 
 def decode_native_text(value: bytes) -> str:
     try:
@@ -84,7 +88,7 @@ class NpcapEthercatTransport:
         self._pcap = None
         self._handle = ctypes.c_void_p()
         self._source = b"\x02" + secrets.token_bytes(5)
-        self._index = 0
+        self._index = PASSIVE_INDEX_MIN - 1
 
     def _load(self):
         if self._pcap is not None:
@@ -190,10 +194,11 @@ class NpcapEthercatTransport:
 
     def exchange(self, command: int, index: int, adp: int, ado: int, data: bytes) -> tuple[bytes, int]:
         self.open()
-        self._index = (self._index + 1) & 0xFF
-        index = self._index
-        if index == 0:
+        self._index += 1
+        if self._index > PASSIVE_INDEX_MAX:
+            self._index = PASSIVE_INDEX_MIN
             self._source = b"\x02" + secrets.token_bytes(5)
+        index = self._index
         request = self._frame(command, index, adp, ado, data, self._source)
         buffer = (ctypes.c_ubyte * len(request)).from_buffer_copy(request)
         if self._pcap.pcap_sendpacket(self._handle, buffer, len(request)) != 0:
