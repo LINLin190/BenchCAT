@@ -136,8 +136,9 @@ export interface RegisterDefinition {
   write_side_effects?: string[];
   write_sequence?: string;
   confidence?: string;
-  fields?: { bits: string; name: string; ecat_access?: string; access?: string; reserved?: boolean; description?: string; reset_value?: string }[];
+  fields?: { bits: string; name: string; ecat_access?: string; access?: string; reserved?: boolean; description?: string; reset_value?: string; enum_values?: { value: string; meaning: string }[]; read_semantics?: string }[];
   bit_fields?: { name: string; shift: number; bits: number; access?: string; reserved?: boolean; description?: string }[];
+  source?: { source_id: string; section?: string; page?: number }[];
 }
 
 export interface OperationProgress {
