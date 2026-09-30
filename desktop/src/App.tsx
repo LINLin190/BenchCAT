@@ -1021,7 +1021,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [bridgeAvailable, setBridgeAvailable] = useState(true);
   const [bridgeExit, setBridgeExit] = useState<BridgeExitInfo>();
-  const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" | "warning" }>();
+  const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" | "warning"; dismissed?: boolean }>();
   const [settings, setSettings] = useState(false);
   const [settingsTab, setSettingsTab] = useState(0);
   const [updateState, setUpdateState] = useState<UpdateState>("idle");
@@ -1103,6 +1103,9 @@ export default function App() {
   const refresh = useCallback(async () => {
     await bridgeRequest<WorkbenchStatus>("status");
   }, []);
+
+  // Preserve the text and severity until the snackbar finishes its exit animation.
+  const closeMessage = () => setMessage((current) => current ? { ...current, dismissed: true } : current);
 
   const run: Run = useCallback(async (operation, success) => {
     try {
@@ -1590,7 +1593,7 @@ export default function App() {
         <Typography fontWeight={750}>{progress?.stage}</Typography><Typography variant="body2">{progress?.detail}</Typography>{progress && <LinearProgress color="inherit" variant="determinate" value={progress.percent} sx={{ mt: 1, height: 5, borderRadius: 8, bgcolor: "rgba(255,255,255,.25)" }} />}
       </Alert>
     </Snackbar>
-    <Snackbar open={Boolean(message)} autoHideDuration={5000} onClose={() => setMessage(undefined)} style={{ position: "static", transform: "none" }}><Alert severity={message?.severity} variant="filled" onClose={() => setMessage(undefined)} sx={{ overflowWrap: "anywhere" }}>{message?.text}</Alert></Snackbar>
+    <Snackbar open={Boolean(message && !message.dismissed)} autoHideDuration={5000} onClose={closeMessage} style={{ position: "static", transform: "none" }}><Alert severity={message?.severity} variant="filled" onClose={closeMessage} sx={{ overflowWrap: "anywhere" }}>{message?.text}</Alert></Snackbar>
     </Stack>
   </Box>;
 }
