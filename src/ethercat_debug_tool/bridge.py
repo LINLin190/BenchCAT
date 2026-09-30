@@ -1634,6 +1634,8 @@ def _heartbeat(runtime: BridgeRuntime, writer: JsonWriter, stopped: threading.Ev
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     request_pipe_name = os.environ.get("BENCHCAT_REQUEST_PIPE")
     response_pipe_name = os.environ.get("BENCHCAT_RESPONSE_PIPE")
     if not request_pipe_name or not response_pipe_name:

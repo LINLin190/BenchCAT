@@ -254,8 +254,17 @@ class PysoemBackend:
         master = self._require_master()
         if self._master_open:
             return
-        master.open(self._adapter_name)
+        started = time.monotonic()
+        logger.info("SOEM channel opening: adapter=%s", self._adapter_name)
+        try:
+            master.open(self._adapter_name)
+        except Exception:
+            logger.exception("SOEM channel open failed: adapter=%s, elapsed_ms=%.1f",
+                             self._adapter_name, (time.monotonic() - started) * 1000)
+            raise
         self._master_open = True
+        logger.info("SOEM channel opened: adapter=%s, elapsed_ms=%.1f",
+                    self._adapter_name, (time.monotonic() - started) * 1000)
 
     def _slave(self, position: int) -> Any:
         master = self._require_master()
@@ -268,44 +277,71 @@ class PysoemBackend:
         self, *, manual_state_change: bool = False, _request: _StateRequest | None = None
     ) -> int:
         master = self._require_master()
-        if _request is not None:
-            positions = tuple(info.position for info in self._slaves)
-            _request.begin("initialization", EtherCatState.PRE_OP, positions)
-            for position in positions:
-                _request.position = position
-                config = self._read_passive_register(position, 0x0141, 1)
-                if config & 1:
-                    # config_init broadcasts INIT and cannot preserve emulated states.
-                    raise CommunicationError("总线含设备仿真从站，不能执行广播初始化")
-                _request.begin("transition", EtherCatState.PRE_OP, (position,))
-                self._wait_al_control_ready(position, config, _request.deadline, _request)
-            _request.begin("initialization", EtherCatState.PRE_OP, positions)
-            _request.remaining_us()
-        self._open_master()
-        if _request is not None:
-            _request.remaining_us()
-        if not manual_state_change:
-            return int(master.config_init(False, release_gil=True))
-        previous = master.manual_state_change
+        started = time.monotonic()
+        stage = "preflight"
+        count: int | None = None
+        logger.info("SOEM initialization started: adapter=%s, expected_count=%d, manual=%s",
+                    self._adapter_name, len(self._slaves), manual_state_change)
         try:
-            master.manual_state_change = True
-            with self._configuration_timeouts(_request):
-                count = int(master.config_init(False, release_gil=True))
+            if _request is not None:
+                positions = tuple(info.position for info in self._slaves)
+                _request.begin("initialization", EtherCatState.PRE_OP, positions)
+                for position in positions:
+                    _request.position = position
+                    config = self._read_passive_register(position, 0x0141, 1)
+                    if config & 1:
+                        # config_init broadcasts INIT and cannot preserve emulated states.
+                        raise CommunicationError("总线含设备仿真从站，不能执行广播初始化")
+                    _request.begin("transition", EtherCatState.PRE_OP, (position,))
+                    self._wait_al_control_ready(position, config, _request.deadline, _request)
+                _request.begin("initialization", EtherCatState.PRE_OP, positions)
+                _request.remaining_us()
+            stage = "open_channel"
+            self._open_master()
+            if _request is not None:
+                _request.remaining_us()
+            stage = "config_init"
+            native_started = time.monotonic()
+            previous = master.manual_state_change
+            try:
+                if manual_state_change:
+                    master.manual_state_change = True
+                with self._configuration_timeouts(_request):
+                    count = int(master.config_init(False, release_gil=True))
+            finally:
+                master.manual_state_change = previous
+            logger.info("SOEM config_init returned: adapter=%s, count=%d, expected_count=%d, elapsed_ms=%.1f",
+                        self._adapter_name, count, len(self._slaves),
+                        (time.monotonic() - native_started) * 1000)
+            if count != len(self._slaves) or count <= 0:
+                logger.warning("SOEM initialization count mismatch: adapter=%s, count=%d, expected_count=%d",
+                               self._adapter_name, count, len(self._slaves))
             if _request is not None:
                 _request.remaining_us()
                 if count != len(self._slaves) or count <= 0:
+                    stage = "pending_al_control"
                     # Native discovery can return early after issuing INIT. A
                     # pending PDI request still needs its original deadline.
                     for position in positions:
                         raw, code = self._read_al(position, _request)
+                        pending = self._read_passive_register(position, 0x0220, 2) & 1
+                        logger.warning("SOEM initialization incomplete: slave=%d, raw_state=0x%04X, "
+                                       "al_code=0x%04X, al_control_pending=%d",
+                                       position, raw, code, pending)
                         if not (raw & 0x10 or code):
                             self._wait_al_control_ready(
                                 position, self._read_passive_register(position, 0x0141, 1),
                                 _request.deadline, _request,
                             )
+            logger.info("SOEM initialization finished: adapter=%s, count=%d, expected_count=%d, elapsed_ms=%.1f",
+                        self._adapter_name, count, len(self._slaves), (time.monotonic() - started) * 1000)
             return count
-        finally:
-            master.manual_state_change = previous
+        except Exception:
+            logger.exception("SOEM initialization failed: adapter=%s, stage=%s, count=%s, "
+                             "expected_count=%d, elapsed_ms=%.1f",
+                             self._adapter_name, stage, count, len(self._slaves),
+                             (time.monotonic() - started) * 1000)
+            raise
 
     def _ensure_operational(
         self, *, manual_state_change: bool = False, _request: _StateRequest | None = None,
@@ -594,25 +630,46 @@ class PysoemBackend:
         self, on_discovered: Callable[[list[SlaveInfo]], None] | None = None
     ) -> list[SlaveInfo]:
         master = self._require_master()
-        if self._passive is None or self._adapter_name is None:
-            raise CommunicationError("被动发现通道不可用，请重新连接网卡")
-        self._mapped = False
-        self._mapping_attempted = False
-        self._slaves = []
-        if self._master_open:
-            master.close()
-            self._master_open = False
-        master.slaves = []
+        started = time.monotonic()
+        stage = "prepare_channels"
+        logger.info("Passive scan started: adapter=%s, soem_open=%s", self._adapter_name, self._master_open)
         try:
-            discovered = passive_discover(self._adapter_name, transport=self._passive)
-        except PassiveMediaDisconnected:
-            discovered = []
-        except (PassiveDiscoveryError, OSError) as exc:
-            raise CommunicationError(f"扫描从站失败：{exc}") from exc
-        self._slaves = [self._passive_info(item) for item in discovered]
-        if on_discovered is not None:
-            on_discovered(list(self._slaves))
-        return list(self._slaves)
+            if self._passive is None or self._adapter_name is None:
+                raise CommunicationError("被动发现通道不可用，请重新连接网卡")
+            self._mapped = False
+            self._mapping_attempted = False
+            self._slaves = []
+            if self._master_open:
+                master.close()
+                self._master_open = False
+                logger.info("SOEM channel closed before passive scan: adapter=%s", self._adapter_name)
+            master.slaves = []
+            stage = "discovery"
+            try:
+                discovered = passive_discover(self._adapter_name, transport=self._passive)
+            except PassiveMediaDisconnected:
+                logger.info("Passive scan link disconnected: adapter=%s", self._adapter_name)
+                discovered = []
+            except (PassiveDiscoveryError, OSError) as exc:
+                raise CommunicationError(f"扫描从站失败：{exc}") from exc
+            stage = "slave_info"
+            self._slaves = [self._passive_info(item) for item in discovered]
+            for item in discovered:
+                logger.info("Passive scan slave: position=%d, raw_state=0x%04X, al_code=0x%04X, "
+                            "configured_address=%s, sii_status=%s, scan_errors=%s, sii_error=%s",
+                            item.position, item.state, item.al_status, item.configured_address,
+                            item.sii_status, item.scan_errors, item.sii_error)
+            stage = "notify_discovered"
+            if on_discovered is not None:
+                on_discovered(list(self._slaves))
+            logger.info("Passive scan finished: adapter=%s, count=%d, elapsed_ms=%.1f, soem_open=%s",
+                        self._adapter_name, len(self._slaves), (time.monotonic() - started) * 1000,
+                        self._master_open)
+            return list(self._slaves)
+        except Exception:
+            logger.exception("Passive scan failed: adapter=%s, stage=%s, elapsed_ms=%.1f",
+                             self._adapter_name, stage, (time.monotonic() - started) * 1000)
+            raise
 
     def _passive_info(self, item: PassiveSlave) -> SlaveInfo:
         try:
