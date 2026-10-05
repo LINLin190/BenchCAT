@@ -135,7 +135,7 @@ export function registerDisplayName(definition: RegisterDefinition): string {
     0x0443: "PDI 看门狗计数", 0x0502: "EEPROM 控制／状态",
     0x0020: "寄存器写使能", 0x0021: "寄存器写保护", 0x0030: "ESC 写使能", 0x0031: "ESC 写保护",
     0x0040: "ECAT 侧 ESC 复位", 0x0041: "PDI 侧 ESC 复位", 0x0100: "数据链路控制", 0x0108: "物理读写偏移",
-    0x0138: "RUN 灯覆盖", 0x0139: "ERR 灯覆盖", 0x0140: "PDI 类型", 0x0141: "ESC 配置",
+    0x0138: "RUN 灯覆盖", 0x0139: "ERR 灯覆盖", 0x0140: "PDI 控制", 0x0141: "ESC 配置",
     0x0142: "ASIC 配置", 0x0150: "PDI 配置", 0x0151: "SYNC/LATCH 配置", 0x0152: "扩展 PDI 配置",
     0x0500: "EEPROM 控制权", 0x0501: "EEPROM PDI 访问状态", 0x0504: "EEPROM 地址", 0x0508: "EEPROM 数据",
     0x0510: "MII 管理控制／状态", 0x0512: "PHY 地址", 0x0513: "PHY 寄存器地址", 0x0514: "PHY 数据",
@@ -206,7 +206,23 @@ export function registerManuals(definition: RegisterDefinition): { filename: str
   ];
 }
 
-/** The default view contains a small diagnostic set, rather than every expanded channel. */
+/** The common view follows the selected diagnostic ranges and implemented channel arrays. */
 export function isCommonRegister(definition: RegisterDefinition): boolean {
-  return definition.address_space === "esc_core" && [0x0000, 0x0001, 0x0010, 0x0110, 0x0120, 0x0130, 0x0134, 0x0300, 0x0302, 0x0308, 0x030c, 0x030d, 0x0310, 0x0311, 0x0440, 0x0442].includes(definition.address);
+  if (definition.address_space !== "esc_core") return false;
+  const address = definition.address;
+  return (address >= 0x0004 && address <= 0x0006)
+    || (address >= 0x0110 && address <= 0x0111)
+    || (address >= 0x0120 && address <= 0x0121)
+    || (address >= 0x0130 && address <= 0x0131)
+    || (address >= 0x0134 && address <= 0x0135)
+    || address === 0x0140
+    || (address >= 0x0300 && address <= 0x0307)
+    || address === 0x030d
+    || (address >= 0x0310 && address <= 0x0313)
+    || (address >= 0x0440 && address <= 0x0441)
+    || (address >= 0x0502 && address <= 0x0503)
+    // The catalog already limits FMMU and SM entries to the slave's channel counts.
+    || (address >= 0x0600 && address < 0x0800)
+    || (address >= 0x0800 && address < 0x0900)
+    || (address >= 0x0900 && address < 0x0a00);
 }
