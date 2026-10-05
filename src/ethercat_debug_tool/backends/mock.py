@@ -12,6 +12,7 @@ from ..models import (
     PdoDirection,
     PdoEntry,
     ProcessDataSnapshot,
+    RegisterRead,
     SlaveIdentity,
     SlaveInfo,
 )
@@ -67,6 +68,8 @@ class MockBackend:
         self._eeprom = [_demo_eeprom(identity) for identity in identities]
         self._registers = [bytearray(0x10000) for _ in self._slaves]
         for i, slave in enumerate(self._slaves):
+            # Advertise the same channel capabilities used by the demo profile.
+            self._registers[i][0x04:0x06] = bytes([(8, 3, 8)[i], (8, 4, 8)[i]])
             self._registers[i][0x10:0x12] = slave.configured_address.to_bytes(2, "little")
             self._registers[i][0x130:0x132] = int(slave.state).to_bytes(2, "little")
             self._registers[i][0x134:0x136] = b"\x00\x00"
@@ -283,6 +286,12 @@ class MockBackend:
         if not 1 <= size <= 256 or address < 0 or address + size > 0x10000:
             raise ValueError("Register range is invalid")
         return bytes(self._registers[position - 1][address : address + size])
+
+    def register_read_many(self, position: int, requests: list[tuple[int, int]], timeout_us: int) -> list[RegisterRead]:
+        """Keep individual WKC and one acquisition time for a demo frame."""
+        timestamp = time.time()
+        return [RegisterRead(position, address, self.register_read(position, address, size, timeout_us),
+                             1, 0.0, timestamp) for address, size in requests]
 
     def register_write(self, position: int, address: int, data: bytes, timeout_us: int) -> None:
         self._check(position)

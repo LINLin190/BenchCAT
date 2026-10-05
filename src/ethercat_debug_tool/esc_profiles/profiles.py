@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import threading
@@ -67,8 +68,8 @@ class ProfileRegistry:
             "Generic ESC": EscProfile("Generic ESC", RegisterFamily.GENERIC, "Unknown", None, None, None, None, False, limitations=("仅提供 EtherCAT 公共寄存器和原始访问",)),
         }
         self._catalog_lock = threading.RLock()
-        self._catalog_cache: dict[str, list[dict[str, Any]]] = {}
-        self._summary_cache: dict[str, list[dict[str, Any]]] = {}
+        self._catalog_cache: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
+        self._summary_cache: dict[tuple[str, int, int], list[dict[str, Any]]] = {}
 
     def get(self, chip_model: str) -> EscProfile:
         return self._profiles.get(chip_model, self._profiles["Generic ESC"])
@@ -163,6 +164,16 @@ class ProfileRegistry:
         address_text = str(record["address"])
         master_access_allowed = bool(record.get("ethercat_master_access_allowed", False))
         dangerous = self._dangerous(record, address_space, semantic)
+        # Counter write-to-clear semantics are not read acknowledgements; DC
+        # latching notes describe the documented full-width read transaction.
+        address = self._start_address(address_text)
+        counter = 0x0300 <= address < 0x0314 or address in (0x0442, 0x0443)
+        read_effects = [text for text in record.get("read_side_effects", []) if not text.startswith("Multi-byte DC time reads")]
+        read_access = " ".join([master_access, *(str(field.get("ecat_access", "")) for field in fields)])
+        manual_read = bool(read_effects or "READ_SIDE_EFFECT" in read_access
+                           or (not counter and "ACK_SEMANTIC" in read_access))
+        reserved = str(record.get("name", "")).strip().lower().startswith("reserved") or bool(fields and all(field.get("reserved") for field in fields))
+        readable = address_space == "esc_core" and master_access_allowed and semantic != "WO"
         return {
             "definition_id": f"{profile}|{address_space}|{address_text}", "profile": profile,
             "source_chip": record["chip"], "register_family": self.get(profile).register_family.value,
@@ -172,9 +183,11 @@ class ProfileRegistry:
             "name": record.get("name", "Unnamed register"), "official_name": record.get("official_name"),
             "aliases": record.get("alias", []), "group": record.get("category", "Other"),
             "access": semantic, "master_access": master_access, "master_access_allowed": master_access_allowed,
-            "direct_read_allowed": address_space == "esc_core" and master_access_allowed,
+            "direct_read_allowed": readable,
             "direct_write_allowed": address_space == "esc_core" and master_access_allowed and not dangerous,
             "dangerous": dangerous,
+            "requires_manual_read": manual_read, "is_reserved": reserved,
+            "automatic_read_allowed": readable and not manual_read and not reserved and master_access != "not documented",
             "description": "; ".join(record.get("notes", [])) or str(record.get("official_name") or record.get("name")),
             "reset_value": record.get("reset_value"), "power_on_default": record.get("power_on_default"),
             "access_granularity": record.get("access_granularity"), "pdi_access": record.get("pdi_access"),
@@ -186,10 +199,40 @@ class ProfileRegistry:
             "source": record.get("source", []), "confidence": record.get("confidence"), "record_kind": record.get("record_kind"),
         }
 
-    def catalog(self, chip_model: str) -> list[dict[str, Any]]:
+    def _catalog_key(self, chip_model: str, fmmu_count: int | None, sm_count: int | None) -> tuple[str, int, int]:
+        """Bound channel definitions to the live capabilities or profile defaults."""
+        profile = self.get(chip_model)
+        return (profile.chip_model,
+                min(32, max(0, fmmu_count if fmmu_count is not None else profile.fixed_fmmu_count or 8)),
+                min(32, max(0, sm_count if sm_count is not None else profile.fixed_sm_count or 8)))
+
+    def _channels(self, profile: str, fmmu_count: int, sm_count: int) -> list[dict[str, Any]]:
+        """Expand the standard FMMU/SM layout without assuming vendor channel counts."""
+        result = []
+        for base, stride, count, prefix in ((0x0600, 16, fmmu_count, "FMMU"), (0x0800, 8, sm_count, "SyncManager")):
+            templates = [item for item in self._database["chips"]["ET1100"]
+                         if item.get("record_kind") == "register" and base <= self._start_address(item["address"]) < base + stride]
+            for channel in range(count):
+                for template in templates:
+                    record = copy.deepcopy(template)
+                    width = (int(record["width_bits"]) + 7) // 8
+                    address = self._start_address(record["address"]) + channel * stride
+                    record["address"] = f"0x{address:04X}" + (f"-0x{address + width - 1:04X}" if width > 1 else "")
+                    record["name"] = record["name"].replace(f"{prefix}0", f"{prefix}{channel}")
+                    record["official_name"] = record["name"]
+                    record["notes"] = [f"{prefix} channel {channel}; channel count from ESC capability registers."]
+                    definition = self._definition(profile, record)
+                    # Expanded channels are diagnostic references, not new write paths.
+                    definition.update(channel_kind=prefix, channel_index=channel, direct_write_allowed=False, dangerous=True)
+                    result.append(definition)
+        return result
+
+    def catalog(self, chip_model: str, fmmu_count: int | None = None, sm_count: int | None = None) -> list[dict[str, Any]]:
+        """Combine the selected profile with the implemented standard channel arrays."""
         profile = self.get(chip_model).chip_model
+        key = self._catalog_key(profile, fmmu_count, sm_count)
         with self._catalog_lock:
-            cached = self._catalog_cache.get(profile)
+            cached = self._catalog_cache.get(key)
             if cached is not None:
                 return cached
             source_chip = _FAMILY_SOURCE.get(profile)
@@ -201,10 +244,27 @@ class ProfileRegistry:
                     for record in self._database["chips"][source_chip]
                     if record.get("record_kind") == "register"
                 ]
-            self._catalog_cache[profile] = catalog
+            # Preserve documented channel permissions and add only missing definitions.
+            implemented = []
+            for item in catalog:
+                address = item["address"]
+                if item["address_space"] == "esc_core" and 0x0600 <= address < 0x0900:
+                    is_fmmu = address < 0x0800
+                    base, stride, count = (0x0600, 16, key[1]) if is_fmmu else (0x0800, 8, key[2])
+                    channel = (address - base) // stride
+                    if channel >= count:
+                        continue
+                    item.update(channel_kind="FMMU" if is_fmmu else "SyncManager", channel_index=channel)
+                implemented.append(item)
+            existing = {(item["address_space"], item["address"]) for item in implemented}
+            implemented.extend(item for item in self._channels(profile, key[1], key[2])
+                               if (item["address_space"], item["address"]) not in existing)
+            catalog = implemented
+            catalog.sort(key=lambda item: (item["address_space"], item["address"]))
+            self._catalog_cache[key] = catalog
             return catalog
 
-    def catalog_summary(self, chip_model: str) -> list[dict[str, Any]]:
+    def catalog_summary(self, chip_model: str, fmmu_count: int | None = None, sm_count: int | None = None) -> list[dict[str, Any]]:
         """Return the list-view fields only; full bit-field data is fetched on selection.
 
         The investigation data contains long field descriptions and source records.
@@ -216,14 +276,16 @@ class ProfileRegistry:
             "definition_id", "profile", "register_family", "address", "address_text", "address_space",
             "address_space_label", "width", "width_bits", "name", "group", "access", "master_access",
             "master_access_allowed", "direct_read_allowed", "direct_write_allowed", "dangerous",
-            "description", "confidence", "record_kind",
+            "description", "confidence", "record_kind", "aliases", "official_name",
+            "requires_manual_read", "automatic_read_allowed", "is_reserved", "channel_kind", "channel_index",
         )
         profile = self.get(chip_model).chip_model
+        key = self._catalog_key(profile, fmmu_count, sm_count)
         with self._catalog_lock:
-            cached = self._summary_cache.get(profile)
+            cached = self._summary_cache.get(key)
             if cached is None:
-                cached = [{key: definition.get(key) for key in keys} for definition in self.catalog(profile)]
-                self._summary_cache[profile] = cached
+                cached = [{field: definition.get(field) for field in keys} for definition in self.catalog(profile, key[1], key[2])]
+                self._summary_cache[key] = cached
             return cached
 
     def _generic_catalog(self) -> list[dict[str, Any]]:
@@ -234,9 +296,9 @@ class ProfileRegistry:
             and self._start_address(str(record["address"])) < 0x0E00
         ]
 
-    def definition(self, chip_model: str, definition_id: str) -> dict[str, Any]:
+    def definition(self, chip_model: str, definition_id: str, fmmu_count: int | None = None, sm_count: int | None = None) -> dict[str, Any]:
         profile = self.get(chip_model).chip_model
-        definition = next((item for item in self.catalog(profile) if item["definition_id"] == definition_id), None)
+        definition = next((item for item in self.catalog(profile, fmmu_count, sm_count) if item["definition_id"] == definition_id), None)
         if definition is None:
             raise ValueError("Register definition is not in the selected slave profile")
         return definition

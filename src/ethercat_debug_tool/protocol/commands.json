@@ -4,6 +4,7 @@
   "commands": {
     "status": { "lane": "control", "timeout_ms": 2000, "mutating": false },
     "cancel": { "lane": "control", "timeout_ms": 2000, "mutating": false },
+    "register_cancel": { "lane": "control", "timeout_ms": 2000, "mutating": false },
     "shutdown": { "lane": "control", "timeout_ms": 7000, "mutating": false },
     "register_catalog": { "lane": "metadata", "timeout_ms": 3000, "mutating": false },
     "register_definition": { "lane": "metadata", "timeout_ms": 3000, "mutating": false },
@@ -29,6 +30,7 @@
     "stop_cycle": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "set_output": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "register_read": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },
+    "register_snapshot": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },
     "register_watch": { "lane": "hardware", "timeout_ms": 15000, "mutating": false },
     "register_prepare_write": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },
     "register_execute_write": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },

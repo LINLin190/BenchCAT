@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..backends.base import EtherCatBackend
+from ..backends.passive_discovery import REGISTER_FRAME_DATAGRAMS, REGISTER_FRAME_PAYLOAD
 from ..models import AccessSemantics, RegisterRead
 
 
@@ -66,39 +67,20 @@ class RegisterService:
         data = self.backend.register_read(position, address, size, timeout_us)
         return RegisterRead(position, address, data, 1, (time.perf_counter() - started) * 1000, time.time())
 
-    def read_merged(
-        self, requests: Iterable[tuple[int, int]], position: int, timeout_us: int = 2000
-    ) -> dict[tuple[int, int], RegisterRead]:
-        ordered = sorted(set(requests))
-        for address, size in ordered:
-            if not 1 <= size <= 256 or address < 0 or address + size > 0x10000:
-                raise ValueError("Invalid register watch range")
-        groups: list[tuple[int, int, list[tuple[int, int]]]] = []
-        for request in ordered:
-            address, size = request
-            if (
-                groups
-                and address <= groups[-1][1]
-                and max(groups[-1][1], address + size) - groups[-1][0] <= 256
-            ):
-                start, end, members = groups[-1]
-                groups[-1] = start, max(end, address + size), members + [request]
-            else:
-                groups.append((address, address + size, [request]))
-        result: dict[tuple[int, int], RegisterRead] = {}
-        for start, end, members in groups:
-            merged = self.read(position, start, end - start, timeout_us)
-            for address, size in members:
-                offset = address - start
-                result[(address, size)] = RegisterRead(
-                    position,
-                    address,
-                    merged.data[offset : offset + size],
-                    1,
-                    merged.duration_ms,
-                    merged.timestamp,
-                )
-        return result
+    @staticmethod
+    def read_frames(requests: Iterable[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+        """Pack exact register widths, preserving one WKC per register."""
+        frames: list[list[tuple[int, int]]] = []
+        payload = 0
+        for address, size in sorted(set(requests)):
+            if not 1 <= size <= 256 or not 0 <= address < address + size <= 0x10000:
+                raise ValueError("Invalid register read range")
+            if not frames or len(frames[-1]) >= REGISTER_FRAME_DATAGRAMS or payload + size + 12 > REGISTER_FRAME_PAYLOAD:
+                frames.append([])
+                payload = 0
+            frames[-1].append((address, size))
+            payload += size + 12
+        return frames
 
     def prepare_write(
         self,

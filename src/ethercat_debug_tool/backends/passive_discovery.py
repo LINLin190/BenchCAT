@@ -32,6 +32,10 @@ _MEDIA_DISCONNECTED_CODE = b"(2150891551)"
 PASSIVE_INDEX_MIN = 16
 PASSIVE_INDEX_MAX = 0xFF
 
+# Bound each exchange so control and PDO work can run between register frames.
+REGISTER_FRAME_DATAGRAMS = 15
+REGISTER_FRAME_PAYLOAD = 1498  # Ethernet payload minus the EtherCAT header.
+
 
 def decode_native_text(value: bytes) -> str:
     try:
@@ -228,6 +232,81 @@ class NpcapEthercatTransport:
 
     def read(self, command: int, adp: int, ado: int, length: int) -> tuple[bytes, int]:
         return self.exchange(command, 0, adp, ado, bytes(length))
+
+    @staticmethod
+    def _read_frame(command: int, index: int, adp: int, requests: list[tuple[int, int]], source: bytes) -> bytes:
+        """Pack independent read datagrams with SOEM's more-datagrams flag."""
+        if command not in (0x01, 0x04) or not 1 <= len(requests) <= REGISTER_FRAME_DATAGRAMS:
+            raise ValueError("Invalid register read frame")
+        payload = bytearray()
+        for ordinal, (address, size) in enumerate(requests):
+            if not 1 <= size <= 256 or not 0 <= address < address + size <= 0x10000:
+                raise ValueError("Invalid register read range")
+            flags = size | (0x8000 if ordinal + 1 < len(requests) else 0)
+            payload.extend(struct.pack("<BBHHHH", command, index, adp & 0xFFFF, address, flags, 0))
+            payload.extend(bytes(size + 2))
+        if len(payload) > REGISTER_FRAME_PAYLOAD:
+            raise ValueError("Register datagrams exceed the Ethernet frame capacity")
+        frame = b"\xff" * 6 + source + b"\x88\xa4" + struct.pack("<H", 0x1000 | len(payload)) + payload
+        return frame + bytes(max(0, 60 - len(frame)))
+
+    @staticmethod
+    def _read_response(packet: bytes, request: bytes, requests: list[tuple[int, int]]) -> list[tuple[bytes, int]] | None:
+        """Match every datagram before exposing any data or individual WKC."""
+        if len(packet) < 28 or packet[:14] != request[:14] or packet == request:
+            return None
+        header = struct.unpack_from("<H", packet, 14)[0]
+        payload_size = sum(size + 12 for _, size in requests)
+        if header != 0x1000 | payload_size or len(packet) < 16 + payload_size:
+            return None
+        offset = 16
+        results = []
+        for ordinal, (_address, size) in enumerate(requests):
+            if packet[offset:offset + 2] != request[offset:offset + 2]:
+                return None
+            if packet[offset + 4:offset + 6] != request[offset + 4:offset + 6]:
+                return None
+            if packet[offset] == 0x04 and packet[offset + 2:offset + 4] != request[offset + 2:offset + 4]:
+                return None
+            flags = struct.unpack_from("<H", packet, offset + 6)[0]
+            if flags & 0x07FF != size or bool(flags & 0x8000) != (ordinal + 1 < len(requests)):
+                return None
+            start = offset + 10
+            results.append((packet[start:start + size], struct.unpack_from("<H", packet, start + size)[0]))
+            offset += size + 12
+        return results
+
+    def read_many(self, command: int, adp: int, requests: list[tuple[int, int]], timeout_us: int = 2000) -> list[tuple[bytes, int]]:
+        """Send one read frame once; never retry a failed register transaction."""
+        self.open()
+        self._index += 1
+        if self._index > PASSIVE_INDEX_MAX:
+            self._index = PASSIVE_INDEX_MIN
+            self._source = b"\x02" + secrets.token_bytes(5)
+        request = self._read_frame(command, self._index, adp, requests, self._source)
+        buffer = (ctypes.c_ubyte * len(request)).from_buffer_copy(request)
+        if self._pcap.pcap_sendpacket(self._handle, buffer, len(request)) != 0:
+            error = self._pcap.pcap_geterr(self._handle)
+            if error and _MEDIA_DISCONNECTED_CODE in error:
+                raise PassiveMediaDisconnected("网卡链路未连接")
+            raise PassiveDiscoveryError(f"发送寄存器读取帧失败：{decode_native_text(error) if error else '未知错误'}")
+        deadline = time.monotonic() + max(0.002, timeout_us / 1_000_000)
+        while time.monotonic() < deadline:
+            header_ptr = ctypes.POINTER(_PcapPacketHeader)()
+            packet_ptr = ctypes.POINTER(ctypes.c_ubyte)()
+            received = self._pcap.pcap_next_ex(self._handle, ctypes.byref(header_ptr), ctypes.byref(packet_ptr))
+            if received == 0:
+                continue
+            if received < 0:
+                error = self._pcap.pcap_geterr(self._handle)
+                if error and _MEDIA_DISCONNECTED_CODE in error:
+                    raise PassiveMediaDisconnected("网卡链路未连接")
+                raise PassiveDiscoveryError(f"接收寄存器读取帧失败：{decode_native_text(error) if error else '未知错误'}")
+            packet = ctypes.string_at(packet_ptr, header_ptr.contents.caplen)
+            response = self._read_response(packet, request, requests)
+            if response is not None:
+                return response
+        raise PassiveNoResponse("寄存器读取帧响应超时（无匹配帧）")
 
     def write(self, command: int, adp: int, ado: int, data: bytes) -> int:
         _, wkc = self.exchange(command, 0, adp, ado, bytes(data))

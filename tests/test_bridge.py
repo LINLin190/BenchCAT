@@ -489,7 +489,7 @@ def test_framed_protocol_survives_profile_payloads() -> None:
     runtime = BridgeRuntime(writer, BackendMode.DEMO)  # type: ignore[arg-type]
     try:
         runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
-        for profile, expected in [("ET1100", 216), ("LAN9252", 161), ("LAN9253", 176)]:
+        for profile, expected in [("ET1100", 216), ("LAN9252", 212), ("LAN9253", 296)]:
             catalog = runtime.dispatch("register_catalog", {"position": 1, "profile": profile})
             stream = io.BytesIO()
             write_frame(stream, {"type": "response", "result": catalog}, registry.max_frame_bytes)

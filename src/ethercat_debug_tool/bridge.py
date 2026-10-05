@@ -352,6 +352,8 @@ class BridgeRuntime:
         self.rediscovery_poll_s = rediscovery_poll_s
         self._command_lock = threading.Lock()
         self._admission_lock = threading.Lock()
+        self._register_jobs: dict[str, threading.Event] = {}
+        self._register_capabilities: dict[tuple[int, int], tuple[int, int]] = {}
         self._eeprom_exclusive = False
         self._worker_lock = threading.Lock()
         self._active_hardware_session: int | None = None
@@ -662,7 +664,8 @@ class BridgeRuntime:
         chip_model = self._register_profile(params, position, registry)
         definition_id = params.get("definition_id")
         if definition_id:
-            return registry.definition(chip_model, str(definition_id))
+            counts = self._register_capabilities.get((self.session_id, position), (None, None))
+            return registry.definition(chip_model, str(definition_id), *counts)
         # Compatibility for callers predating definition_id.  The UI always
         # sends it; this fallback is still profile- and esc-core-scoped.
         if "address" in params:
@@ -684,7 +687,7 @@ class BridgeRuntime:
 
     @staticmethod
     def _require_master_read(definition: dict[str, Any]) -> None:
-        if definition["address_space"] != "esc_core" or not definition["master_access_allowed"]:
+        if definition["address_space"] != "esc_core" or not definition["master_access_allowed"] or not definition["direct_read_allowed"]:
             raise PermissionError(
                 "This register is local to the PDI/HBI/PHY or otherwise unavailable through EtherCAT FPRD"
             )
@@ -697,6 +700,89 @@ class BridgeRuntime:
         if requested_size is not None and int(requested_size) != int(definition["width"]):
             raise ValueError("Register width does not match the selected definition")
 
+    def _read_register_snapshot(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Read bounded multi-datagram frames, yielding the Worker between frames."""
+        position = int(params["position"])
+        self._slave(position)
+        profile = self._register_profile(params, position)
+        cancel = params["_cancel"]
+        started = time.perf_counter()
+        values = []
+        errors: dict[str, str] = {}
+        skipped: dict[str, str] = {}
+        frame_count = 0
+        frame_error = None
+        counts = self._register_capabilities.get((self.session_id, position))
+        capability_values = []
+        # A full snapshot discovers channel counts without changing AL state.
+        if params.get("all") and not cancel.is_set():
+            capability_values = self._submit("register_read_many", position, [(4, 1), (5, 1)], 2000, priority=Priority.WATCH)
+            frame_count += 1
+            if all(item.wkc == 1 and len(item.data) == 1 for item in capability_values):
+                counts = tuple(min(32, item.data[0]) for item in capability_values)
+                self._register_capabilities[(self.session_id, position)] = counts
+            else:
+                counts = (0, 0)
+        definitions = self.profiles.catalog(profile, *(counts or (None, None)))
+        by_id = {item["definition_id"]: item for item in definitions}
+        if params.get("all"):
+            targets = [item for item in definitions if item["address_space"] == "esc_core" and item["master_access_allowed"]]
+        else:
+            targets = []
+            for request in params.get("requests", []):
+                definition = by_id.get(str(request.get("definition_id", "")))
+                if definition is None:
+                    raise ValueError("Register definition is not in the selected slave profile")
+                self._require_master_read(definition)
+                self._require_definition_range(request, definition)
+                targets.append(definition)
+        targets = list({item["definition_id"]: item for item in targets}.values())
+        ranges: dict[tuple[int, int], dict[str, Any]] = {}
+        acquired = {(item.address, len(item.data)): item for item in capability_values}
+        for definition in targets:
+            key = definition["definition_id"]
+            address, size = definition["address"], definition["width"]
+            if definition["is_reserved"]:
+                skipped[key] = "保留地址"
+            elif (params.get("all") or params.get("automatic")) and not definition["automatic_read_allowed"]:
+                skipped[key] = "需手动读取" if definition["requires_manual_read"] else "不适用"
+            elif (address, size) in acquired:
+                result = acquired[(address, size)]
+                if result.wkc == 1:
+                    values.append(result)
+                else:
+                    errors[key] = f"0x{address:04X} 读取失败，WKC={result.wkc}"
+            else:
+                ranges[(address, size)] = definition
+        for frame in RegisterService.read_frames(ranges):
+            if cancel.is_set():
+                break
+            frame_count += 1
+            try:
+                results = self._submit("register_read_many", position, frame, 2000, priority=Priority.WATCH)
+            except CommunicationError as exc:
+                # Preserve completed frames, expose the fault, and stop issuing reads.
+                frame_error = str(exc)
+                completed = {(item.address, len(item.data)) for item in values}
+                for request, definition in ranges.items():
+                    if request not in completed:
+                        errors.setdefault(definition["definition_id"], f"0x{request[0]:04X} 读取已停止：{exc}")
+                break
+            for (address, size), result in zip(frame, results, strict=True):
+                key = ranges[(address, size)]["definition_id"]
+                if result.wkc == 1 and len(result.data) == size:
+                    values.append(result)
+                else:
+                    errors[key] = f"0x{address:04X} 读取失败，WKC={result.wkc}，长度 {len(result.data)}/{size}"
+        return {
+            "values": values, "errors": errors, "skipped": skipped,
+            "cancelled": cancel.is_set(), "frame_count": frame_count,
+            "duration_ms": (time.perf_counter() - started) * 1000, "timestamp": time.time(),
+            "catalog": [item for item in self.profiles.catalog_summary(profile, *(counts or (None, None)))
+                        if item["address_space"] == "esc_core" and item["master_access_allowed"]] if params.get("all") else None,
+            "error": frame_error,
+        }
+
     def dispatch(
         self, method: str, params: dict[str, Any], *, deadline_at_ms: int | None = None
     ) -> Any:
@@ -706,6 +792,15 @@ class BridgeRuntime:
         if method == "cancel":
             self.cancel.set()
             return {"cancelled": True}
+        if method == "register_cancel":
+            # Cancellation has a control lane and never waits for the hardware lock.
+            request_id = str(params.get("request_id", ""))
+            if not request_id or len(request_id) > 128:
+                raise ValueError("Invalid register request identifier")
+            with self._admission_lock:
+                if len(self._register_jobs) < 128 or request_id in self._register_jobs:
+                    self._register_jobs.setdefault(request_id, threading.Event()).set()
+            return {"cancelled": True}
         if method == "status":
             return self.snapshot()
         if spec.lane == "metadata":
@@ -713,12 +808,23 @@ class BridgeRuntime:
             # blocked. It never receives a backend/Master reference.
             return self._dispatch_serial(method, params)
         if method == "shutdown":
+            with self._admission_lock:
+                for job in self._register_jobs.values():
+                    job.set()
             self.shutdown()
             return {"stopped": True}
         exclusive_owner = method in {"eeprom_flash", "eeprom_restore"}
         with self._admission_lock:
+            if method in {"disconnect", "scan", "auto_scan", "switch_mode"}:
+                for job in self._register_jobs.values():
+                    job.set()
             if self._eeprom_exclusive:
                 raise EepromExclusiveError("EEPROM 正在烧录或恢复，其他硬件命令已被拒绝")
+            if method in {"register_snapshot", "register_watch"}:
+                request_id = str(params.get("request_id", ""))
+                if not request_id or len(request_id) > 128:
+                    raise ValueError("Invalid register request identifier")
+                params = {**params, "_cancel": self._register_jobs.setdefault(request_id, threading.Event())}
             if exclusive_owner:
                 # Reserve exclusivity before waiting for the serial command lock so
                 # requests admitted afterwards never sit behind a long EEPROM write.
@@ -739,6 +845,9 @@ class BridgeRuntime:
                 finally:
                     self._active_hardware_session = None
         finally:
+            if method in {"register_snapshot", "register_watch"}:
+                with self._admission_lock:
+                    self._register_jobs.pop(str(params["request_id"]), None)
             if exclusive_owner:
                 with self._admission_lock:
                     self._eeprom_exclusive = False
@@ -1082,7 +1191,8 @@ class BridgeRuntime:
             position = params.get("position")
             registry = self.profiles
             chip_model = self._register_profile(params, int(position), registry) if position is not None else "Generic ESC"
-            return registry.catalog_summary(chip_model)
+            counts = self._register_capabilities.get((self.session_id, int(position)), (None, None)) if position is not None else (None, None)
+            return registry.catalog_summary(chip_model, *counts)
         if method == "register_definition":
             definition = self._register_definition(params)
             if definition is None:
@@ -1105,20 +1215,8 @@ class BridgeRuntime:
                 )
             )
             return result
-        if method == "register_watch":
-            requests = []
-            for item in params["requests"]:
-                definition = self._register_definition(item, default_position=params.get("position"))
-                if definition is not None:
-                    self._require_master_read(definition)
-                    self._require_definition_range(item, definition)
-                requests.append((int(item["address"]), int(item["size"])))
-            return self._submit(
-                lambda backend: list(
-                    RegisterService(backend).read_merged(tuple(requests), int(params["position"])).values()
-                ),
-                priority=Priority.WATCH,
-            )
+        if method in {"register_snapshot", "register_watch"}:
+            return self._read_register_snapshot(params)
         if method == "register_prepare_write":
             known_register = bool(params.get("known_register", False))
             data = bytes.fromhex(str(params["data"]))

@@ -16,6 +16,7 @@ from ..models import (
     PdoDirection,
     PdoEntry,
     ProcessDataSnapshot,
+    RegisterRead,
     SlaveIdentity,
     SlaveInfo,
 )
@@ -1431,6 +1432,21 @@ class PysoemBackend:
             return self._slave(position)._fprd(address, size, timeout_us)
         except Exception as exc:
             raise self._normalize_error(exc, f"FPRD 0x{address:04X}") from exc
+
+    def register_read_many(self, position: int, requests: list[tuple[int, int]], timeout_us: int) -> list[RegisterRead]:
+        """Read independent registers in one positional EtherCAT frame."""
+        self._require_master()
+        if self._passive is None or not 1 <= position <= len(self._slaves):
+            raise CommunicationError(f"从站 {position} 的寄存器通道不可用")
+        started = time.perf_counter()
+        try:
+            replies = self._passive.read_many(0x01, 1 - position, requests, timeout_us)
+        except PassiveDiscoveryError as exc:
+            raise self._normalize_error(exc, "APRD register frame") from exc
+        elapsed = (time.perf_counter() - started) * 1000
+        timestamp = time.time()
+        return [RegisterRead(position, address, data, wkc, elapsed, timestamp)
+                for (address, _size), (data, wkc) in zip(requests, replies, strict=True)]
 
     def register_write(self, position: int, address: int, data: bytes, timeout_us: int) -> None:
         if not data or not 0 <= address <= 0xFFFF or address + len(data) > 0x10000:
