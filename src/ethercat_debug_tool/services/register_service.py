@@ -59,7 +59,8 @@ class RegisterService:
         address_space: str = "esc_core",
         master_access_allowed: bool = True,
     ) -> RegisterRead:
-        if address_space != "esc_core" or not master_access_allowed:
+        # Memory windows use the same absolute EtherCAT address space as core CSRs.
+        if address_space not in {"esc_core", "user_ram", "process_ram"} or not master_access_allowed:
             raise PermissionError("This register is not reachable through the EtherCAT master register path")
         if not 1 <= size <= 256 or not 0 <= address <= 0xFFFF or address + size > 0x10000:
             raise ValueError("Register read must stay within 0x0000–0xFFFF and be 1–256 bytes")

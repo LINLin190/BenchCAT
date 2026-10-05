@@ -112,6 +112,9 @@ class ProfileRegistry:
 
     @staticmethod
     def _write_semantics(master_access: str, fields: list[dict[str, Any]], has_write_effect: bool) -> str:
+        # Write-any-to-clear counters differ from bit masks cleared by writing one.
+        if master_access in {"WAC", "W1C", "W1S"}:
+            return master_access
         if master_access in {"RO", "R", "RO_READ_SIDE_EFFECT"}:
             return "RO"
         if master_access == "RO_WITH_ACK_SEMANTIC":
@@ -159,6 +162,11 @@ class ProfileRegistry:
             if "fields_source" in record else record.get("fields", [])
         )
         fields = [dict(field) for field in source_fields]
+        # Hardware pin tables use ordered labels; expose explicit values to the register decoder.
+        for field in fields:
+            enums = field.get("enum_values", [])
+            if enums and isinstance(enums[0], str):
+                field["enum_values"] = [{"value": str(index), "meaning": label} for index, label in enumerate(enums)]
         master_access = str(record.get("master_access", "not documented"))
         semantic = self._write_semantics(master_access, fields, bool(record.get("write_side_effects")))
         address_text = str(record["address"])
@@ -173,7 +181,9 @@ class ProfileRegistry:
         manual_read = bool(read_effects or "READ_SIDE_EFFECT" in read_access
                            or (not counter and "ACK_SEMANTIC" in read_access))
         reserved = str(record.get("name", "")).strip().lower().startswith("reserved") or bool(fields and all(field.get("reserved") for field in fields))
-        readable = address_space == "esc_core" and master_access_allowed and semantic != "WO"
+        memory = address_space in {"user_ram", "process_ram"}
+        manual_read = manual_read or memory
+        readable = address_space in {"esc_core", "user_ram", "process_ram"} and master_access_allowed and semantic != "WO"
         return {
             "definition_id": f"{profile}|{address_space}|{address_text}", "profile": profile,
             "source_chip": record["chip"], "register_family": self.get(profile).register_family.value,
@@ -188,7 +198,8 @@ class ProfileRegistry:
             "dangerous": dangerous,
             "requires_manual_read": manual_read, "is_reserved": reserved,
             "automatic_read_allowed": readable and not manual_read and not reserved and master_access != "not documented",
-            "description": "; ".join(record.get("notes", [])) or str(record.get("official_name") or record.get("name")),
+            "description": record.get("description_zh") or "; ".join(record.get("notes", [])) or str(record.get("official_name") or record.get("name")),
+            "documentation_notes": record.get("notes", []),
             "reset_value": record.get("reset_value"), "power_on_default": record.get("power_on_default"),
             "access_granularity": record.get("access_granularity"), "pdi_access": record.get("pdi_access"),
             "pdi_hbi_access_allowed": record.get("pdi_hbi_access_allowed"), "state_restriction": record.get("state_restriction"),
@@ -196,6 +207,7 @@ class ProfileRegistry:
             "write_side_effects": record.get("write_side_effects", []), "write_sequence": record.get("write_sequence"),
             "byte_order": record.get("byte_order"), "reserved_bits_rule": record.get("reserved_bits_rule"),
             "fields": fields, "bit_fields": [self._compact_field(field) for field in fields],
+            "field_variants": record.get("field_variants", []),
             "source": record.get("source", []), "confidence": record.get("confidence"), "record_kind": record.get("record_kind"),
         }
 
@@ -210,7 +222,8 @@ class ProfileRegistry:
         """Expand the standard FMMU/SM layout without assuming vendor channel counts."""
         result = []
         for base, stride, count, prefix in ((0x0600, 16, fmmu_count, "FMMU"), (0x0800, 8, sm_count, "SyncManager")):
-            templates = [item for item in self._database["chips"]["ET1100"]
+            source_chip = _FAMILY_SOURCE.get(profile, "ET1100")
+            templates = [item for item in self._database["chips"][source_chip]
                          if item.get("record_kind") == "register" and base <= self._start_address(item["address"]) < base + stride]
             for channel in range(count):
                 for template in templates:
@@ -220,7 +233,7 @@ class ProfileRegistry:
                     record["address"] = f"0x{address:04X}" + (f"-0x{address + width - 1:04X}" if width > 1 else "")
                     record["name"] = record["name"].replace(f"{prefix}0", f"{prefix}{channel}")
                     record["official_name"] = record["name"]
-                    record["notes"] = [f"{prefix} channel {channel}; channel count from ESC capability registers."]
+                    record["notes"] = [*template.get("notes", []), f"{prefix} 通道 {channel}；通道数量来自 ESC 能力寄存器。"]
                     definition = self._definition(profile, record)
                     # Expanded channels are diagnostic references, not new write paths.
                     definition.update(channel_kind=prefix, channel_index=channel, direct_write_allowed=False, dangerous=True)
@@ -242,8 +255,25 @@ class ProfileRegistry:
                 catalog = [
                     self._definition(profile, record)
                     for record in self._database["chips"][source_chip]
-                    if record.get("record_kind") == "register"
+                    if record.get("record_kind") in {"register", "memory_region"}
                 ]
+            # Keep full memory ranges as documentation and expose bounded manual-read windows.
+            regions = [item for item in catalog if item["record_kind"] == "memory_region"]
+            catalog = [item for item in catalog if item["record_kind"] != "memory_region"]
+            for region in regions:
+                # Process data uses four-byte reads; user RAM retains its existing windows.
+                window_size = 4 if region["address_space"] == "process_ram" else 256
+                for offset in range(0, region["width"], window_size):
+                    item = copy.deepcopy(region)
+                    item["address"] = region["address"] + offset
+                    item["width"] = min(window_size, region["width"] - offset)
+                    item["width_bits"] = item["width"] * 8
+                    item["address_text"] = f"0x{item['address']:04X}-0x{item['address'] + item['width'] - 1:04X}"
+                    item["definition_id"] = f"{profile}|{item['address_space']}|{item['address_text']}"
+                    name = "RAM" if item["address_space"] == "process_ram" else region["name"]
+                    item["name"] = f"{name} {item['address_text']}"
+                    item["fields"] = []; item["bit_fields"] = []
+                    catalog.append(item)
             # Preserve documented channel permissions and add only missing definitions.
             implemented = []
             for item in catalog:
@@ -264,6 +294,10 @@ class ProfileRegistry:
             self._catalog_cache[key] = catalog
             return catalog
 
+    def catalog_version(self, chip_model: str, fmmu_count: int | None = None, sm_count: int | None = None) -> str:
+        """Identify the profile and effective channel layout within this host session."""
+        return ":".join(map(str, self._catalog_key(chip_model, fmmu_count, sm_count)))
+
     def catalog_summary(self, chip_model: str, fmmu_count: int | None = None, sm_count: int | None = None) -> list[dict[str, Any]]:
         """Return the list-view fields only; full bit-field data is fetched on selection.
 
@@ -273,7 +307,7 @@ class ProfileRegistry:
         WebView instances.
         """
         keys = (
-            "definition_id", "profile", "register_family", "address", "address_text", "address_space",
+            "definition_id", "profile", "source_chip", "register_family", "address", "address_text", "address_space",
             "address_space_label", "width", "width_bits", "name", "group", "access", "master_access",
             "master_access_allowed", "direct_read_allowed", "direct_write_allowed", "dangerous",
             "description", "confidence", "record_kind", "aliases", "official_name",

@@ -687,7 +687,7 @@ class BridgeRuntime:
 
     @staticmethod
     def _require_master_read(definition: dict[str, Any]) -> None:
-        if definition["address_space"] != "esc_core" or not definition["master_access_allowed"] or not definition["direct_read_allowed"]:
+        if definition["address_space"] not in {"esc_core", "user_ram", "process_ram"} or not definition["master_access_allowed"] or not definition["direct_read_allowed"]:
             raise PermissionError(
                 "This register is local to the PDI/HBI/PHY or otherwise unavailable through EtherCAT FPRD"
             )
@@ -774,12 +774,16 @@ class BridgeRuntime:
                     values.append(result)
                 else:
                     errors[key] = f"0x{address:04X} 读取失败，WKC={result.wkc}，长度 {len(result.data)}/{size}"
+        # Refresh values without retransmitting unchanged documentation and RAM windows.
+        catalog_version = self.profiles.catalog_version(profile, *(counts or (None, None)))
+        catalog_changed = params.get("all") and params.get("catalog_version") != catalog_version
         return {
             "values": values, "errors": errors, "skipped": skipped,
             "cancelled": cancel.is_set(), "frame_count": frame_count,
             "duration_ms": (time.perf_counter() - started) * 1000, "timestamp": time.time(),
-            "catalog": [item for item in self.profiles.catalog_summary(profile, *(counts or (None, None)))
-                        if item["address_space"] == "esc_core" and item["master_access_allowed"]] if params.get("all") else None,
+            # Documentation includes local-only registers and manually read memory windows.
+            "catalog": self.profiles.catalog_summary(profile, *(counts or (None, None))) if catalog_changed else None,
+            "catalog_version": catalog_version,
             "error": frame_error,
         }
 
@@ -1192,6 +1196,11 @@ class BridgeRuntime:
             registry = self.profiles
             chip_model = self._register_profile(params, int(position), registry) if position is not None else "Generic ESC"
             counts = self._register_capabilities.get((self.session_id, int(position)), (None, None)) if position is not None else (None, None)
+            # Version-aware page requests reuse their session catalog on return visits.
+            if "catalog_version" in params:
+                version = registry.catalog_version(chip_model, *counts)
+                return {"catalog": registry.catalog_summary(chip_model, *counts) if params["catalog_version"] != version else None,
+                        "catalog_version": version}
             return registry.catalog_summary(chip_model, *counts)
         if method == "register_definition":
             definition = self._register_definition(params)

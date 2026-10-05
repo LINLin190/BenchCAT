@@ -90,10 +90,42 @@ def test_snapshot_expands_actual_channels_and_does_not_ack_events(runtime, monke
     assert any(item["address"] == 0x067C for item in result["catalog"])
     assert any(item["address"] == 0x083F for item in result["catalog"])
     assert (0x0130, 2) not in calls
+    assert (0x0110, 2) not in calls
+    assert (0x0440, 2) not in calls
     assert (0x0144, 1) not in calls
     assert len(calls) > result["frame_count"] * 5
     definition = next(item for item in result["catalog"] if item["address"] == 0x083F)
     assert runtime.dispatch("register_definition", {"position": 2, "profile": "E252", "definition_id": definition["definition_id"]})["fields"]
+
+
+# Manual reads remain available when a register acknowledges an event.
+def test_acknowledgement_register_can_be_read_only_by_explicit_request(runtime, monkeypatch):
+    definition = runtime.profiles.find("LAN9252", "esc_core", 0x0440)
+    calls = []
+    backend = runtime.worker._backend
+    original = backend.register_read_many
+
+    def read(position, requests, timeout):
+        calls.extend(requests)
+        return original(position, requests, timeout)
+
+    monkeypatch.setattr(backend, "register_read_many", read)
+    request = {"definition_id": definition["definition_id"], "address": 0x0440, "size": 2}
+    automatic = runtime.dispatch("register_snapshot", {"request_id": "auto-ack", "position": 2, "profile": "LAN9252", "automatic": True, "requests": [request]})
+    assert not calls and automatic["skipped"][definition["definition_id"]] == "需手动读取"
+    manual = runtime.dispatch("register_snapshot", {"request_id": "manual-ack", "position": 2, "profile": "LAN9252", "requests": [request]})
+    assert calls == [(0x0440, 2)] and len(manual["values"]) == 1
+
+
+# Memory windows stay bounded and cannot alias local-only CSR offsets.
+def test_memory_window_reads_use_the_absolute_ethercat_range(runtime):
+    catalog = runtime.profiles.catalog("LAN9252")
+    memory = [item for item in catalog if item["address_space"] == "process_ram"]
+    assert [(item["address"], item["width"]) for item in memory] == [(address, 4) for address in range(0x1000, 0x2000, 4)]
+    definition = runtime.profiles.find("LAN9252", "user_ram", 0x0F80)
+    assert definition["width"] == 128 and definition["requires_manual_read"]
+    result = runtime.dispatch("register_read", {"position": 2, "profile": "LAN9252", "definition_id": definition["definition_id"], "address": 0x0F80, "size": 128})
+    assert result.address == 0x0F80 and len(result.data) == 128
 
 
 def test_one_register_failure_does_not_discard_successful_datagrams(runtime, monkeypatch):

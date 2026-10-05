@@ -9,7 +9,7 @@ from ethercat_debug_tool.models import BackendMode
 
 def test_each_profile_has_its_investigated_register_set_and_domestic_isomorphic() -> None:
     registry = ProfileRegistry()
-    expected_counts = {"ET1100": 216, "LAN9252": 212, "LAN9253": 296}
+    expected_counts = {"ET1100": 2266, "LAN9252": 1245, "LAN9253": 2353}
     for chip, expected in expected_counts.items():
         assert len(registry.catalog(chip)) == expected
 
@@ -65,6 +65,35 @@ def test_local_lan925x_registers_are_documented_but_not_master_accessible() -> N
     assert local["direct_write_allowed"] is False
 
 
+# Conditional tables must never decode overlapping mode-specific meanings together.
+@pytest.mark.parametrize("chip", ["ET1100", "LAN9252", "LAN9253"])
+def test_register_fields_have_non_overlapping_ranges_in_each_variant(chip: str) -> None:
+    for definition in ProfileRegistry().catalog(chip):
+        groups = [definition["fields"], *(variant["fields"] for variant in definition["field_variants"])]
+        for fields in groups:
+            covered: set[int] = set()
+            for field in fields:
+                bounds = [int(value) for value in field["bits"].split(":")]
+                bits = set(range(min(bounds), max(bounds) + 1))
+                assert not covered.intersection(bits), definition["definition_id"]
+                assert max(bits) < definition["width_bits"], definition["definition_id"]
+                covered.update(bits)
+                assert field.get("reset_value") not in {"RO", "RW", "R/WC"}
+
+
+# Write-any-clear counters and read acknowledgement registers have distinct semantics.
+@pytest.mark.parametrize("chip", ["ET1100", "LAN9252", "LAN9253"])
+def test_documented_counter_and_watchdog_semantics(chip: str) -> None:
+    registry = ProfileRegistry()
+    counter = registry.find(chip, "esc_core", 0x0300)
+    assert counter["access"] == "WAC"
+    assert counter["automatic_read_allowed"]
+    watchdog = registry.find(chip, "esc_core", 0x0440)
+    assert watchdog["requires_manual_read"] and not watchdog["automatic_read_allowed"]
+    assert watchdog["read_side_effects"]
+    assert registry.find(chip, "esc_core", 0x0210)["automatic_read_allowed"]
+
+
 def test_generic_catalog_keeps_the_common_master_accessible_registers_visible() -> None:
     catalog = ProfileRegistry().catalog("Generic ESC")
     assert len(catalog) > 0
@@ -84,7 +113,7 @@ def test_bridge_can_use_a_manually_selected_register_profile() -> None:
         runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
         catalog = runtime.dispatch("register_catalog", {"position": 1, "profile": "LAN9252"})
         product_id = next(item for item in catalog if item["address_space"] == "esc_core" and item["address"] == 0x0E00)
-        assert len(catalog) == 212
+        assert len(catalog) == 1245
         assert product_id["name"] == "Product Id Register"
         assert "fields" not in product_id
         detail = runtime.dispatch(
@@ -120,8 +149,8 @@ def test_lan_catalogs_do_not_wait_for_hardware_command_lock() -> None:
         lan9252 = runtime.dispatch("register_catalog", {"position": 1, "profile": "LAN9252"})
         lan9253 = runtime.dispatch("register_catalog", {"position": 1, "profile": "LAN9253"})
         assert time.perf_counter() - started < 0.5
-        assert len(lan9252) == 212
-        assert len(lan9253) == 296
+        assert len(lan9252) == 1245
+        assert len(lan9253) == 2353
     finally:
         release.set()
         holder.join(timeout=1)
