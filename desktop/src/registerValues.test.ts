@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterValue, hasReadSideEffects, matchesRegisterSearch, parseRegisterAddress, registerMeaning } from "./registerValues";
+import { decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterValue, requiresManualRead, matchesRegisterSearch, parseRegisterAddress, registerMeaning, registerManuals } from "./registerValues";
 import type { RegisterDefinition } from "./types";
 
 const status: RegisterDefinition = { address: 0x0130, address_space: "esc_core", width: 2, name: "AL status", group: "AL State Machine", access: "RO", description: "", fields: [
@@ -41,6 +41,22 @@ describe("register numeric editing", () => {
 });
 
 describe("register interpretation", () => {
+  // EEPROM command codes are bit patterns, while unprefixed enum values remain decimal.
+  it("decodes binary EEPROM write/reload codes without changing decimal enums", () => {
+    const command: RegisterDefinition = { ...status, address: 0x502, fields: [{ bits: "10:8", name: "Command", enum_values: [
+      { value: "0b010", meaning: "Write" }, { value: "0b100", meaning: "Reload" }, { value: "3", meaning: "Decimal three" },
+    ] }] };
+    expect(decodeRegisterFields(command, "00 02")[0].meaning).toBe("Write");
+    expect(decodeRegisterFields(command, "00 04")[0].meaning).toBe("Reload");
+    expect(decodeRegisterFields(command, "00 03")[0].meaning).toBe("Decimal three");
+  });
+  // A selected chip must link its own offline manual, not the generic source template.
+  it("selects local manuals by the actual source chip and labels their real language", () => {
+    expect(registerManuals({ ...status, source_chip: "LAN9252" }).map((manual) => manual.filename)).toEqual([
+      "microchip_lan9252_register_zh.pdf", "microchip_lan9252_register_en.pdf",
+    ]);
+    expect(registerManuals({ ...status, source_chip: "LAN9253" })[0].filename).toBe("microchip_lan9253_register_en.pdf");
+  });
   it("shows the state name and error flag beside one decoded value", () => {
     expect(registerMeaning(status, "12 00")).toBe("PRE-OP · ERROR");
     const fields = decodeRegisterFields(status, "12 00");
@@ -49,15 +65,15 @@ describe("register interpretation", () => {
     expect(fields[2].reserved).toBe(true);
   });
   it("recognizes field-level ECAT acknowledgements even under a plain RO register", () => {
-    expect(hasReadSideEffects(status)).toBe(true);
-    expect(hasReadSideEffects({ ...status, fields: [{ bits: "0", name: "PDI acknowledgement", ecat_access: "RO", read_semantics: "PDI reading acknowledges events" }] })).toBe(false);
+    expect(requiresManualRead(status)).toBe(true);
+    expect(requiresManualRead({ ...status, fields: [{ bits: "0", name: "PDI acknowledgement", ecat_access: "RO", read_semantics: "PDI reading acknowledges events" }] })).toBe(false);
   });
   it("does not apply AL decoding to the matching local address", () => {
     expect(registerMeaning({ ...status, address_space: "system_csr" }, "12 00")).toBe("");
   });
   it("uses the documented distinction between read acknowledgements and write-clear counters", () => {
-    expect(hasReadSideEffects({ ...status, requires_manual_read: false })).toBe(false);
-    expect(hasReadSideEffects({ ...status, fields: [], requires_manual_read: true })).toBe(true);
+    expect(requiresManualRead({ ...status, requires_manual_read: false })).toBe(false);
+    expect(requiresManualRead({ ...status, fields: [], requires_manual_read: true })).toBe(true);
   });
 });
 

@@ -121,6 +121,7 @@ export interface RegisterDefinition {
   group: string;
   access: string;
   master_access?: string;
+  pdi_access?: string;
   master_access_allowed?: boolean;
   direct_read_allowed?: boolean;
   direct_write_allowed?: boolean;
@@ -133,6 +134,7 @@ export interface RegisterDefinition {
   channel_index?: number;
   dangerous?: boolean;
   description: string;
+  documentation_notes?: string[];
   reset_value?: string;
   power_on_default?: string;
   state_restriction?: string;
@@ -143,9 +145,10 @@ export interface RegisterDefinition {
   write_side_effects?: string[];
   write_sequence?: string;
   confidence?: string;
-  fields?: { bits: string; name: string; ecat_access?: string; access?: string; reserved?: boolean; description?: string; reset_value?: string; enum_values?: { value: string; meaning: string }[]; read_semantics?: string }[];
+  fields?: { bits: string; name: string; ecat_access?: string; pdi_access?: string; access?: string; reserved?: boolean; description?: string; reset_value?: string; enum_values?: { value: string; meaning: string }[]; read_semantics?: string }[];
+  field_variants?: { name: string; fields: NonNullable<RegisterDefinition["fields"]> }[];
   bit_fields?: { name: string; shift: number; bits: number; access?: string; reserved?: boolean; description?: string }[];
-  source?: { source_id: string; section?: string; page?: number }[];
+  source?: { source_id: string; section?: string; page?: number | string; pdf_page?: number }[];
 }
 
 export interface OperationProgress {

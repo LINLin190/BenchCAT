@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card, Checkbox,
-  CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
+  CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   FormControl, FormControlLabel, IconButton, InputLabel, Menu, MenuItem, Select, Stack,
-  Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs,
+  Link, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs,
   TextField, Tooltip, Typography,
 } from "@mui/material";
 import { createTheme, ThemeProvider, useTheme } from "@mui/material/styles";
@@ -11,13 +11,13 @@ import {
   CheckRounded, CloseRounded, ContentCopyRounded, ExpandMoreRounded, MoreHorizRounded,
   PlaylistAddRounded, RefreshRounded, SearchRounded, StarBorderRounded, StarRounded,
 } from "@mui/icons-material";
-import { BridgeRequestError, bridgeRequest } from "./api";
+import { BridgeRequestError, bridgeRequest, openRegisterManual } from "./api";
 import { operationStore } from "./operationStore";
 import { hex, type RegisterDefinition, type SlaveInfo } from "./types";
 import {
   decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterBinary, formatRegisterValue,
-  hasReadSideEffects, isCommonRegister, matchesRegisterSearch, parseRegisterAddress, registerDisplayName, registerMeaning,
-  registerNumber, registerWidth, type RegisterValue, type ValueFormat,
+  requiresManualRead, isCommonRegister, matchesRegisterSearch, parseRegisterAddress, registerDisplayName, registerMeaning,
+  registerAccessDescription, registerAccessLabel, registerManuals, registerNumber, registerWidth, type RegisterValue, type ValueFormat,
 } from "./registerValues";
 
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
@@ -29,9 +29,10 @@ interface ReadJob { definition: RegisterDefinition; automatic: boolean; context:
 interface RegisterSnapshot {
   values: RegisterValue[]; errors: Record<string, string>; skipped: Record<string, string>;
   cancelled: boolean; frame_count: number; duration_ms: number; timestamp: number;
-  catalog?: RegisterDefinition[]; error?: string;
+  catalog?: RegisterDefinition[]; catalog_version?: string; error?: string;
 }
-interface CachedRegisters { catalog: RegisterDefinition[]; values: Record<string, RegisterValue>; errors: Record<string, string>; snapshot?: RegisterSnapshot }
+interface RegisterCatalog { catalog: RegisterDefinition[] | null; catalog_version: string }
+interface CachedRegisters { catalog: RegisterDefinition[]; catalogVersion: string; details: Map<string, RegisterDefinition>; values: Record<string, RegisterValue>; errors: Record<string, string>; snapshot?: RegisterSnapshot }
 const snapshots = new Map<string, CachedRegisters>();
 let cachedSession = "";
 
@@ -41,7 +42,7 @@ function registerPreferences(profile: string): { favorites: string[]; pinned: st
     const saved = JSON.parse(window.localStorage.getItem(`benchcat-registers:${profile}`) ?? "{}");
     return { favorites: Array.isArray(saved.favorites) ? saved.favorites : [], pinned: Array.isArray(saved.pinned) ? saved.pinned : [],
       intervalMs: [500, 1000, 2000, 5000].includes(saved.intervalMs) ? saved.intervalMs : 1000,
-      format: ["hex", "decimal", "bytes"].includes(saved.format) ? saved.format : "hex" };
+      format: ["hex", "decimal"].includes(saved.format) ? saved.format : "hex" };
   } catch { return { favorites: [], pinned: [], intervalMs: 1000, format: "hex" }; }
 }
 interface WriteResult { readback: string | null; fpwr_wkc: number }
@@ -54,7 +55,10 @@ const groupLabels: Record<string, string> = {
   "PHY Management / Port Status": "PHY 管理", "Distributed Clocks": "分布式时钟",
   "Write Protection / Reset": "写保护与复位", "Digital I/O / General Purpose I/O": "数字 I/O",
   "FMMU": "FMMU 映射", "SyncManager": "SyncManager 通道",
+  "User RAM": "用户 RAM", "Process Data RAM": "过程数据 RAM",
+  "phy": "PHY 寄存器", "lan925x_system_csr": "CSR 寄存器", "hbi_local": "HBI 寄存器",
 };
+const referenceGroups = ["phy", "lan925x_system_csr", "hbi_local"];
 const disclosureSx = {
   borderTop: 1, borderColor: "divider", "&:before": { display: "none" },
   "& .MuiAccordionSummary-root": { px: 0, minHeight: 40 },
@@ -66,9 +70,66 @@ function registerLabel(name = ""): string {
   return name.replace(/\s+Register\s*$/i, "");
 }
 
-/** Translate undocumented metadata without changing the reference definitions. */
+/** Group local references by address space, keeping CSR bridge entries together. */
+function functionGroup(definition: RegisterDefinition): string {
+  return referenceGroups.includes(definition.address_space ?? "") ? definition.address_space! : definition.group;
+}
+
+/** Directly readable or writable entries belong to the ordinary ECAT catalog. */
+function ecatAccessible(definition: RegisterDefinition): boolean {
+  return definition.direct_read_allowed === true || definition.direct_write_allowed === true;
+}
+
+/** Explain the missing direct ECAT path without implying that indirect access is impossible. */
+function unavailableReason(definition: RegisterDefinition): string {
+  if (definition.address_space === "phy") return "本页不支持通过 ECAT 直接访问；需要通过 PHY 管理接口间接访问。";
+  if (definition.address_space === "lan925x_system_csr") return "CSR 寄存器属于芯片本地地址空间，需要通过 HBI 或 SPI/SQI 接口访问。";
+  if (definition.address_space === "hbi_local") return "HBI 寄存器属于本地主机接口窗口，需要通过对应 HBI 模式访问。";
+  return documentationText(definition.hardware_condition) || "此条目不适用于当前芯片，或不允许主站直接访问。";
+}
+
+/** Manual acquisition policy is distinct from event acknowledgement and buffer access. */
+function readDescription(definition: RegisterDefinition): string {
+  if (!ecatAccessible(definition)) return unavailableReason(definition);
+  if (!requiresManualRead(definition)) return "";
+  if (definition.address_space === "user_ram") return "此区域不自动刷新。";
+  if (definition.address_space === "process_ram") return "此区域采用手动读取；访问已配置的 SyncManager 缓冲区可能影响事件或缓冲区状态。";
+  if (definition.address_space === "esc_core") {
+    const descriptions: Record<number, string> = {
+      0x0110: "读取会确认链路状态事件。", 0x0130: "读取会确认 AL 状态事件。",
+      0x0440: "读取会清除过程数据看门狗事件。",
+    };
+    if (descriptions[definition.address]) return descriptions[definition.address];
+    if ([0x09B0, 0x09B8, 0x09C0, 0x09C8].includes(definition.address)) return "读取可能确认对应 LATCH 事件，取决于锁存单元控制权配置。";
+  }
+  return definition.read_side_effects?.map(documentationText).filter(Boolean).join(" ") || "此寄存器不自动刷新；具体读取行为见操作说明。";
+}
+
+/** Read hints are shared by the value cell, refresh control, and detail panel. */
+function readHint(definition: RegisterDefinition): string {
+  const description = readDescription(definition);
+  return canRead(definition) && requiresManualRead(definition) ? `${description} 请点击刷新图标手动读取。` : description;
+}
+
+/** Translate reference text and omit metadata that the document does not specify. */
 function documentationText(text?: string): string {
-  return text?.replace(/not documented/gi, "文档未注明") ?? "未记录";
+  if (!text?.trim() || /^(?:not documented|文档未注明)$/i.test(text.trim())) return "";
+  return text.replace(/not documented/gi, "文档未注明").replace(/not applicable/gi, "不适用")
+    .replace(/undefined/gi, "未定义").replace(/LSB is stored at the lowest EtherCAT Core CSR address; MSB at the highest address/gi, "小端字节序：低地址存放低字节，高地址存放高字节。")
+    .replace(/reserved fields must be written 0; reserved read values are not guaranteed/gi, "除字段另有说明外，保留位写入为 0。")
+    .replace(/读出值不保证。/g, "")
+    .replace(/Read clears the EEE wake error counter\./gi, "读取会清除 EEE 唤醒错误计数器。")
+    .replace(/write 0 unless the register-specific description explicitly requires another behavior; ignore reserved read values/gi, "除字段另有说明外，保留位写入为 0；不解释读出值。")
+    .replace(/LSB at lower ESC address for multi-byte ESC registers; coherent\/latch behavior is register-specific/gi, "小端字节序：低地址存放低字节。多字节一致性／锁存条件见具体寄存器说明。")
+    .replace(/System CSRs are DWORD-oriented; HBI\/SPI bridge performs documented byte\/word assembly\/disassembly/gi, "本地系统 CSR 按 DWORD 定义；HBI/SPI 的字节／字访问按接口规则组装。")
+    .replace(/16-bit PHY register semantics; access through MII\/MMD management path/gi, "16 位 PHY 寄存器，通过 MII/MMD 管理路径访问。")
+    .replace(/LSB at lower ESC address; multi-byte transaction ordering is register-specific/gi, "低地址存放低字节；多字节访问顺序见具体寄存器说明。")
+    .replace(/LSB at lower (?:ESC|EtherCAT Core) address/gi, "低地址存放低字节。")
+    .replace(/Read low byte\/low part first; this latches upper bits for a consistent 64-bit snapshot\./gi, "先读取低字节／低半部，锁存高位以取得一致的 64 位快照。")
+    .replace(/for registers with snapshot-latch semantics, read the low byte\/low part first\./gi, "对具有快照锁存语义的寄存器，先读取低字节／低半部。")
+    .replace(/byte-addressed memory; (?:EtherCAT\/PDI application endianness is protocol-specific|application data endianness is protocol\/application-defined)/gi, "按字节寻址；应用数据字节序由协议／应用定义。")
+    .replace(/^field-defined$/i, "按各字段定义").replace(/^EEPROM-configurable$/i, "可由 EEPROM 配置")
+    .replace(/Configuration registers with r\/\(w\) are writable only while this SyncManager is disabled \(\+0x6\[0\]=0\)\./gi, "仅在对应 SyncManager 通道禁用（激活寄存器 bit0=0）时允许修改配置。");
 }
 
 /** Only readable EtherCAT master ranges can create device reads. */
@@ -83,15 +144,160 @@ function failureText(error: unknown): string {
 }
 
 /** Secondary information stays available without filling the default workspace. */
-function Disclosure({ title, children, defaultExpanded = false }: { title: string; children: ReactNode; defaultExpanded?: boolean }) {
-  return <Accordion defaultExpanded={defaultExpanded} disableGutters elevation={0} sx={disclosureSx}>
+function Disclosure({ title, children, defaultExpanded = false }: { title: string; children: ReactNode | (() => ReactNode); defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  return <Accordion expanded={expanded} onChange={(_, value) => setExpanded(value)} disableGutters elevation={0} sx={disclosureSx}
+    slotProps={{ transition: { mountOnEnter: true, unmountOnExit: true } }}>
     <AccordionSummary expandIcon={<ExpandMoreRounded sx={{ fontSize: 17 }} />}><Typography fontSize={12}>{title}</Typography></AccordionSummary>
-    <AccordionDetails>{children}</AccordionDetails>
+    <AccordionDetails>{expanded && (typeof children === "function" ? children() : children)}</AccordionDetails>
   </Accordion>;
 }
 
+/** Separate reference sections with consistent headings and readable field rows. */
+function DocumentationSection({ title, children }: { title: ReactNode; children: ReactNode }) {
+  return <Stack spacing={0.75}>
+    <Typography fontSize={12} fontWeight={600}>{title}</Typography>
+    {children}
+  </Stack>;
+}
+
+/** Use the same English permission codes and hover explanations throughout the page. */
+function RegisterAccess({ access }: { access?: string }) {
+  return <Tooltip title={registerAccessDescription(access)}>
+    <Typography component="span" sx={{ fontSize: "inherit", color: "inherit" }}>{registerAccessLabel(access)}</Typography>
+  </Tooltip>;
+}
+
+/** Field permissions and meanings remain together within each separated row. */
+function DocumentationFields({ fields }: { fields: NonNullable<RegisterDefinition["fields"]> }) {
+  return <Stack divider={<Divider />} spacing={1}>
+    {fields.map((field, index) => {
+      const accesses = [["ECAT", field.ecat_access], ["PDI", field.pdi_access]]
+        .filter(([, access]) => documentationText(registerAccessLabel(access)));
+      const description = documentationText(field.description);
+      return <Box key={`${field.bits}-${index}`} sx={{ lineHeight: 1.7 }}>
+        <Typography fontSize={11} fontWeight={600}>{field.bits} · {field.reserved ? "保留" : field.name}</Typography>
+        {accesses.length > 0 && <Stack direction="row" spacing={0.75} divider={<Typography fontSize={11} color="text.secondary">·</Typography>}>
+          {accesses.map(([label, access]) => <Typography key={label} fontSize={11} color="text.secondary">{label}：<RegisterAccess access={access} /></Typography>)}
+        </Stack>}
+        {description && <Typography fontSize={11} sx={{ mt: 0.25, lineHeight: 1.7, whiteSpace: "pre-line" }}>{description}</Typography>}
+      </Box>;
+    })}
+  </Stack>;
+}
+
+interface RegisterRowProps {
+  definition: RegisterDefinition; index: number; value?: string; change?: ValueChange; error?: string;
+  format: ValueFormat; monitor: boolean; selected: boolean; writing: boolean; reading: boolean;
+  favorite: boolean; favoriteFeedback: boolean;
+  onSelect: (definition: RegisterDefinition) => void;
+  onFavorite: (definition: RegisterDefinition, monitor: boolean, favorite: boolean) => void;
+}
+
+/** Unchanged rows stay idle when selection, editor state, or another value changes. */
+const RegisterTableRow = memo(function RegisterTableRow({ definition, index, value, change, error, format, monitor, selected,
+  writing, reading, favorite, favoriteFeedback, onSelect, onFavorite }: RegisterRowProps) {
+  const key = definitionKey(definition), name = registerDisplayName(definition), meaning = registerMeaning(definition, value);
+  return <TableRow key={key} data-register-key={key} data-register-index={index} aria-rowindex={index + 2} hover selected={selected} tabIndex={writing ? -1 : 0}
+    onClick={() => onSelect(definition)} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") onSelect(definition); }}
+    sx={{ cursor: "pointer", height: 36, "&:hover .register-favorite, &:focus-within .register-favorite": { visibility: "visible" }, "&.Mui-selected": { bgcolor: "#EDF2FF" } }}>
+    <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650 }}>{hex(definition.address)}</TableCell>
+    <TableCell sx={{ overflow: "hidden" }}><Tooltip title={<Stack spacing={0.25}><span>{name}</span>{name !== (definition.official_name ?? definition.name) && <span>{definition.official_name ?? definition.name}</span>}</Stack>}><Typography fontSize={12} fontWeight={400} noWrap>{name}</Typography></Tooltip></TableCell>
+    <TableCell><Tooltip title={error || readHint(definition) || (monitor && change && value ? `${formatRegisterValue(change.previous, format)} → ${formatRegisterValue(value, format)}` : value ?? "")}>
+      <Typography className="mono" fontSize={12} color={error ? "error.main" : "text.primary"} noWrap>
+        {!ecatAccessible(definition) ? "ECAT不可访问" : value ? formatRegisterValue(value, format) : error ? "读取失败" : definition.is_reserved ? "保留地址" : definition.access === "WO" ? "只写" : requiresManualRead(definition) ? "需手动读取" : definition.automatic_read_allowed === false ? "不适用" : reading ? "读取中…" : "未读取"}
+        {value && meaning && <Box component="span" sx={{ color: "text.secondary", ml: 0.75, fontFamily: "inherit", fontSize: 11 }}>{meaning}</Box>}
+        {value && error && <Box component="span" sx={{ color: "error.main", ml: 0.75, fontSize: 11 }}>旧值 · 读取失败</Box>}
+        {monitor && change && <Box component="span" sx={{ color: "warning.main", ml: 0.75, fontSize: 11 }}>变化</Box>}
+      </Typography>
+    </Tooltip></TableCell>
+    <TableCell><Typography fontSize={11} color="text.secondary"><RegisterAccess access={definition.access} /></Typography></TableCell>
+    <TableCell><Typography fontSize={11} color="text.secondary">{registerWidth(definition)} B</Typography></TableCell>
+    <TableCell sx={{ px: 0.25 }}><IconButton size="small" className="register-favorite" aria-label={monitor ? `移除监视 ${registerLabel(definition.name)}` : `收藏 ${registerLabel(definition.name)}`}
+      sx={{ p: 0.5, visibility: monitor || favorite ? "visible" : "hidden" }} onClick={(event) => {
+        event.stopPropagation();
+        onFavorite(definition, monitor, favorite);
+      }}>{monitor ? <CloseRounded sx={{ fontSize: 16 }} /> : favorite ? <StarRounded className={favoriteFeedback ? "register-star-selected" : undefined} sx={{ fontSize: 16 }} color="warning" /> : <StarBorderRounded sx={{ fontSize: 16 }} />}</IconButton></TableCell>
+  </TableRow>;
+});
+
+interface RegisterTableProps {
+  definitions: RegisterDefinition[]; values: Record<string, RegisterValue>; changes: Record<string, ValueChange>;
+  errors: Record<string, string>; favorites: Set<string>; selectedKey: string; favoriteFeedback?: string;
+  format: ValueFormat; monitor: boolean; writing: boolean; reading: boolean; scope: string;
+  loading: boolean; emptyText: string;
+  onSelect: RegisterRowProps["onSelect"]; onFavorite: RegisterRowProps["onFavorite"];
+}
+const registerRowHeight = 36;
+const registerHeaderHeight = 36;
+const registerOverscan = 8;
+
+/** Keep only viewport rows mounted while spacer rows preserve the full scroll range. */
+const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, values, changes, errors, favorites, selectedKey,
+  favoriteFeedback, format, monitor, writing, reading, scope, loading, emptyText, onSelect, onFavorite }: RegisterTableProps) {
+  const container = useRef<HTMLDivElement>(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  useLayoutEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const resize = () => setViewport((current) => current.height === element.clientHeight ? current : { ...current, height: element.clientHeight });
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  // Filters reset the scroll position; selecting or favoriting a row does not.
+  useLayoutEffect(() => {
+    if (container.current) container.current.scrollTop = 0;
+    setViewport((current) => current.top === 0 ? current : { ...current, top: 0 });
+  }, [scope]);
+  const firstVisible = Math.floor(Math.max(0, viewport.top - registerHeaderHeight) / registerRowHeight);
+  const start = Math.max(0, Math.min(firstVisible - registerOverscan, definitions.length - 1));
+  const end = Math.min(definitions.length, Math.ceil((viewport.top + viewport.height) / registerRowHeight) + registerOverscan);
+
+  /** Arrow navigation scrolls and mounts the target before moving keyboard focus. */
+  const navigate = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const row = (event.target as HTMLElement).closest<HTMLTableRowElement>("tr[data-register-index]");
+    if (!row || event.target !== row || writing || !container.current) return;
+    const index = Number(row.dataset.registerIndex);
+    const target = event.key === "ArrowDown" ? index + 1 : event.key === "ArrowUp" ? index - 1
+      : event.key === "Home" ? 0 : event.key === "End" ? definitions.length - 1 : undefined;
+    if (target === undefined || target < 0 || target >= definitions.length) return;
+    event.preventDefault();
+    const element = container.current, top = target * registerRowHeight + registerHeaderHeight;
+    if (top < element.scrollTop + registerHeaderHeight) element.scrollTop = top - registerHeaderHeight;
+    else if (top + registerRowHeight > element.scrollTop + element.clientHeight) element.scrollTop = top + registerRowHeight - element.clientHeight;
+    setViewport((current) => ({ ...current, top: element.scrollTop }));
+    requestAnimationFrame(() => element.querySelector<HTMLTableRowElement>(`tr[data-register-index="${target}"]`)?.focus({ preventScroll: true }));
+  };
+  return <TableContainer ref={container} onKeyDown={navigate} onScroll={(event) => {
+    const top = event.currentTarget.scrollTop;
+    setViewport((current) => current.top === top ? current : { ...current, top });
+  }} sx={{ flex: 1, minHeight: 0, overflowAnchor: "none" }}>
+    <Table stickyHeader size="small" aria-rowcount={definitions.length + 1} sx={{ tableLayout: "fixed", "& td, & th": { fontSize: 12, py: 0.5, borderColor: "#EEF1F6", boxSizing: "border-box", height: registerRowHeight }, "& th": { py: 0, height: registerHeaderHeight } }}>
+      <TableHead><TableRow aria-rowindex={1}>
+        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: 200 }}>当前值</TableCell>
+        <TableCell sx={{ width: 58 }}>权限</TableCell><TableCell sx={{ width: 58 }}>宽度</TableCell><TableCell sx={{ width: 32 }} />
+      </TableRow></TableHead>
+      <TableBody>
+        {start > 0 && <TableRow aria-hidden><TableCell colSpan={6} style={{ padding: 0, border: 0, height: start * registerRowHeight }} /></TableRow>}
+        {definitions.slice(start, end).map((definition, offset) => {
+          const key = definitionKey(definition);
+          return <RegisterTableRow key={key} definition={definition} index={start + offset} value={values[key]?.data} change={changes[key]} error={errors[key]}
+            format={format} monitor={monitor} selected={key === selectedKey} writing={writing} reading={reading && !values[key]}
+            favorite={favorites.has(key)} favoriteFeedback={favoriteFeedback === key} onSelect={onSelect} onFavorite={onFavorite} />;
+        })}
+        {end < definitions.length && <TableRow aria-hidden><TableCell colSpan={6} style={{ padding: 0, border: 0, height: (definitions.length - end) * registerRowHeight }} /></TableRow>}
+        {!definitions.length && <TableRow><TableCell colSpan={6} sx={{ py: "70px !important", textAlign: "center", color: "text.secondary" }}>
+          {loading ? <CircularProgress size={22} /> : emptyText}
+        </TableCell></TableRow>}
+      </TableBody>
+    </Table>
+  </TableContainer>;
+});
+
 /** A session snapshot serves all list views; only explicit monitoring repeats reads. */
-export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlocked, sessionContext }: Props) {
+export const RegistersPage = memo(function RegistersPage({ slave, run, registerProfile, deviceOperationsBlocked, sessionContext }: Props) {
   const outerTheme = useTheme();
   // The nested theme also reaches portal menus and dialogs, without affecting other pages.
   const registerTheme = useMemo(() => createTheme(outerTheme, {
@@ -120,6 +326,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     },
   }), [outerTheme]);
   const [catalog, setCatalog] = useState<RegisterDefinition[]>([]);
+  const catalogVersion = useRef("");
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pageError, setPageError] = useState("");
   const [view, setView] = useState<CatalogView>("common");
@@ -127,6 +334,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const [query, setQuery] = useState("");
   const [monitor, setMonitor] = useState(false);
   const [selected, setSelected] = useState<RegisterDefinition>();
+  const [fieldVariant, setFieldVariant] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const preferences = useMemo(() => registerPreferences(registerProfile), [registerProfile]);
@@ -141,7 +349,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const [reading, setReading] = useState(false);
   const [watching, setWatching] = useState(false);
   const [intervalMs, setIntervalMs] = useState(preferences.intervalMs);
-  const [showReserved, setShowReserved] = useState(false);
+  const [manualError, setManualError] = useState("");
   const [watchConfirm, setWatchConfirm] = useState<RegisterDefinition>();
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
@@ -162,6 +370,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const [copied, setCopied] = useState(false);
   const [favoriteFeedback, setFavoriteFeedback] = useState<string>();
   const cache = useRef(new Map<string, Promise<RegisterDefinition>>());
+  const resolvedDefinitions = useRef(new Map<string, RegisterDefinition>());
   const valuesRef = useRef(values);
   const dirtyRef = useRef(false);
   const attempted = useRef(new Set<string>());
@@ -212,19 +421,20 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     let active = true;
     if (cachedSession !== sessionContext) { snapshots.clear(); cachedSession = sessionContext; }
     const saved = snapshots.get(context);
-    cache.current = new Map(); queue.current = []; queued.current.clear(); attempted.current.clear();
+    cache.current = new Map(); resolvedDefinitions.current = saved?.details ?? new Map();
+    catalogVersion.current = saved?.catalogVersion ?? ""; queue.current = []; queued.current.clear(); attempted.current.clear();
     automaticPaused.current = false; fullReadQueued.current = false; initialReadDone.current = Boolean(saved?.snapshot);
     dirtyRef.current = false; requestSequence.current += 1;
     setCatalog(saved?.catalog ?? []); setSelected(undefined); setPinned([]);
     setValues(saved?.values ?? {}); valuesRef.current = saved?.values ?? {}; setErrors(saved?.errors ?? {});
     setChanges({}); setSnapshotInfo(saved?.snapshot); setReadbackKeys(new Set());
     setWatching(false); setReading(false); setDetailLoading(false);
-    setPageError(""); setDetailError(""); setWriteContext(undefined); setWriteDialog(false); setWatchConfirm(undefined);
+    setPageError(""); setDetailError(""); setManualError(""); setWriteContext(undefined); setWriteDialog(false); setWatchConfirm(undefined);
     setRawOpen(false); setRawResult(undefined); setRawError(""); setResetConfirm(false); setMonitor(false);
     if (!slave) return;
     setCatalogLoading(true);
-    bridgeRequest<RegisterDefinition[]>("register_catalog", { position: slave.position, profile: registerProfile })
-      .then((data) => { if (active) setCatalog(data.filter((item) => item.address_space === "esc_core" && item.master_access_allowed !== false)); })
+    bridgeRequest<RegisterCatalog>("register_catalog", { position: slave.position, profile: registerProfile, catalog_version: catalogVersion.current })
+      .then((data) => { if (active) acceptCatalog(data.catalog, data.catalog_version); })
       .catch((error) => { if (active) setPageError(failureText(error)); })
       .finally(() => { if (active) setCatalogLoading(false); });
     return () => { active = false; };
@@ -235,7 +445,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     if (!catalog.length) return;
     setPinned((current) => {
       const ids = new Set([...persistedPinned.current, ...current.map(definitionKey)]);
-      return catalog.filter((item) => ids.has(definitionKey(item)));
+      return catalog.filter((item) => ids.has(definitionKey(item)) && canRead(item));
     });
   }, [catalog]);
   useEffect(() => {
@@ -245,26 +455,67 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     window.localStorage.setItem(`benchcat-registers:${registerProfile}`, JSON.stringify({ favorites: [...favorites], pinned: persistedPinned.current, intervalMs, format }));
   }, [favorites, pinned, intervalMs, format, registerProfile]);
   useEffect(() => {
-    if (catalog.length) snapshots.set(context, { catalog, values, errors, snapshot: snapshotInfo });
+    if (catalog.length) snapshots.set(context, { catalog, catalogVersion: catalogVersion.current, details: resolvedDefinitions.current, values, errors, snapshot: snapshotInfo });
   }, [catalog, values, errors, snapshotInfo, context]);
 
-  const groups = useMemo(() => [...new Set(catalog.map((item) => item.group))], [catalog]);
+  // Reference-only groups are explicit choices and always appear at the end of the menu.
+  const groups = useMemo(() => {
+    const available = new Set(catalog.filter((item) => ecatAccessible(item) || referenceGroups.includes(functionGroup(item))).map(functionGroup));
+    return [...available].filter((item) => !referenceGroups.includes(item)).concat(referenceGroups.filter((item) => available.has(item)));
+  }, [catalog]);
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase();
     return catalog.filter((item) => {
+      const itemGroup = functionGroup(item);
+      if (!ecatAccessible(item) && !(referenceGroups.includes(group) && itemGroup === group)) return false;
       if (!showReservedAddresses && item.is_reserved) return false;
       if (view === "favorites" && !favorites.has(definitionKey(item))) return false;
       if (!text && view === "common" && !isCommonRegister(item)) return false;
-      if (group && item.group !== group) return false;
-      return matchesRegisterSearch(item, text) || Boolean(text && (groupLabels[item.group] ?? "").includes(text));
+      if (group && itemGroup !== group) return false;
+      return matchesRegisterSearch(item, text) || Boolean(text && (groupLabels[itemGroup] ?? "").includes(text));
     }).sort((left, right) => left.address - right.address);
   }, [catalog, view, group, query, favorites, showReservedAddresses]);
   const displayed = monitor ? pinned : filtered;
+  // Selection and editor updates reuse the same list totals.
+  const listCounts = useMemo(() => {
+    let available = 0, failed = 0, manual = 0;
+    for (const item of displayed) {
+      const key = definitionKey(item);
+      if (values[key]) available += 1;
+      if (errors[key]) failed += 1;
+      if (canRead(item) && requiresManualRead(item)) manual += 1;
+    }
+    return { available, failed, manual };
+  }, [displayed, values, errors]);
   const selectedKey = selected ? definitionKey(selected) : "";
+  // Reset conditional tables on selection; reset status is the normal read interpretation.
+  useEffect(() => { setFieldVariant(selected?.field_variants?.[0]?.name === "读取状态" ? "读取状态" : ""); }, [selectedKey, selected?.field_variants]);
+  const variantFields = selected?.field_variants?.find((variant) => variant.name === fieldVariant)?.fields;
+  const parsedDefinition = selected && variantFields ? { ...selected, fields: variantFields, bit_fields: [] } : selected;
   const selectedValue = values[selectedKey];
-  const selectedFields = selected && selectedValue ? decodeRegisterFields(selected, selectedValue.data) : [];
+  const selectedFields = parsedDefinition && selectedValue ? decodeRegisterFields(parsedDefinition, selectedValue.data) : [];
+  // Keep documented metadata only, excluding the routine little-endian explanation.
+  const documentationItems: [string, string | undefined][] = selected ? [
+    ["主站权限", registerAccessLabel(selected.master_access ?? selected.access)],
+    ["PDI 权限", registerAccessLabel(selected.pdi_access)],
+    ["复位／默认值", selected.reset_value],
+    ["上电值", selected.power_on_default !== selected.reset_value ? selected.power_on_default : undefined],
+    ["AL 状态限制", selected.state_restriction],
+    ["硬件／访问条件", selected.hardware_condition],
+    ["保留位规则", selected.fields?.some((field) => field.reserved) || selected.field_variants?.some((variant) => variant.fields.some((field) => field.reserved)) ? selected.reserved_bits_rule : undefined],
+    ["字节序", selected.byte_order],
+  ] : [];
+  const visibleDocumentationItems = documentationItems.map(([label, text]) => [label, documentationText(text)])
+    .filter(([label, text]) => text && !(label === "字节序" && text === "小端字节序：低地址存放低字节，高地址存放高字节。"));
+  const operationNotes: [string, string | undefined][] = selected ? [
+    ...(selected.read_side_effects ?? []).map((text): [string, string] => [selected.address_space === "user_ram" || selected.address_space === "process_ram" ? "读取说明" : /Read clears.*counter/i.test(text) ? "读取清除" : "读取确认", text]),
+    ...(selected.write_side_effects ?? []).map((text): [string, string] => ["写入副作用", text]),
+    ["写入顺序", selected.write_sequence],
+    ...(selected.documentation_notes ?? []).map((text): [string, string] => ["", text]),
+  ] : [];
+  const visibleOperationNotes = operationNotes.map(([label, text]) => [label, documentationText(text)]).filter(([, text]) => text);
   const rawNumericAddress = parseRegisterAddress(rawAddress);
-  const rawDefinition = catalog.find((item) => item.address === rawNumericAddress);
+  const rawDefinition = catalog.find((item) => item.address_space === "esc_core" && item.address === rawNumericAddress);
   const rawWidth = rawDefinition ? registerWidth(rawDefinition) : rawSize;
   const rawValid = rawNumericAddress !== undefined && Number.isInteger(rawWidth) && rawWidth >= 1 && rawWidth <= 256 && rawNumericAddress + rawWidth <= 0x10000;
   const writeBytes = writeContext ? encodeRegisterInput(writeInput, writeContext.width, writeFormat) : undefined;
@@ -272,12 +523,27 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const controlsBlocked = deviceOperationsBlocked || reading || writing;
   const writable = Boolean(selected?.direct_write_allowed && selected.access !== "RO" && !selected.dangerous);
 
+  /** Replace catalogs only when capabilities change, invalidating stale detail requests. */
+  const acceptCatalog = (definitions: RegisterDefinition[] | null | undefined, version?: string) => {
+    if (!definitions) return;
+    if (version !== catalogVersion.current) {
+      cache.current = new Map(); resolvedDefinitions.current = new Map();
+      requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); setDetailLoading(false);
+    }
+    catalogVersion.current = version ?? "";
+    setCatalog(definitions);
+  };
+
   /** Detailed permissions and read side effects are resolved before automatic reads. */
   const loadDefinition = (definition: RegisterDefinition): Promise<RegisterDefinition> => {
     const key = definitionKey(definition);
+    const resolved = resolvedDefinitions.current.get(key);
+    if (resolved) return Promise.resolve(resolved);
     let pending = cache.current.get(key);
     if (!pending) {
-      pending = bridgeRequest<RegisterDefinition>("register_definition", { position: slave?.position, profile: registerProfile, definition_id: definition.definition_id });
+      const resolvedCache = resolvedDefinitions.current;
+      pending = bridgeRequest<RegisterDefinition>("register_definition", { position: slave?.position, profile: registerProfile, definition_id: definition.definition_id })
+        .then((detail) => { resolvedCache.set(key, detail); return detail; });
       const currentCache = cache.current;
       currentCache.set(key, pending);
       void pending.catch(() => { if (currentCache.get(key) === pending) currentCache.delete(key); });
@@ -290,8 +556,12 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     if (!mounted.current || contextRef.current !== requestedContext) return;
     const next = { ...valuesRef.current }, nextChanges: Record<string, ValueChange> = {};
     const keys: string[] = [];
+    // Index acquired ranges once instead of scanning every result for every catalog entry.
+    const ranges = new Map(results.map((item) => [`${item.address}:${item.data.trim().split(/\s+/).length}`, item]));
     for (const definition of definitions) {
-      const value = results.find((item) => item.address === definition.address && item.data.trim().split(/\s+/).length === registerWidth(definition));
+      // Local/PHY offsets must never acquire values from a same-address ESC transaction.
+      if (!canRead(definition)) continue;
+      const value = ranges.get(`${definition.address}:${registerWidth(definition)}`);
       if (!value) continue;
       const key = definitionKey(definition), previous = next[key];
       if (previous && previous.data !== value.data) nextChanges[key] = { previous: previous.data, timestamp: value.timestamp };
@@ -317,13 +587,14 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
         snapshotRequest.current = requestId;
         try {
           const result = await bridgeRequest<RegisterSnapshot>("register_snapshot", {
-            request_id: requestId, position: slave.position, profile: registerProfile, all: readAll,
+            request_id: requestId, position: slave.position, profile: registerProfile, all: readAll, catalog_version: catalogVersion.current,
             automatic: jobs.every((job) => job.automatic),
-            requests: jobs.map((job) => ({ address: job.definition.address, size: registerWidth(job.definition), definition_id: job.definition.definition_id })),
+            // Full acquisition is resolved by the backend catalog, without repeating every range in the request.
+            requests: readAll ? [] : jobs.map((job) => ({ address: job.definition.address, size: registerWidth(job.definition), definition_id: job.definition.definition_id })),
           });
           if (!mounted.current || contextRef.current !== requestedContext) break;
-          if (result.catalog) setCatalog(result.catalog);
-          acceptValues(result.catalog ?? jobs.map((job) => job.definition), result.values, requestedContext);
+          acceptCatalog(result.catalog, result.catalog_version);
+          acceptValues(result.catalog ?? (readAll ? catalog : jobs.map((job) => job.definition)), result.values, requestedContext);
           setErrors((current) => ({ ...current, ...result.errors })); setSnapshotInfo(result);
           if (result.error) setPageError(result.error);
           for (const job of jobs) attempted.current.add(definitionKey(job.definition));
@@ -373,14 +644,23 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   /** Selecting a register fetches missing values without requiring a second button. */
   const selectDefinition = async (definition: RegisterDefinition) => {
     if (writing || deviceOperationsBlocked) return;
+    // Re-selecting the current row preserves its editor and avoids redundant state updates.
+    if (selectedKey === definitionKey(definition) && !detailError) return;
     const sequence = ++requestSequence.current, requestedContext = context;
-    dirtyRef.current = false; setSelected(definition); setWriteContext(undefined); setWriteInput("");
-    setWriteError(""); setWriteMessage(""); setDetailLoading(true); setDetailError("");
+    const cached = resolvedDefinitions.current.get(definitionKey(definition));
+    dirtyRef.current = false; setSelected(cached ?? definition); setWriteContext(undefined); setWriteInput("");
+    setWriteError(""); setWriteMessage(""); setDetailLoading(!cached); setDetailError("");
+    setManualError("");
+    // Cached definitions appear synchronously, without a loading-state round trip.
+    if (cached) {
+      if (!valuesRef.current[definitionKey(cached)] && cached.automatic_read_allowed !== false && !requiresManualRead(cached)) enqueueReads([cached], true);
+      return;
+    }
     try {
       const detail = await loadDefinition(definition);
       if (!mounted.current || contextRef.current !== requestedContext || sequence !== requestSequence.current) return;
       setSelected(detail);
-      if (!valuesRef.current[definitionKey(detail)] && detail.automatic_read_allowed !== false && !hasReadSideEffects(detail)) enqueueReads([detail], true);
+      if (!valuesRef.current[definitionKey(detail)] && detail.automatic_read_allowed !== false && !requiresManualRead(detail)) enqueueReads([detail], true);
     } catch (error) {
       if (mounted.current && contextRef.current === requestedContext && sequence === requestSequence.current) setDetailError(failureText(error));
     } finally {
@@ -406,9 +686,10 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     enqueueReads(catalog, true, true);
   };
 
-  /** Read side effects require opt-in before a register enters a repeated watch. */
+  /** Explicit monitoring presents the actual reason that default acquisition is manual. */
   const addWatch = (definition: RegisterDefinition) => {
-    if (hasReadSideEffects(definition)) { setWatchConfirm(definition); return; }
+    if (!canRead(definition)) return;
+    if (requiresManualRead(definition)) { setWatchConfirm(definition); return; }
     setPinned((current) => current.some((item) => definitionKey(item) === definitionKey(definition)) ? current : [...current, definition]);
   };
   const pollKey = pinned.map(definitionKey).join("|");
@@ -560,12 +841,13 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   /** Reuse one inline editor for ordinary and raw register writes. */
   const renderEditor = () => <Stack spacing={1.25}>
     {writeContext?.access === "WAC" ? <Typography fontSize={12} color="text.secondary">写入后清零此计数器</Typography> : <Stack direction="row" spacing={0.75}>
-      <TextField fullWidth size="small" label={writeContext?.access === "W1C" ? "清除位掩码" : writeContext?.access === "W1S" ? "置位掩码" : "写入值"} value={writeInput}
+      <TextField fullWidth size="small" label={writeContext?.access === "W1C" ? "清除位掩码" : writeContext?.access === "W1S" ? "置位掩码" : writeFormat === "bytes" ? "写入值（HEX）" : "写入值"} value={writeInput}
         onChange={(event) => { dirtyRef.current = true; setWatching(false); setWriteInput(event.target.value); setWriteMessage(""); }}
+        helperText={writeFormat === "bytes" ? `按地址顺序输入 ${writeContext?.width} 字节十六进制数据，低地址在前。` : undefined}
         disabled={controlsBlocked} error={Boolean(writeInput && !writeBytes)} inputProps={{ className: "mono", style: { fontSize: 13 } }} />
-      <FormControl size="small" sx={{ width: 87, flexShrink: 0 }}><Select value={writeFormat} inputProps={{ "aria-label": "写入值格式" }} disabled={controlsBlocked} onChange={(event) => changeWriteFormat(event.target.value as ValueFormat)} sx={{ fontSize: 12 }}>
-        {writeContext && writeContext.width <= 8 && [<MenuItem key="hex" value="hex">HEX</MenuItem>, <MenuItem key="decimal" value="decimal">DEC</MenuItem>]}<MenuItem value="bytes">字节</MenuItem>
-      </Select></FormControl>
+      {writeFormat === "bytes" ? <Typography fontSize={12} color="text.secondary" sx={{ pt: 1 }}>HEX</Typography> : <FormControl size="small" sx={{ width: 87, flexShrink: 0 }}><Select value={writeFormat} inputProps={{ "aria-label": "写入值格式" }} disabled={controlsBlocked} onChange={(event) => changeWriteFormat(event.target.value as ValueFormat)} sx={{ fontSize: 12 }}>
+        <MenuItem value="hex">HEX</MenuItem><MenuItem value="decimal">DEC</MenuItem>
+      </Select></FormControl>}
     </Stack>}
     {writeInput && !writeBytes && <Typography fontSize={11} color="error.main">数值格式不正确或超出寄存器范围</Typography>}
     <Button fullWidth variant="contained" size="small" disabled={controlsBlocked || !writeBytes || Boolean(writeError) || !writeContext || (writeContext.access === "RW" && !writeContext.current)} onClick={() => void executeWrite()}>
@@ -583,46 +865,18 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   </Stack>;
 
   /** Compact rows keep timing and raw communication information out of the default table. */
-  const renderTable = () => <TableContainer sx={{ flex: 1, minHeight: 0 }}>
-    <Table stickyHeader size="small" sx={{ tableLayout: "fixed", "& td, & th": { fontSize: 12, py: 0.5, borderColor: "#EEF1F6" }, "& th": { height: 34 } }}>
-      <TableHead><TableRow>
-        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: 200 }}>当前值</TableCell>
-        <TableCell sx={{ width: 58 }}>权限</TableCell><TableCell sx={{ width: 58 }}>宽度</TableCell><TableCell sx={{ width: 32 }} />
-      </TableRow></TableHead>
-      <TableBody>{displayed.map((definition) => {
-        const key = definitionKey(definition), value = values[key], change = changes[key], error = errors[key], meaning = registerMeaning(definition, value?.data);
-        return <TableRow key={key} data-register-key={key} hover selected={key === selectedKey} tabIndex={writing ? -1 : 0}
-          onClick={() => void selectDefinition(definition)} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") void selectDefinition(definition); }}
-          sx={{ cursor: "pointer", height: 36, "&:hover .register-favorite, &:focus-within .register-favorite": { visibility: "visible" }, "&.Mui-selected": { bgcolor: "#EDF2FF" } }}>
-          <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650 }}>{hex(definition.address)}</TableCell>
-          <TableCell sx={{ overflow: "hidden" }}><Tooltip title={<Stack spacing={0.25}><span>{registerDisplayName(definition)}</span>{registerDisplayName(definition) !== (definition.official_name ?? definition.name) && <span>{definition.official_name ?? definition.name}</span>}</Stack>}><Typography fontSize={12} fontWeight={400} noWrap>{registerDisplayName(definition)}</Typography></Tooltip></TableCell>
-          <TableCell><Tooltip title={error || (hasReadSideEffects(definition) ? "读取可能确认事件。请使用右侧的刷新图标手动读取。" : monitor && change && value ? `${formatRegisterValue(change.previous, format)} → ${formatRegisterValue(value.data, format)}` : value?.data ?? "")}>
-            <Typography className="mono" fontSize={12} color={error ? "error.main" : "text.primary"} noWrap>
-              {value ? formatRegisterValue(value.data, format) : error ? "读取失败" : definition.is_reserved ? "保留地址" : definition.access === "WO" ? "只写" : hasReadSideEffects(definition) ? "需手动读取" : definition.automatic_read_allowed === false ? "不适用" : reading ? "读取中…" : "未读取"}
-              {value && meaning && <Box component="span" sx={{ color: "text.secondary", ml: 0.75, fontFamily: "inherit", fontSize: 11 }}>{meaning}</Box>}
-              {value && error && <Box component="span" sx={{ color: "error.main", ml: 0.75, fontSize: 11 }}>旧值 · 读取失败</Box>}
-              {monitor && change && <Box component="span" sx={{ color: "warning.main", ml: 0.75, fontSize: 11 }}>变化</Box>}
-            </Typography>
-          </Tooltip></TableCell>
-          <TableCell><Tooltip title={definition.master_access ?? definition.access}><Typography fontSize={11} color="text.secondary">{({ RO: "只读", RW: "读写", WO: "只写", WAC: "清零", W1C: "W1C", W1S: "W1S", MIXED: "混合" } as Record<string, string>)[definition.access] ?? definition.access}</Typography></Tooltip></TableCell>
-          <TableCell><Typography fontSize={11} color="text.secondary">{registerWidth(definition)} B</Typography></TableCell>
-          <TableCell sx={{ px: 0.25 }}><IconButton size="small" className="register-favorite" aria-label={monitor ? `移除监视 ${registerLabel(definition.name)}` : `收藏 ${registerLabel(definition.name)}`}
-            sx={{ p: 0.5, visibility: monitor || favorites.has(key) ? "visible" : "hidden" }} onClick={(event) => {
-              event.stopPropagation();
-              if (monitor) { setPinned((current) => current.filter((item) => definitionKey(item) !== key)); setWatching(false); }
-              else {
-                setFavoriteFeedback(favorites.has(key) ? undefined : key);
-                setFavorites((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
-              }
-            }}>{monitor ? <CloseRounded sx={{ fontSize: 16 }} /> : favorites.has(key) ? <StarRounded className={favoriteFeedback === key ? "register-star-selected" : undefined} sx={{ fontSize: 16 }} color="warning" /> : <StarBorderRounded sx={{ fontSize: 16 }} />}</IconButton></TableCell>
-        </TableRow>;
-      })}
-        {!displayed.length && <TableRow><TableCell colSpan={6} sx={{ py: "70px !important", textAlign: "center", color: "text.secondary" }}>
-          {catalogLoading ? <CircularProgress size={22} /> : monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
-        </TableCell></TableRow>}
-      </TableBody>
-    </Table>
-  </TableContainer>;
+  // Stable row callbacks dispatch to the current page logic without stale session state.
+  const rowActions = useRef({ select: selectDefinition });
+  rowActions.current = { select: selectDefinition };
+  const selectRow = useCallback((definition: RegisterDefinition) => { void rowActions.current.select(definition); }, []);
+  const favoriteRow = useCallback((definition: RegisterDefinition, monitoring: boolean, favorite: boolean) => {
+    const key = definitionKey(definition);
+    if (monitoring) { setPinned((current) => current.filter((item) => definitionKey(item) !== key)); setWatching(false); }
+    else {
+      setFavoriteFeedback(favorite ? undefined : key);
+      setFavorites((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
+    }
+  }, []);
 
   return <ThemeProvider theme={registerTheme}><Stack className="register-workspace" spacing={1.25} sx={{ "& .MuiButton-root": { fontSize: 12 } }}>
     <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ minHeight: 28 }}>
@@ -637,15 +891,15 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
         <Box sx={{ flex: 1 }} />
       </> : <>
         {/* Equal segments share one moving thumb; this anchor never follows the function filter. */}
-        <Tabs className="register-view-tabs" value={view} onChange={(_, value: CatalogView) => { setView(value); setGroup(""); }} aria-label="寄存器列表范围">
+        <Tabs className="register-view-tabs" value={view} onChange={(_, value: CatalogView) => { requestSequence.current += 1; setView(value); setGroup(""); setSelected(undefined); setWriteContext(undefined); }} aria-label="寄存器列表范围">
           <Tab value="common" label="常用" disabled={writing} /><Tab value="all" label="全部" disabled={writing} /><Tab value="favorites" label="收藏" disabled={writing} />
         </Tabs>
         <TextField size="small" placeholder="搜索名称、地址或地址范围" inputProps={{ "aria-label": "搜索寄存器" }} value={query} disabled={writing}
           onChange={(event) => { setQuery(event.target.value); requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}
           InputProps={{ startAdornment: <SearchRounded sx={{ fontSize: 18, color: "text.secondary", mr: 0.75 }} /> }} sx={{ flex: 1, minWidth: 190, "& input": { fontSize: 12, py: 1 } }} />
-        {view === "all" && <FormControl size="small" sx={{ width: 156, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => setGroup(event.target.value)} sx={{ fontSize: 12 }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
+        {view === "all" && <FormControl size="small" sx={{ width: 156, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => { requestSequence.current += 1; setGroup(event.target.value); setSelected(undefined); setWriteContext(undefined); }} sx={{ fontSize: 12 }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
       </>}
-      <FormControl size="small" sx={{ width: 84, flexShrink: 0 }}><Select value={format} inputProps={{ "aria-label": "值显示格式" }} onChange={(event) => setFormat(event.target.value as ValueFormat)} sx={{ fontSize: 12 }}><MenuItem value="hex">HEX</MenuItem><MenuItem value="decimal">DEC</MenuItem><MenuItem value="bytes">字节</MenuItem></Select></FormControl>
+      <FormControl size="small" sx={{ width: 84, flexShrink: 0 }}><Select value={format} inputProps={{ "aria-label": "值显示格式" }} onChange={(event) => setFormat(event.target.value as ValueFormat)} sx={{ fontSize: 12 }}><MenuItem value="hex">HEX</MenuItem><MenuItem value="decimal">DEC</MenuItem></Select></FormControl>
       <Tooltip title="刷新整个目录中可自动读取的寄存器"><span><Button size="small" variant="text" color="inherit" sx={{ flexShrink: 0, minWidth: 0, px: 1, color: "text.secondary", "&:hover, &:active:not(.Mui-disabled)": { bgcolor: "#EEF1F6" }, "& .MuiButton-startIcon": { width: 17, height: 17, alignItems: "center", justifyContent: "center" } }} startIcon={reading ? <CircularProgress size={14} color="inherit" /> : <RefreshRounded sx={{ fontSize: 17 }} />} disabled={controlsBlocked || !catalog.length} onClick={refresh}>刷新全部</Button></span></Tooltip>
       {!monitor && <Button size="small" color="inherit" disabled={writing} onClick={() => { setMonitor(true); setWatching(false); }}>监视{pinned.length ? ` (${pinned.length})` : ""}</Button>}
       <IconButton size="small" aria-label="更多操作" disabled={writing} onClick={(event) => setMoreAnchor(event.currentTarget)}><MoreHorizRounded sx={{ fontSize: 21 }} /></IconButton>
@@ -653,9 +907,13 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     {pageError && <Alert severity="error" onClose={() => setPageError("")}>{pageError}</Alert>}
     <Box sx={{ display: "grid", gridTemplateColumns: selected ? "minmax(0, 1fr) 360px" : "minmax(0, 1fr)", gap: 1.5, height: "calc(100vh - 235px)", minHeight: 380 }}>
       <Card variant="outlined" sx={{ minWidth: 0, overflow: "hidden", borderRadius: 1.5, display: "flex", flexDirection: "column", boxShadow: "none" }}>
-        {renderTable()}
+        <VirtualRegisterTable definitions={displayed} values={values} changes={changes} errors={errors} favorites={favorites}
+          selectedKey={selectedKey} favoriteFeedback={favoriteFeedback} format={format} monitor={monitor} writing={writing} reading={reading}
+          scope={`${monitor}:${view}:${group}:${query}:${showReservedAddresses}`} loading={catalogLoading}
+          emptyText={monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
+          onSelect={selectRow} onFavorite={favoriteRow} />
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.25, height: 30, flexShrink: 0, borderTop: 1, borderColor: "divider", color: "text.secondary" }}>
-          <Typography fontSize={11}>{displayed.length} 项 · {displayed.filter((item) => values[definitionKey(item)]).length} 项已有值{displayed.some((item) => errors[definitionKey(item)]) ? ` · ${displayed.filter((item) => errors[definitionKey(item)]).length} 项失败` : ""}{displayed.some(hasReadSideEffects) ? ` · ${displayed.filter(hasReadSideEffects).length} 项需手动读取` : ""}</Typography>
+          <Typography fontSize={11}>{displayed.length} 项 · {listCounts.available} 项已有值{listCounts.failed ? ` · ${listCounts.failed} 项失败` : ""}{listCounts.manual ? ` · ${listCounts.manual} 项需手动读取` : ""}</Typography>
           <Typography fontSize={11} color={pageError ? "error.main" : "text.secondary"}>{reading ? "正在读取…" : snapshotInfo ? `${snapshotInfo.cancelled ? "读取已取消 · " : ""}${new Date(snapshotInfo.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${snapshotInfo.duration_ms.toFixed(1)} ms · ${snapshotInfo.frame_count} 帧` : "尚未读取"}</Typography>
         </Stack>
       </Card>
@@ -663,44 +921,66 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
         <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={0.5}><Box minWidth={0}>
           <Typography fontSize={14} fontWeight={500} sx={{ overflowWrap: "anywhere" }}>{registerDisplayName(selected)}</Typography>
           {registerDisplayName(selected) !== registerLabel(selected.name) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.25 }}>{registerLabel(selected.name)}</Typography>}
-          <Typography fontSize={12} color="text.secondary" sx={{ mt: 0.5 }}><Box component="span" className="mono" sx={{ fontWeight: 650, color: "text.primary" }}>{hex(selected.address)}</Box> · {registerWidth(selected) * 8} bit · {selected.access === "RO" ? "只读" : selected.access === "RW" ? "读写" : selected.access}</Typography>
+          <Typography fontSize={12} color="text.secondary" sx={{ mt: 0.5 }}><Box component="span" className="mono" sx={{ fontWeight: 650, color: "text.primary" }}>{selected.address_text ?? hex(selected.address)}</Box> · {registerWidth(selected)} B · <RegisterAccess access={selected.master_access ?? selected.access} /></Typography>
+          {(!ecatAccessible(selected) || selected.address_space !== "esc_core") && <Typography fontSize={11} color="text.secondary">{groupLabels[functionGroup(selected)] ?? selected.address_space_label}{!ecatAccessible(selected) ? <Tooltip title={unavailableReason(selected)}><Box component="span"> · ECAT不可访问</Box></Tooltip> : " · 手动读取"}</Typography>}
         </Box><IconButton size="small" aria-label="关闭寄存器详情" disabled={writing} onClick={() => { requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}><CloseRounded sx={{ fontSize: 17 }} /></IconButton></Stack>
         {detailError && <Alert severity="error">{detailError}</Alert>}
         <Box sx={{ bgcolor: "#F6F8FC", borderRadius: 1, p: 1.5 }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between"><Typography fontSize={11} color="text.secondary">{errors[selectedKey] ? "上次读取值" : "当前值"}</Typography><Stack direction="row" spacing={0.25}>
-            <Tooltip title={hasReadSideEffects(selected) ? "刷新此寄存器；读取可能确认事件" : "刷新此寄存器"}><span><IconButton size="small" aria-label="刷新此寄存器" disabled={controlsBlocked || !canRead(selected) || detailLoading || Boolean(detailError) || selected.is_reserved} onClick={() => { setWatching(false); setWriteError(""); setWriteMessage(""); enqueueReads([selected]); }}><RefreshRounded sx={{ fontSize: 17 }} /></IconButton></span></Tooltip>
+            <Tooltip title={readHint(selected) || "刷新此寄存器"}><span><IconButton size="small" aria-label="刷新此寄存器" disabled={controlsBlocked || !canRead(selected) || detailLoading || Boolean(detailError) || selected.is_reserved} onClick={() => { setWatching(false); setWriteError(""); setWriteMessage(""); enqueueReads([selected]); }}><RefreshRounded sx={{ fontSize: 17 }} /></IconButton></span></Tooltip>
             <Tooltip title={copied ? "已复制" : "复制值"}><span><IconButton size="small" aria-label="复制寄存器值" disabled={!selectedValue} onClick={() => void copyValue()}>{copied ? <CheckRounded className="register-copy-confirmed" sx={{ fontSize: 15 }} color="success" /> : <ContentCopyRounded sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>
             <Tooltip title="加入监视"><span><IconButton size="small" aria-label="加入监视" disabled={!canRead(selected) || detailLoading || Boolean(detailError)} onClick={() => pinned.some((item) => definitionKey(item) === selectedKey) ? setMonitor(true) : addWatch(selected)}><PlaylistAddRounded sx={{ fontSize: 18 }} /></IconButton></span></Tooltip>
           </Stack></Stack>
           <Typography className="mono" fontSize={21} sx={{ overflowWrap: "anywhere", mt: 0.25 }}>{selectedValue ? formatRegisterValue(selectedValue.data, format) : detailLoading || reading ? "…" : "—"}</Typography>
-          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mt: 0.75 }}>
+          {registerWidth(selected) <= 8 && <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mt: 0.75 }}>
             <Typography fontSize={11} color="text.secondary" sx={{ lineHeight: 1.7, flexShrink: 0 }}>BIN</Typography>
             <Typography className="mono" fontSize={12} sx={{ lineHeight: 1.6, overflowWrap: "anywhere", minWidth: 0 }}>{selectedValue ? formatRegisterBinary(selectedValue.data, registerWidth(selected)) : "—"}</Typography>
-          </Stack>
+          </Stack>}
           {selectedValue && registerMeaning(selected, selectedValue.data) && <Typography fontSize={12} color="text.secondary" sx={{ mt: 0.5 }}>{registerMeaning(selected, selectedValue.data)}</Typography>}
-          {hasReadSideEffects(selected) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.5 }}>读取可能确认事件，请点击刷新图标手动读取。</Typography>}
+          {readHint(selected) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.5 }}>{readHint(selected)}</Typography>}
         </Box>
         {errors[selectedKey] && <Alert severity="error" sx={{ fontSize: 12 }}>{errors[selectedKey]}</Alert>}
         {writable && !rawOpen && !writeDialog && renderEditor()}
-        {selected.address === 0x0040 && <Button size="small" color="error" variant="outlined" disabled={controlsBlocked} onClick={() => setResetConfirm(true)}>复位 EtherCAT 控制器</Button>}
+        {selected.address_space === "esc_core" && selected.address === 0x0040 && <Button size="small" color="error" variant="outlined" disabled={controlsBlocked} onClick={() => setResetConfirm(true)}>复位 EtherCAT 控制器</Button>}
         <Box>
           <Disclosure key={`${selectedKey}-fields`} title="位字段解析" defaultExpanded={[0x0110, 0x0130, 0x0134, 0x0440].includes(selected.address)}><Stack spacing={1}>
-            {selectedFields.length ? <Table size="small" sx={{ "& td": { px: 0.5, py: 0.75, fontSize: 11, verticalAlign: "top", borderColor: "#EEF1F6" } }}><TableBody>{selectedFields.filter((field) => showReserved || !field.reserved).map((field, index) => <TableRow key={`${field.bits}-${index}`}>
+            {Boolean(selected.field_variants?.length) && <TextField select size="small" label="字段适用条件" value={fieldVariant} onChange={(event) => setFieldVariant(event.target.value)}>
+              <MenuItem value="">请选择实际 PDI 模式／操作</MenuItem>
+              {selected.field_variants?.map((variant) => <MenuItem key={variant.name} value={variant.name}>{variant.name}</MenuItem>)}
+            </TextField>}
+            {selectedFields.length ? <Table size="small" sx={{ "& td": { px: 0.5, py: 0.75, fontSize: 11, verticalAlign: "top", borderColor: "#EEF1F6" } }}><TableBody>{selectedFields.map((field, index) => <TableRow key={`${field.bits}-${index}`}>
               <TableCell sx={{ width: 34 }} className="mono">{field.bits}</TableCell><TableCell><Typography fontSize={11} fontWeight={600}>{field.name}</Typography><Typography fontSize={11} color="text.secondary">{field.meaning}</Typography></TableCell><TableCell align="right" className="mono">{field.value.toString()}</TableCell>
-            </TableRow>)}</TableBody></Table> : <Typography fontSize={11} color="text.secondary">{selectedValue ? "此寄存器没有位字段定义" : "获取当前值后显示字段解析"}</Typography>}
-            {selectedFields.some((field) => field.reserved) && <FormControlLabel sx={{ m: 0 }} control={<Checkbox size="small" checked={showReserved} onChange={(_, enabled) => setShowReserved(enabled)} />} label={<Typography fontSize={11}>显示保留位</Typography>} />}
+            </TableRow>)}</TableBody></Table> : <Typography fontSize={11} color="text.secondary">{selected.field_variants?.length && !fieldVariant ? "先选择与设备相符的字段适用条件。" : selectedValue ? "此寄存器没有位字段定义" : "获取当前值后显示字段解析"}</Typography>}
             {writable && writeContext?.definition && definitionKey(writeContext.definition) === selectedKey && writeContext.access === "RW" && writeContext.width <= 8 && writeFields.filter((field) => !field.reserved && field.access === "RW").map((field, index) => <TextField key={index} size="small" label={`${field.bits} · ${field.name}（HEX）`} disabled={controlsBlocked || !writeBytes} value={writeBytes ? ((registerNumber(writeBytes.match(/../g)!.join(" ")) >> BigInt(field.shift)) & ((1n << BigInt(field.width)) - 1n)).toString(16).toUpperCase() : ""} onChange={(event) => editField(field.shift, field.width, event.target.value)} />)}
             {writable && writeContext?.definition && definitionKey(writeContext.definition) === selectedKey && ["W1C", "W1S"].includes(writeContext.access) && writeContext.width <= 8 && writeFields.filter((field) => !field.reserved && field.access === writeContext.access).map((field, index) => {
               const mask = ((1n << BigInt(field.width)) - 1n) << BigInt(field.shift), current = writeBytes ? registerNumber(writeBytes.match(/../g)!.join(" ")) : 0n;
               return <FormControlLabel key={index} label={<Typography fontSize={11}>{writeContext.access === "W1C" ? "清除" : "置位"} {field.name}</Typography>} control={<Checkbox size="small" disabled={controlsBlocked || !writeBytes} checked={(current & mask) === mask} indeterminate={(current & mask) !== 0n && (current & mask) !== mask} onChange={(_, enabled) => { dirtyRef.current = true; setWriteFormat("hex"); setWriteInput(`0x${(enabled ? current | mask : current & ~mask).toString(16).toUpperCase()}`); }} />} />;
             })}
           </Stack></Disclosure>
-          <Disclosure title="完整说明"><Stack spacing={1}>
-            <Typography fontSize={12} color="text.secondary">{documentationText(selected.description)}</Typography>
-            <Typography fontSize={11} color="text.secondary">主站权限：{documentationText(selected.master_access ?? selected.access)}<br />默认值：{documentationText(selected.reset_value)}<br />上电值：{documentationText(selected.power_on_default)}<br />状态限制：{documentationText(selected.state_restriction)}<br />保留位：{documentationText(selected.reserved_bits_rule)}</Typography>
-            {selected.fields?.map((field, index) => <Typography key={index} fontSize={11}><b>{field.bits} · {field.name}</b> [{documentationText(field.ecat_access ?? "—")}]<br />{documentationText(field.description)}</Typography>)}
-            {selected.source?.map((source, index) => <Typography key={index} fontSize={11} color="text.secondary">{source.source_id} · {source.section ?? ""}{source.page ? ` · p.${source.page}` : ""}</Typography>)}
-          </Stack></Disclosure>
+          <Disclosure title="完整说明">{() => <Stack spacing={1.5} divider={<Divider />} sx={{ "& p": { lineHeight: 1.7 } }}>
+            {(documentationText(selected.description) || visibleDocumentationItems.length > 0) && <DocumentationSection title="基本信息">
+              {documentationText(selected.description) && <Typography fontSize={12} color="text.secondary" sx={{ whiteSpace: "pre-line" }}>{documentationText(selected.description)}</Typography>}
+              <Box component="dl" sx={{ m: 0, display: "grid", gridTemplateColumns: "max-content minmax(0, 1fr)", gap: "4px 12px", fontSize: 11, lineHeight: 1.7 }}>
+                {visibleDocumentationItems.map(([label, text]) => <Box key={label} sx={{ display: "contents" }}>
+                  <Box component="dt" sx={{ color: "text.secondary" }}>{label}</Box>
+                  <Box component="dd" sx={{ m: 0, overflowWrap: "anywhere", whiteSpace: "pre-line" }}>{label === "主站权限" ? <RegisterAccess access={selected.master_access ?? selected.access} /> : label === "PDI 权限" ? <RegisterAccess access={selected.pdi_access} /> : text}</Box>
+                </Box>)}
+              </Box>
+            </DocumentationSection>}
+            {visibleOperationNotes.length > 0 && <DocumentationSection title="操作说明">
+              {visibleOperationNotes.map(([label, text], index) => <Typography key={index} fontSize={11} sx={{ whiteSpace: "pre-line" }}>{label && <b>{label}：</b>}{text}</Typography>)}
+            </DocumentationSection>}
+            {Boolean(selected.fields?.length) && <DocumentationSection title="位字段说明"><DocumentationFields fields={selected.fields!} /></DocumentationSection>}
+            {selected.field_variants?.map((variant) => <DocumentationSection key={variant.name} title={`位字段说明 · ${variant.name}`}><DocumentationFields fields={variant.fields} /></DocumentationSection>)}
+            {/* Selectable filenames preserve document names when copying the reference text. */}
+            <DocumentationSection title={<>参考手册<Typography component="span" fontSize={10} color="text.secondary" sx={{ ml: 0.5, fontWeight: 400 }}>(点击打开文档)</Typography></>}>
+              {registerManuals(selected).map((manual) => <Link key={manual.filename} component="button" type="button" title={manual.title}
+                  sx={{ display: "block", alignSelf: "flex-start", maxWidth: "100%", color: "primary.main", fontSize: 11, lineHeight: 1.7, textAlign: "left", overflowWrap: "anywhere", userSelect: "text" }} onClick={() => {
+                    setManualError(""); void openRegisterManual(manual.filename).catch((error) => setManualError(failureText(error)));
+                  }}>{manual.filename}</Link>)}
+              {manualError && <Alert severity="error" sx={{ fontSize: 11 }}>{manualError}</Alert>}
+            </DocumentationSection>
+          </Stack>}</Disclosure>
           {/* Acquisition metadata stays visible independently of the description disclosure. */}
           <Box component="footer" sx={{ borderTop: 1, borderColor: "divider", pt: 1.5 }}>
             <Typography fontSize={11} color="text.secondary" sx={{ lineHeight: 1.8 }}>
@@ -731,11 +1011,19 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     <Dialog open={writeDialog} onClose={() => { if (!writing) { setWriteDialog(false); dirtyRef.current = false; } }} fullWidth maxWidth="sm">
       <DialogTitle>写入寄存器</DialogTitle><DialogContent><Stack spacing={2} sx={{ pt: 1 }}><Typography fontSize={13}>{registerLabel(writeContext?.name)} · {hex(writeContext?.address ?? 0)} · {writeContext?.width} byte</Typography>{renderEditor()}</Stack></DialogContent><DialogActions><Button disabled={writing} onClick={() => { setWriteDialog(false); dirtyRef.current = false; }}>关闭</Button></DialogActions>
     </Dialog>
-    <Dialog open={Boolean(watchConfirm)} onClose={() => setWatchConfirm(undefined)} fullWidth maxWidth="xs"><DialogTitle>加入持续监视</DialogTitle><DialogContent><Typography fontSize={13}>{registerLabel(watchConfirm?.name)} 的读取可能确认事件或改变状态。开始监视后会按所选周期重复获取。</Typography></DialogContent><DialogActions><Button onClick={() => setWatchConfirm(undefined)}>取消</Button><Button variant="contained" onClick={() => { if (watchConfirm) setPinned((current) => current.some((item) => definitionKey(item) === definitionKey(watchConfirm)) ? current : [...current, watchConfirm]); setWatchConfirm(undefined); }}>加入监视</Button></DialogActions></Dialog>
+    <Dialog open={Boolean(watchConfirm)} onClose={() => setWatchConfirm(undefined)} fullWidth maxWidth="xs"><DialogTitle>加入持续监视</DialogTitle><DialogContent><Typography fontSize={13}>{watchConfirm && `${registerDisplayName(watchConfirm)}：${readDescription(watchConfirm)}`} 开始监视后会按所选周期重复读取。</Typography></DialogContent><DialogActions><Button onClick={() => setWatchConfirm(undefined)}>取消</Button><Button variant="contained" onClick={() => { if (watchConfirm && canRead(watchConfirm)) setPinned((current) => current.some((item) => definitionKey(item) === definitionKey(watchConfirm)) ? current : [...current, watchConfirm]); setWatchConfirm(undefined); }}>加入监视</Button></DialogActions></Dialog>
     <Dialog open={resetConfirm} onClose={() => { if (!writing) setResetConfirm(false); }}><DialogTitle>复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">复位会中断从站通信。</Alert></DialogContent><DialogActions><Button disabled={writing} onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" disabled={controlsBlocked} onClick={async () => {
       const requestedContext = context; setWriting(true); setWatching(false);
       try { const value = await run(() => bridgeRequest("register_reset", { position: slave.position, profile: registerProfile }), "复位命令已发送"); if (value && contextRef.current === requestedContext) setResetConfirm(false); }
       finally { if (mounted.current && contextRef.current === requestedContext) setWriting(false); }
     }}>复位</Button></DialogActions></Dialog>
   </Stack></ThemeProvider>;
-}
+}, (previous, next) => {
+  // Ignore unrelated bus-state changes while preserving identity, session, and control changes.
+  const left = previous.slave, right = next.slave;
+  return previous.run === next.run && previous.registerProfile === next.registerProfile
+    && previous.deviceOperationsBlocked === next.deviceOperationsBlocked && previous.sessionContext === next.sessionContext
+    && left?.position === right?.position && left?.configured_address === right?.configured_address && left?.chip_model === right?.chip_model
+    && left?.identity.vendor_id === right?.identity.vendor_id && left?.identity.product_code === right?.identity.product_code
+    && left?.identity.revision === right?.identity.revision && left?.identity.serial_number === right?.identity.serial_number;
+});
