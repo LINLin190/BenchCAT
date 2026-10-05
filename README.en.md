@@ -68,14 +68,15 @@ The public workflow is `1. Automatic or manual scan -> 2. Select slave -> 3. Rea
 1. Startup attempts connection and scanning; use **Detect and scan** to run it again.
 2. If automatic scanning finds no slave, select an adapter, click **Connect**, then **Scan**, and select the target in the slave tree. Discovery does not change state or map PDOs; it caches identity, PDI, and SM IN/SM OUT widths.
 3. Read actual state and AL status first. State buttons may request a target directly; the backend performs required intermediate transitions and stops cyclic communication before downgrading. PDO mapping is an explicit operational action; passive discovery only reports SM IN/SM OUT widths.
-4. In Registers, confirm the slave, catalog, address, and target value. The software rereads before writing; a changed current value fails the operation without performing the write. Waiting alone does not require another confirmation.
+4. In Registers, confirm the slave, catalog, address, and target value. Catalog writes reread first; a changed current value fails the operation without performing the write. Waiting alone does not require another confirmation. The toolbar's raw address tool reads or writes bytes directly at the specified ESC address and length.
 5. For EEPROM, stop cyclic communication, select XML/Device, inspect Smart View and target image length, then program or restore. INIT and backups are not prerequisites. Use an explicit raw-read length when capacity is unknown.
 
 ### Implemented functionality
 
 - adapter detection and selection, manual connect/disconnect, scan, identities, AL status, direct state requests, reconfigure, and recovery;
 - ESC register catalogs for ET1100, LAN9252, and LAN9253 with search, categories, bit fields, raw access, monitoring, change highlighting, and copy;
-- two-stage register writes bound to slave identity, with semantic readback and `AUDIT` logging;
+- two-stage catalog register writes bound to slave identity, with semantic readback and `AUDIT` logging;
+- raw address access directly on the toolbar, with editable 1–256B length (default 1B) across ESC addresses `0x0000–0xFFFF`; catalog permissions and widths do not restrict raw access. One HEX/DEC selector controls read display and write input. Unsigned values are sent little-endian with zero padding and overflow rejection: 2B HEX `0x1234` and DEC `4660` both send `34 12`. Enter in the write field or the Write button sends one write followed by one read of the same range regardless of write WKC, inside one serial worker task. Both counters are displayed without requiring readback equality; raw writes are logged as `AUDIT`;
 - ESI XML selection, drag and drop, five recent files, multiple Device entries, SII generation, Smart View, and capacity checks;
 - explicit-length EEPROM reads, BIN backups, changed-word writes, full-image comparison, up to three programming attempts, and BIN restore;
 - exclusive three-frame ESC ECAT reset using `0x0040 <- 0x52/0x45/0x53`, bounded rediscovery polling, and separate rediscovery/reload results;

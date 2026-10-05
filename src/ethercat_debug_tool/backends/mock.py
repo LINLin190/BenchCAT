@@ -300,3 +300,8 @@ class MockBackend:
         if address == 0x0040 and data in (b"R", b"E", b"S"):
             return
         self._registers[position - 1][address : address + len(data)] = data
+
+    def register_write_raw(self, position: int, address: int, data: bytes, timeout_us: int) -> int:
+        """Expose the demo write counter through the raw access interface."""
+        self.register_write(position, address, data, timeout_us)
+        return 1

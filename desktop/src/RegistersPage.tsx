@@ -2,9 +2,9 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card, Checkbox,
   CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
-  FormControl, FormControlLabel, IconButton, InputLabel, Menu, MenuItem, Select, Stack,
+  FormControl, FormControlLabel, IconButton, Menu, MenuItem, Select, Stack,
   Link, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs,
-  TextField, Tooltip, Typography,
+  TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
 import { createTheme, ThemeProvider, useTheme } from "@mui/material/styles";
 import {
@@ -16,7 +16,7 @@ import { operationStore } from "./operationStore";
 import { hex, type RegisterDefinition, type SlaveInfo } from "./types";
 import {
   decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterBinary, formatRegisterValue,
-  requiresManualRead, isCommonRegister, matchesRegisterSearch, parseRegisterAddress, registerDisplayName, registerMeaning,
+  requiresManualRead, isCommonRegister, registerSearchRank, parseRegisterAddress, registerDisplayName, registerMeaning,
   registerAccessDescription, registerAccessLabel, registerManuals, registerNumber, registerWidth, type RegisterValue, type ValueFormat,
 } from "./registerValues";
 
@@ -46,6 +46,14 @@ function registerPreferences(profile: string): { favorites: string[]; pinned: st
   } catch { return { favorites: [], pinned: [], intervalMs: 1000, format: "hex" }; }
 }
 interface WriteResult { readback: string | null; fpwr_wkc: number }
+interface RawWriteResult { write_wkc: number | null; readback: RegisterValue | null; write_error: string | null; read_error: string | null }
+type RawFormat = "hex" | "decimal";
+
+/** Raw ranges remain whole unsigned integers even beyond eight bytes. */
+function formatRawValue(data: string, format: RawFormat): string {
+  const value = registerNumber(data);
+  return format === "decimal" ? value.toString() : `0x${value.toString(16).toUpperCase().padStart(data.trim().split(/\s+/).length * 2, "0")}`;
+}
 
 const groupLabels: Record<string, string> = {
   "AL State Machine": "AL 状态机", "Data Link Layer / Port Status": "链路与端口",
@@ -355,11 +363,13 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
   const [rawOpen, setRawOpen] = useState(false);
   const [rawAddress, setRawAddress] = useState("0x0000");
   const [rawSize, setRawSize] = useState(1);
-  const [rawAccess, setRawAccess] = useState("RW");
+  const [rawFormat, setRawFormat] = useState<RawFormat>("hex");
+  const [rawWriteInput, setRawWriteInput] = useState("");
+  const [rawWriteWkc, setRawWriteWkc] = useState<number | null>();
+  const [rawReadWkc, setRawReadWkc] = useState<number | null>();
   const [rawResult, setRawResult] = useState<RegisterValue>();
   const [rawError, setRawError] = useState("");
   const [writeContext, setWriteContext] = useState<WriteContext>();
-  const [writeDialog, setWriteDialog] = useState(false);
   const [writeInput, setWriteInput] = useState("");
   const [writeFormat, setWriteFormat] = useState<ValueFormat>("hex");
   const [writeError, setWriteError] = useState("");
@@ -429,8 +439,8 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     setValues(saved?.values ?? {}); valuesRef.current = saved?.values ?? {}; setErrors(saved?.errors ?? {});
     setChanges({}); setSnapshotInfo(saved?.snapshot); setReadbackKeys(new Set());
     setWatching(false); setReading(false); setDetailLoading(false);
-    setPageError(""); setDetailError(""); setManualError(""); setWriteContext(undefined); setWriteDialog(false); setWatchConfirm(undefined);
-    setRawOpen(false); setRawResult(undefined); setRawError(""); setResetConfirm(false); setMonitor(false);
+    setPageError(""); setDetailError(""); setManualError(""); setWriteContext(undefined); setWatchConfirm(undefined);
+    setRawOpen(false); setRawResult(undefined); setRawError(""); setRawWriteInput(""); setRawWriteWkc(undefined); setRawReadWkc(undefined); setResetConfirm(false); setMonitor(false);
     if (!slave) return;
     setCatalogLoading(true);
     bridgeRequest<RegisterCatalog>("register_catalog", { position: slave.position, profile: registerProfile, catalog_version: catalogVersion.current })
@@ -463,30 +473,22 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     const available = new Set(catalog.filter((item) => ecatAccessible(item) || referenceGroups.includes(functionGroup(item))).map(functionGroup));
     return [...available].filter((item) => !referenceGroups.includes(item)).concat(referenceGroups.filter((item) => available.has(item)));
   }, [catalog]);
+  // Calculate relevance once per row, then keep matching addresses ahead of text.
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase();
-    return catalog.filter((item) => {
+    return catalog.flatMap((item) => {
       const itemGroup = functionGroup(item);
-      if (!ecatAccessible(item) && !(referenceGroups.includes(group) && itemGroup === group)) return false;
-      if (!showReservedAddresses && item.is_reserved) return false;
-      if (view === "favorites" && !favorites.has(definitionKey(item))) return false;
-      if (!text && view === "common" && !isCommonRegister(item)) return false;
-      if (group && itemGroup !== group) return false;
-      return matchesRegisterSearch(item, text) || Boolean(text && (groupLabels[itemGroup] ?? "").includes(text));
-    }).sort((left, right) => left.address - right.address);
+      if (!ecatAccessible(item) && !(referenceGroups.includes(group) && itemGroup === group)) return [];
+      if (!showReservedAddresses && item.is_reserved) return [];
+      if (view === "favorites" && !favorites.has(definitionKey(item))) return [];
+      if (!text && view === "common" && !isCommonRegister(item)) return [];
+      if (group && itemGroup !== group) return [];
+      const addressRank = registerSearchRank(item, text);
+      const rank = Number.isFinite(addressRank) ? addressRank : text && (groupLabels[itemGroup] ?? "").includes(text) ? 3 : Infinity;
+      return Number.isFinite(rank) ? [{ definition: item, rank }] : [];
+    }).sort((left, right) => left.rank - right.rank || left.definition.address - right.definition.address).map((item) => item.definition);
   }, [catalog, view, group, query, favorites, showReservedAddresses]);
   const displayed = monitor ? pinned : filtered;
-  // Selection and editor updates reuse the same list totals.
-  const listCounts = useMemo(() => {
-    let available = 0, failed = 0, manual = 0;
-    for (const item of displayed) {
-      const key = definitionKey(item);
-      if (values[key]) available += 1;
-      if (errors[key]) failed += 1;
-      if (canRead(item) && requiresManualRead(item)) manual += 1;
-    }
-    return { available, failed, manual };
-  }, [displayed, values, errors]);
   const selectedKey = selected ? definitionKey(selected) : "";
   // Reset conditional tables on selection; reset status is the normal read interpretation.
   useEffect(() => { setFieldVariant(selected?.field_variants?.[0]?.name === "读取状态" ? "读取状态" : ""); }, [selectedKey, selected?.field_variants]);
@@ -516,8 +518,9 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
   const visibleOperationNotes = operationNotes.map(([label, text]) => [label, documentationText(text)]).filter(([, text]) => text);
   const rawNumericAddress = parseRegisterAddress(rawAddress);
   const rawDefinition = catalog.find((item) => item.address_space === "esc_core" && item.address === rawNumericAddress);
-  const rawWidth = rawDefinition ? registerWidth(rawDefinition) : rawSize;
-  const rawValid = rawNumericAddress !== undefined && Number.isInteger(rawWidth) && rawWidth >= 1 && rawWidth <= 256 && rawNumericAddress + rawWidth <= 0x10000;
+  // Catalog matches are informational; raw access always uses the user's byte length.
+  const rawValid = rawNumericAddress !== undefined && Number.isInteger(rawSize) && rawSize >= 1 && rawSize <= 256 && rawNumericAddress + rawSize <= 0x10000;
+  const rawWriteBytes = encodeRegisterInput(rawWriteInput, rawSize, rawFormat);
   const writeBytes = writeContext ? encodeRegisterInput(writeInput, writeContext.width, writeFormat) : undefined;
   const writeFields = writeContext?.definition ? decodeRegisterFields(writeContext.definition, writeContext.current ?? Array(writeContext.width).fill("00").join(" ")) : [];
   const controlsBlocked = deviceOperationsBlocked || reading || writing;
@@ -676,9 +679,9 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     setWriteContext(target);
   };
   useEffect(() => {
-    if (!selected || !writable || detailLoading || rawOpen || writeDialog || dirtyRef.current) return;
+    if (!selected || !writable || detailLoading || rawOpen || dirtyRef.current) return;
     initializeEditor({ definition: selected, address: selected.address, width: registerWidth(selected), access: selected.access, name: selected.name, current: selectedValue?.data });
-  }, [selected, selectedValue?.data, writable, detailLoading, rawOpen, writeDialog]);
+  }, [selected, selectedValue?.data, writable, detailLoading, rawOpen]);
 
   /** Refresh all always targets the full safe catalog, regardless of list filters. */
   const refresh = () => {
@@ -731,25 +734,41 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     };
   }, [watching, monitor, pollKey, intervalMs, context, deviceOperationsBlocked]);
 
-  /** Ordinary edits stay in the inspector; raw access uses the same editor in its dialog. */
-  const openRawWrite = async () => {
-    if (!slave || !rawValid || controlsBlocked || busyRef.current || operationStore.activeHardware()) return;
+  /** Shared HEX/DEC presentation preserves valid input without touching the device. */
+  const changeRawFormat = (next: RawFormat | null) => {
+    if (!next || next === rawFormat) return;
+    if (rawWriteBytes) setRawWriteInput(formatRawValue(rawWriteBytes.match(/../g)!.join(" "), next));
+    setRawFormat(next);
+  };
+
+  /** Raw writes and their single readback share one session-bound hardware operation. */
+  const writeRaw = async () => {
+    if (!slave || !rawValid || !rawWriteBytes || controlsBlocked || busyRef.current || operationStore.activeHardware()) return;
     const requestedContext = context;
-    busyRef.current = true; setReading(true); setWatching(false); setRawError(""); setWriteMessage("");
+    const address = rawNumericAddress!, size = rawSize;
+    busyRef.current = true; setWriting(true); setWatching(false); setRawResult(undefined); setRawError(""); setRawWriteWkc(undefined); setRawReadWkc(undefined);
     try {
-      const definition = rawDefinition ? await loadDefinition(rawDefinition) : undefined;
-      if (!mounted.current || contextRef.current !== requestedContext) return;
-      const target: WriteContext = { definition, address: rawNumericAddress!, width: rawWidth, access: definition?.access ?? rawAccess, name: definition?.name ?? `原始地址 ${hex(rawNumericAddress!)}`, current: rawResult?.data };
-      if (target.access === "RW" && !target.current) {
-        const value = await bridgeRequest<RegisterValue>("register_read", { position: slave.position, address: target.address, size: target.width, definition_id: definition?.definition_id, profile: registerProfile });
-        if (!mounted.current || contextRef.current !== requestedContext) return;
-        target.current = value.data; setRawResult(value);
+      const result = await bridgeRequest<RawWriteResult>("register_raw_write", { position: slave.position, address, size, data: rawWriteBytes });
+      if (mounted.current && contextRef.current === requestedContext) {
+        setRawWriteWkc(result.write_wkc); setRawReadWkc(result.readback?.wkc ?? null);
+        const failures = [result.write_error && `写入：${result.write_error}`, result.read_error && `读取：${result.read_error}`];
+        if (result.write_wkc !== null && result.write_wkc !== 1) failures.push(`写入 WKC=${result.write_wkc}`);
+        if (result.readback && result.readback.wkc !== 1) failures.push(`读取 WKC=${result.readback.wkc}，未取得有效值`);
+        setRawError(failures.filter(Boolean).join("；"));
+        // Remove overlapping cached values before accepting the new readback.
+        const affected = catalog.filter((item) => ecatAccessible(item) && item.address < address + size && item.address + registerWidth(item) > address).map(definitionKey);
+        const next = { ...valuesRef.current }; affected.forEach((key) => delete next[key]);
+        valuesRef.current = next; setValues(next);
+        setReadbackKeys((current) => { const next = new Set(current); affected.forEach((key) => next.delete(key)); return next; });
+        if (result.readback?.wkc === 1) {
+          setRawResult(result.readback);
+          if (rawDefinition && registerWidth(rawDefinition) === size) acceptValues([rawDefinition], [result.readback], requestedContext);
+        }
       }
-      initializeEditor(target); setWriteDialog(true);
-    } catch (error) { if (contextRef.current === requestedContext) setRawError(failureText(error)); }
+    } catch (error) { if (contextRef.current === requestedContext) { setRawWriteWkc(null); setRawReadWkc(null); setRawError(failureText(error)); } }
     finally {
       busyRef.current = false;
-      if (mounted.current && contextRef.current === requestedContext) setReading(false);
+      if (mounted.current && contextRef.current === requestedContext) setWriting(false);
       void drainRef.current();
     }
   };
@@ -775,13 +794,10 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
             const value: RegisterValue = { position: slave.position, address: target.address, data: result.readback, wkc: result.fpwr_wkc, duration_ms: 0, timestamp: Date.now() / 1000 };
             if (target.definition) acceptValues([target.definition], [value], requestedContext);
             if (target.definition) setReadbackKeys((current) => new Set(current).add(definitionKey(target.definition!)));
-            if (writeDialog) setRawResult(value);
             setWriteContext({ ...target, current: value.data });
             setWriteInput(["WAC", "W1C", "W1S"].includes(target.access) ? writeFormat === "bytes" ? "00".repeat(target.width) : "0" : formatRegisterValue(value.data, writeFormat));
           } else if (target.definition && canRead(target.definition)) {
             enqueueReads([target.definition]);
-          } else if (writeDialog) {
-            setRawResult(undefined);
           }
           setWriteMessage("已写入");
         } catch (error) {
@@ -796,18 +812,21 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     }
   };
 
-  /** Known raw addresses reuse catalog width and access permissions. */
+  /** Explicit reads bypass catalog permissions and preserve the requested byte range. */
   const readRaw = async () => {
-    if (!slave || !rawValid || controlsBlocked || busyRef.current || operationStore.activeHardware() || (rawDefinition && !canRead(rawDefinition))) return;
+    if (!slave || !rawValid || controlsBlocked || busyRef.current || operationStore.activeHardware()) return;
     const requestedContext = context;
-    busyRef.current = true; setReading(true); setRawError("");
+    busyRef.current = true; setReading(true); setWatching(false); setRawResult(undefined); setRawError(""); setRawWriteWkc(undefined); setRawReadWkc(undefined);
     try {
-      const result = await bridgeRequest<RegisterValue>("register_read", { position: slave.position, address: rawNumericAddress, size: rawWidth, definition_id: rawDefinition?.definition_id, profile: registerProfile });
+      const result = await bridgeRequest<RegisterValue>("register_raw_read", { position: slave.position, address: rawNumericAddress, size: rawSize });
       if (mounted.current && contextRef.current === requestedContext) {
-        setRawResult(result);
-        if (rawDefinition) acceptValues([rawDefinition], [result], requestedContext);
+        setRawReadWkc(result.wkc);
+        if (result.wkc === 1) {
+          setRawResult(result);
+          if (rawDefinition && registerWidth(rawDefinition) === rawSize) acceptValues([rawDefinition], [result], requestedContext);
+        } else setRawError(`读取 WKC=${result.wkc}，未取得有效值`);
       }
-    } catch (error) { if (contextRef.current === requestedContext) setRawError(failureText(error)); }
+    } catch (error) { if (contextRef.current === requestedContext) { setRawReadWkc(null); setRawError(failureText(error)); } }
     finally { busyRef.current = false; if (mounted.current && contextRef.current === requestedContext) setReading(false); void drainRef.current(); }
   };
 
@@ -838,7 +857,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
 
   if (!slave) return <Box sx={{ py: 8, textAlign: "center", color: "text.secondary" }}>请先选择从站</Box>;
 
-  /** Reuse one inline editor for ordinary and raw register writes. */
+  /** Edit catalog registers with their documented write semantics. */
   const renderEditor = () => <Stack spacing={1.25}>
     {writeContext?.access === "WAC" ? <Typography fontSize={12} color="text.secondary">写入后清零此计数器</Typography> : <Stack direction="row" spacing={0.75}>
       <TextField fullWidth size="small" label={writeContext?.access === "W1C" ? "清除位掩码" : writeContext?.access === "W1S" ? "置位掩码" : writeFormat === "bytes" ? "写入值（HEX）" : "写入值"} value={writeInput}
@@ -896,11 +915,11 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
         </Tabs>
         <TextField size="small" placeholder="搜索名称、地址或地址范围" inputProps={{ "aria-label": "搜索寄存器" }} value={query} disabled={writing}
           onChange={(event) => { setQuery(event.target.value); requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}
-          InputProps={{ startAdornment: <SearchRounded sx={{ fontSize: 18, color: "text.secondary", mr: 0.75 }} /> }} sx={{ flex: 1, minWidth: 190, "& input": { fontSize: 12, py: 1 } }} />
-        {view === "all" && <FormControl size="small" sx={{ width: 156, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => { requestSequence.current += 1; setGroup(event.target.value); setSelected(undefined); setWriteContext(undefined); }} sx={{ fontSize: 12 }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
+          InputProps={{ startAdornment: <SearchRounded sx={{ fontSize: 18, color: "text.secondary", mr: 0.75 }} /> }} sx={{ flex: 1, minWidth: 170, "& input": { fontSize: 12, py: 1 } }} />
+        {view === "all" && <FormControl size="small" sx={{ width: 116, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => { requestSequence.current += 1; setGroup(event.target.value); setSelected(undefined); setWriteContext(undefined); }} sx={{ fontSize: 12 }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
       </>}
-      <FormControl size="small" sx={{ width: 84, flexShrink: 0 }}><Select value={format} inputProps={{ "aria-label": "值显示格式" }} onChange={(event) => setFormat(event.target.value as ValueFormat)} sx={{ fontSize: 12 }}><MenuItem value="hex">HEX</MenuItem><MenuItem value="decimal">DEC</MenuItem></Select></FormControl>
-      <Tooltip title="刷新整个目录中可自动读取的寄存器"><span><Button size="small" variant="text" color="inherit" sx={{ flexShrink: 0, minWidth: 0, px: 1, color: "text.secondary", "&:hover, &:active:not(.Mui-disabled)": { bgcolor: "#EEF1F6" }, "& .MuiButton-startIcon": { width: 17, height: 17, alignItems: "center", justifyContent: "center" } }} startIcon={reading ? <CircularProgress size={14} color="inherit" /> : <RefreshRounded sx={{ fontSize: 17 }} />} disabled={controlsBlocked || !catalog.length} onClick={refresh}>刷新全部</Button></span></Tooltip>
+      <Button size="small" variant="outlined" sx={{ flexShrink: 0 }} disabled={writing} onClick={() => { setRawOpen(true); setWatching(false); }}>原始地址访问</Button>
+      <Tooltip title="刷新整个目录中可自动读取的寄存器"><span><Button size="small" color="inherit" sx={{ flexShrink: 0 }} startIcon={reading ? <CircularProgress size={14} color="inherit" /> : <RefreshRounded sx={{ fontSize: 17 }} />} disabled={controlsBlocked || !catalog.length} onClick={refresh}>刷新全部</Button></span></Tooltip>
       {!monitor && <Button size="small" color="inherit" disabled={writing} onClick={() => { setMonitor(true); setWatching(false); }}>监视{pinned.length ? ` (${pinned.length})` : ""}</Button>}
       <IconButton size="small" aria-label="更多操作" disabled={writing} onClick={(event) => setMoreAnchor(event.currentTarget)}><MoreHorizRounded sx={{ fontSize: 21 }} /></IconButton>
     </Stack>
@@ -913,8 +932,8 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
           emptyText={monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
           onSelect={selectRow} onFavorite={favoriteRow} />
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.25, height: 30, flexShrink: 0, borderTop: 1, borderColor: "divider", color: "text.secondary" }}>
-          <Typography fontSize={11}>{displayed.length} 项 · {listCounts.available} 项已有值{listCounts.failed ? ` · ${listCounts.failed} 项失败` : ""}{listCounts.manual ? ` · ${listCounts.manual} 项需手动读取` : ""}</Typography>
-          <Typography fontSize={11} color={pageError ? "error.main" : "text.secondary"}>{reading ? "正在读取…" : snapshotInfo ? `${snapshotInfo.cancelled ? "读取已取消 · " : ""}${new Date(snapshotInfo.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${snapshotInfo.duration_ms.toFixed(1)} ms · ${snapshotInfo.frame_count} 帧` : "尚未读取"}</Typography>
+          <Typography fontSize={11}>{displayed.length} 项</Typography>
+          <Typography fontSize={11} color={pageError ? "error.main" : "text.secondary"}>{reading ? "正在读取…" : snapshotInfo ? `${snapshotInfo.cancelled ? "读取已取消 · " : ""}${new Date(snapshotInfo.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${snapshotInfo.duration_ms.toFixed(1)} ms` : "尚未读取"}</Typography>
         </Stack>
       </Card>
       {selected && <Card variant="outlined" sx={{ minWidth: 0, overflow: "auto", borderRadius: 1.5, boxShadow: "none" }}><Stack spacing={1.75} sx={{ p: 2 }}>
@@ -940,7 +959,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
           {readHint(selected) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.5 }}>{readHint(selected)}</Typography>}
         </Box>
         {errors[selectedKey] && <Alert severity="error" sx={{ fontSize: 12 }}>{errors[selectedKey]}</Alert>}
-        {writable && !rawOpen && !writeDialog && renderEditor()}
+        {writable && !rawOpen && renderEditor()}
         {selected.address_space === "esc_core" && selected.address === 0x0040 && <Button size="small" color="error" variant="outlined" disabled={controlsBlocked} onClick={() => setResetConfirm(true)}>复位 EtherCAT 控制器</Button>}
         <Box>
           <Disclosure key={`${selectedKey}-fields`} title="位字段解析" defaultExpanded={[0x0110, 0x0130, 0x0134, 0x0440].includes(selected.address)}><Stack spacing={1}>
@@ -992,24 +1011,57 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
       </Stack></Card>}
     </Box>
     <Menu anchorEl={moreAnchor} open={Boolean(moreAnchor)} onClose={() => setMoreAnchor(null)} slotProps={{ paper: { sx: { minWidth: 190 } } }}>
-      <MenuItem onClick={() => { setRawOpen(true); setRawResult(rawDefinition ? values[definitionKey(rawDefinition)] : undefined); setRawError(""); setMoreAnchor(null); }}>原始地址访问</MenuItem>
+      {/* Keep list presentation controls alongside the optional reserved-address view. */}
+      <Box sx={{ px: 2, py: 0.75 }}><Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+        <Typography fontSize={12} color="text.secondary">显示格式</Typography>
+        <ToggleButtonGroup size="small" exclusive value={format} onChange={(_, next: ValueFormat | null) => { if (next) setFormat(next); }} aria-label="值显示格式" sx={{ "& .MuiToggleButton-root": { px: 1.25, py: 0.25, fontSize: 11 } }}>
+          <ToggleButton value="hex">HEX</ToggleButton><ToggleButton value="decimal">DEC</ToggleButton>
+        </ToggleButtonGroup>
+      </Stack></Box><Divider />
       {monitor && <MenuItem disabled={!pinned.length} onClick={() => { setPinned([]); setWatching(false); setMoreAnchor(null); }}>清空监视列表</MenuItem>}
       {!monitor && <MenuItem onClick={() => { setShowReservedAddresses(!showReservedAddresses); setMoreAnchor(null); }}>{showReservedAddresses ? "隐藏保留地址" : "显示保留地址"}</MenuItem>}
     </Menu>
-    <Dialog open={rawOpen} onClose={() => { if (!controlsBlocked) { setRawOpen(false); dirtyRef.current = false; } }} fullWidth maxWidth="sm">
-      <DialogTitle>原始地址访问</DialogTitle><DialogContent><Stack spacing={2} sx={{ pt: 1 }}>
-        <Stack direction="row" spacing={1}><TextField label="地址（HEX）" size="small" value={rawAddress} disabled={controlsBlocked} error={rawNumericAddress === undefined} onChange={(event) => { setRawAddress(event.target.value); setRawResult(undefined); setRawError(""); }} onBlur={() => { if (!rawResult) void readRaw(); }} onKeyDown={(event) => { if (event.key === "Enter") void readRaw(); }} sx={{ flex: 1 }} />
-          <TextField label="宽度（byte）" size="small" type="number" value={rawWidth} disabled={controlsBlocked || Boolean(rawDefinition)} onChange={(event) => { setRawSize(Number(event.target.value)); setRawResult(undefined); }} onBlur={() => { if (!rawResult) void readRaw(); }} inputProps={{ min: 1, max: 256 }} sx={{ width: 145 }} /></Stack>
-        <Typography fontSize={12} color="text.secondary">{rawDefinition ? `${registerLabel(rawDefinition.name)} · 自动使用寄存器宽度和权限` : "未收录地址 · 1–256 byte"}</Typography>
-        <Button variant="outlined" disabled={controlsBlocked || !rawValid || Boolean(rawDefinition && !canRead(rawDefinition))} onClick={() => void readRaw()}>刷新</Button>
-        {rawError && <Alert severity="error">{rawError}</Alert>}
-        {rawResult && <Typography className="mono" sx={{ overflowWrap: "anywhere", p: 1.5, bgcolor: "#F6F8FC", borderRadius: 1 }}>{formatRegisterValue(rawResult.data, format)}</Typography>}
-        {!rawDefinition && <FormControl size="small"><InputLabel>操作类型</InputLabel><Select label="操作类型" value={rawAccess} disabled={controlsBlocked} onChange={(event) => setRawAccess(event.target.value)}>{Object.entries({ RW: "普通读写", WO: "只写", W1C: "写 1 清除", W1S: "写 1 置位", WAC: "写入清零", SELF_CLEARING: "命令自动清除", VOLATILE: "易变值" }).map(([value, label]) => <MenuItem key={value} value={value}>{label}（{value}）</MenuItem>)}</Select></FormControl>}
-        <Button variant="contained" disabled={controlsBlocked || !rawValid || Boolean(rawDefinition && (!rawDefinition.direct_write_allowed || rawDefinition.access === "RO"))} onClick={() => void openRawWrite()}>编辑写入值</Button>
-      </Stack></DialogContent><DialogActions><Button disabled={controlsBlocked} onClick={() => { setRawOpen(false); dirtyRef.current = false; }}>关闭</Button></DialogActions>
-    </Dialog>
-    <Dialog open={writeDialog} onClose={() => { if (!writing) { setWriteDialog(false); dirtyRef.current = false; } }} fullWidth maxWidth="sm">
-      <DialogTitle>写入寄存器</DialogTitle><DialogContent><Stack spacing={2} sx={{ pt: 1 }}><Typography fontSize={13}>{registerLabel(writeContext?.name)} · {hex(writeContext?.address ?? 0)} · {writeContext?.width} byte</Typography>{renderEditor()}</Stack></DialogContent><DialogActions><Button disabled={writing} onClick={() => { setWriteDialog(false); dirtyRef.current = false; }}>关闭</Button></DialogActions>
+    <Dialog open={rawOpen} aria-labelledby="raw-register-title" onClose={() => { if (!controlsBlocked) setRawOpen(false); }} fullWidth maxWidth="sm" slotProps={{ paper: { sx: { maxWidth: 540, borderRadius: 2 } } }}>
+      <DialogTitle id="raw-register-header" sx={{ px: 2.5, pt: 2, pb: 1.5 }}><Stack direction="row" alignItems="center" justifyContent="space-between" spacing={2}>
+        <Typography id="raw-register-title" component="span" fontSize={17} fontWeight={700}>原始地址访问</Typography>
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <ToggleButtonGroup size="small" exclusive value={rawFormat} disabled={controlsBlocked} onChange={(_, next: RawFormat | null) => changeRawFormat(next)} aria-label="原始读写数值格式" sx={{ "& .MuiToggleButton-root": { px: 1.5, py: 0.4, fontSize: 11, lineHeight: 1.8 } }}>
+            <ToggleButton value="hex">HEX</ToggleButton><ToggleButton value="decimal">DEC</ToggleButton>
+          </ToggleButtonGroup>
+          <IconButton size="small" aria-label="关闭原始地址访问" disabled={controlsBlocked} onClick={() => setRawOpen(false)}><CloseRounded sx={{ fontSize: 19 }} /></IconButton>
+        </Stack>
+      </Stack></DialogTitle>
+      <DialogContent sx={{ px: 2.5, pb: 2.5 }}><Stack spacing={1.75} sx={{ pt: 0.5 }}>
+        <Stack direction="row" spacing={1.25} alignItems="flex-start">
+          <TextField label="地址（HEX）" size="small" value={rawAddress} disabled={controlsBlocked} error={rawNumericAddress === undefined}
+            helperText={rawNumericAddress === undefined ? "请输入 0000–FFFF" : undefined}
+            onChange={(event) => { setRawAddress(event.target.value); setRawResult(undefined); setRawError(""); setRawWriteWkc(undefined); setRawReadWkc(undefined); }}
+            onKeyDown={(event) => { if (event.key === "Enter") void readRaw(); }} inputProps={{ className: "mono" }} sx={{ flex: 1 }} />
+          <TextField label="长度（B）" size="small" type="number" value={rawSize || ""} disabled={controlsBlocked} error={!rawValid && rawNumericAddress !== undefined}
+            helperText={!rawValid && rawNumericAddress !== undefined ? "须为 1–256B，地址不能越界" : undefined}
+            onChange={(event) => { setRawSize(Number(event.target.value)); setRawResult(undefined); setRawError(""); setRawWriteWkc(undefined); setRawReadWkc(undefined); }} inputProps={{ min: 1, max: 256, step: 1 }} sx={{ width: 112 }} />
+        </Stack>
+        <Typography fontSize={11} color="text.secondary">{rawDefinition ? registerDisplayName(rawDefinition) : "ESC 直接读写"}</Typography>
+        <Stack direction="row" spacing={1.25} alignItems="flex-start">
+          <TextField label="读取值" size="small" multiline maxRows={4} value={rawResult ? formatRawValue(rawResult.data, rawFormat) : ""} placeholder="—" InputLabelProps={{ shrink: true }}
+            InputProps={{ readOnly: true }} inputProps={{ className: "mono", style: { fontSize: 13 } }} sx={{ flex: 1, "& .MuiInputBase-root": { bgcolor: "#F6F8FC" } }} />
+          <Button variant="outlined" sx={{ minWidth: 76, height: 40, flexShrink: 0 }} disabled={controlsBlocked || !rawValid} onClick={() => void readRaw()}>{reading ? "读取中…" : "读取"}</Button>
+        </Stack>
+        <Stack direction="row" spacing={1.25} alignItems="flex-start">
+          <TextField label="写入值" size="small" multiline maxRows={4} value={rawWriteInput} disabled={controlsBlocked} placeholder={rawFormat === "hex" ? "例如：0x12" : "例如：18"}
+            error={Boolean(rawWriteInput && !rawWriteBytes)} helperText={rawWriteInput && !rawWriteBytes ? `请输入 ${rawSize || "指定长度的"}B 范围内的${rawFormat === "hex" ? "十六" : "十"}进制无符号整数` : undefined}
+            onChange={(event) => { setRawWriteInput(event.target.value); setRawError(""); setRawWriteWkc(undefined); }}
+            onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); if (!event.repeat) void writeRaw(); } }}
+            inputProps={{ className: "mono", style: { fontSize: 13 } }} sx={{ flex: 1 }} />
+          <Button variant="contained" sx={{ minWidth: 76, height: 40, flexShrink: 0 }} disabled={controlsBlocked || !rawValid || !rawWriteBytes} onClick={() => void writeRaw()}>{writing ? "处理中…" : "写入"}</Button>
+        </Stack>
+        {rawWriteBytes && <Typography fontSize={11} color="text.secondary" className="mono" sx={{ overflowWrap: "anywhere", maxHeight: 64, overflowY: "auto" }}>发送字节：{rawWriteBytes.match(/../g)!.join(" ")}</Typography>}
+        <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1} sx={{ pt: 1.25, borderTop: 1, borderColor: "divider" }}>
+          <Typography fontSize={11} color="text.secondary">Enter 写入 · 写入后自动读取一次</Typography>
+          {(rawWriteWkc !== undefined || rawReadWkc !== undefined) && <Typography fontSize={11} color="text.secondary" className="mono">{rawWriteWkc !== undefined ? `写入 WKC：${rawWriteWkc ?? "—"} · ` : ""}读取 WKC：{rawReadWkc ?? "—"}</Typography>}
+        </Stack>
+        {rawError && <Alert severity="error" sx={{ fontSize: 12 }}>{rawError}</Alert>}
+      </Stack></DialogContent>
     </Dialog>
     <Dialog open={Boolean(watchConfirm)} onClose={() => setWatchConfirm(undefined)} fullWidth maxWidth="xs"><DialogTitle>加入持续监视</DialogTitle><DialogContent><Typography fontSize={13}>{watchConfirm && `${registerDisplayName(watchConfirm)}：${readDescription(watchConfirm)}`} 开始监视后会按所选周期重复读取。</Typography></DialogContent><DialogActions><Button onClick={() => setWatchConfirm(undefined)}>取消</Button><Button variant="contained" onClick={() => { if (watchConfirm && canRead(watchConfirm)) setPinned((current) => current.some((item) => definitionKey(item) === definitionKey(watchConfirm)) ? current : [...current, watchConfirm]); setWatchConfirm(undefined); }}>加入监视</Button></DialogActions></Dialog>
     <Dialog open={resetConfirm} onClose={() => { if (!writing) setResetConfirm(false); }}><DialogTitle>复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">复位会中断从站通信。</Alert></DialogContent><DialogActions><Button disabled={writing} onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" disabled={controlsBlocked} onClick={async () => {

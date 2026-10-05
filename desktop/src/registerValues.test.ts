@@ -20,6 +20,14 @@ describe("register numeric editing", () => {
     expect(encodeRegisterInput("17375808098319191535", 8, "decimal")).toBe("EFCDAB89674523F1");
     expect(encodeRegisterInput("0xFFFFFFFFFFFFFFFF", 8, "hex")).toBe("FFFFFFFFFFFFFFFF");
   });
+  // Raw numeric ranges must retain every bit through HEX and DEC input.
+  it("supports whole unsigned values through the full 256-byte raw range", () => {
+    expect(encodeRegisterInput("0x1234567890ABCDEF12", 9, "hex")).toBe("12EFCDAB9078563412");
+    const maximum = (1n << 2048n) - 1n;
+    expect(encodeRegisterInput(maximum.toString(), 256, "decimal")).toBe("FF".repeat(256));
+    expect(encodeRegisterInput(`0x${maximum.toString(16)}`, 256, "hex")).toBe("FF".repeat(256));
+    expect(encodeRegisterInput((maximum + 1n).toString(), 256, "decimal")).toBeUndefined();
+  });
   it.each(["0x10000", "-1", "0x", "GG", "12 34"])("rejects invalid or overflowing scalar input %s", (input) => {
     expect(encodeRegisterInput(input, 2, "hex")).toBeUndefined();
   });
@@ -27,7 +35,7 @@ describe("register numeric editing", () => {
     expect(encodeRegisterInput("0x10", 2, "decimal")).toBeUndefined();
     expect(encodeRegisterInput("34 12", 2, "bytes")).toBe("3412");
     expect(encodeRegisterInput("12", 2, "bytes")).toBeUndefined();
-    expect(encodeRegisterInput("1", 9, "hex")).toBeUndefined();
+    expect(encodeRegisterInput("1", 9, "hex")).toBe("01" + "00".repeat(8));
     expect(encodeRegisterInput("00 ".repeat(256), 256, "bytes")).toHaveLength(512);
   });
   it("does not confuse an ESC register with a local register at the same address", () => {

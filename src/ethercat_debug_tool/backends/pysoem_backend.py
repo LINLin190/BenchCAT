@@ -1448,6 +1448,20 @@ class PysoemBackend:
         return [RegisterRead(position, address, data, wkc, elapsed, timestamp)
                 for (address, _size), (data, wkc) in zip(requests, replies, strict=True)]
 
+    def register_write_raw(self, position: int, address: int, data: bytes, timeout_us: int) -> int:
+        """Send one positional write and retain its WKC, including zero responses."""
+        if not 1 <= len(data) <= 256 or not 0 <= address < address + len(data) <= 0x10000:
+            raise ValueError("Register range is invalid")
+        self._require_master()
+        if self._passive is None or not 1 <= position <= len(self._slaves):
+            raise CommunicationError(f"从站 {position} 的寄存器通道不可用")
+        if address < 0x0900 and address + len(data) > 0x0600:
+            self._invalidate_mapping()
+        try:
+            return self._passive.write(0x02, 1 - position, address, bytes(data))
+        except PassiveDiscoveryError as exc:
+            raise self._normalize_error(exc, f"APWR 0x{address:04X}") from exc
+
     def register_write(self, position: int, address: int, data: bytes, timeout_us: int) -> None:
         if not data or not 0 <= address <= 0xFFFF or address + len(data) > 0x10000:
             raise ValueError("Register range is invalid")

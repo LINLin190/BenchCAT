@@ -30,6 +30,8 @@
     "stop_cycle": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "set_output": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "register_read": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },
+    "register_raw_read": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },
+    "register_raw_write": { "lane": "hardware", "timeout_ms": 30000, "mutating": true },
     "register_snapshot": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },
     "register_watch": { "lane": "hardware", "timeout_ms": 15000, "mutating": false },
     "register_prepare_write": { "lane": "hardware", "timeout_ms": 30000, "mutating": false },

@@ -39,6 +39,14 @@ class RegisterWriteResult:
     conclusion: str
 
 
+@dataclass(frozen=True, slots=True)
+class RawRegisterWriteResult:
+    write_wkc: int | None
+    readback: RegisterRead | None
+    write_error: str | None
+    read_error: str | None
+
+
 def changed_mask(current: bytes, target: bytes) -> bytes:
     if len(current) != len(target):
         raise ValueError("Current and target widths differ")
@@ -126,6 +134,29 @@ class RegisterService:
             known_register,
             definition_id,
         )
+
+    def read_raw(self, position: int, address: int, size: int, timeout_us: int = 2000) -> RegisterRead:
+        """Read one exact range while preserving the response working counter."""
+        if not 1 <= size <= 256 or not 0 <= address < address + size <= 0x10000:
+            raise ValueError("Register read must stay within 0x0000–0xFFFF and be 1–256 bytes")
+        return self.backend.register_read_many(position, [(address, size)], timeout_us)[0]
+
+    def write_raw(self, position: int, address: int, target: bytes, timeout_us: int = 2000) -> RawRegisterWriteResult:
+        """Write once, then read once regardless of the write counter or transport error."""
+        if not 1 <= len(target) <= 256 or not 0 <= address < address + len(target) <= 0x10000:
+            raise ValueError("Register write must stay within 0x0000–0xFFFF and be 1–256 bytes")
+        write_wkc, readback = None, None
+        write_error, read_error = None, None
+        try:
+            write_wkc = self.backend.register_write_raw(position, address, target, timeout_us)
+        except Exception as exc:
+            write_error = str(exc)
+        # Both transactions run inside one worker task; no other command can intervene.
+        try:
+            readback = self.read_raw(position, address, len(target), timeout_us)
+        except Exception as exc:
+            read_error = str(exc)
+        return RawRegisterWriteResult(write_wkc, readback, write_error, read_error)
 
     def execute_write(self, plan: RegisterWritePlan, timeout_us: int = 2000) -> RegisterWriteResult:
         if plan.semantics is not AccessSemantics.WO:

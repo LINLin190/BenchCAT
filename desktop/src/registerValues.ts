@@ -49,7 +49,7 @@ export function encodeRegisterInput(input: string, width: number, format: ValueF
     const bytes = text.replace(/\s+/g, "");
     return new RegExp(`^[\\da-f]{${width * 2}}$`, "i").test(bytes) ? bytes.toUpperCase() : undefined;
   }
-  if (width > 8 || !(format === "hex" ? /^(?:0x)?[\da-f]+$/i : /^\d+$/).test(text)) return undefined;
+  if (!(format === "hex" ? /^(?:0x)?[\da-f]+$/i : /^\d+$/).test(text)) return undefined;
   const value = BigInt(format === "hex" ? `0x${text.replace(/^0x/i, "")}` : text);
   if (value >= 1n << BigInt(width * 8)) return undefined;
   return Array.from({ length: width }, (_, index) => ((value >> BigInt(index * 8)) & 0xffn).toString(16).padStart(2, "0")).join("").toUpperCase();
@@ -90,19 +90,29 @@ export function requiresManualRead(definition: RegisterDefinition): boolean {
     || definition.fields?.some((field) => /READ_SIDE_EFFECT|ACK_SEMANTIC/.test(field.ecat_access ?? "")));
 }
 
-/** Search documented aliases, Chinese diagnostics, and overlapping address ranges. */
-export function matchesRegisterSearch(definition: RegisterDefinition, input: string): boolean {
+/** Rank exact addresses before containing ranges, address prefixes and text matches. */
+export function registerSearchRank(definition: RegisterDefinition, input: string): number {
   const text = input.trim().toLowerCase();
-  if (!text) return true;
+  if (!text) return 0;
   const range = /^(0x[\da-f]+|[\da-f]+)\s*[-~～]\s*(0x[\da-f]+|[\da-f]+)$/i.exec(text);
   if (range) {
     const start = parseRegisterAddress(range[1]), end = parseRegisterAddress(range[2]);
-    return start !== undefined && end !== undefined && start <= end && definition.address <= end && definition.address + registerWidth(definition) > start;
+    return start !== undefined && end !== undefined && start <= end && definition.address <= end && definition.address + registerWidth(definition) > start ? 0 : Infinity;
   }
   const address = parseRegisterAddress(text);
-  if (address !== undefined) return address >= definition.address && address < definition.address + registerWidth(definition);
+  if (address !== undefined) {
+    if (address === definition.address) return 0;
+    if (address > definition.address && address < definition.address + registerWidth(definition)) return 1;
+    // Normalize leading zeros so 14, 014 and 0x0014 share the same address prefix.
+    if (definition.address.toString(16).startsWith(address.toString(16))) return 2;
+  }
   return [definition.name, definition.official_name, definition.description, definition.group,
-    registerDisplayName(definition), ...(definition.aliases ?? [])].join(" ").toLowerCase().includes(text);
+    registerDisplayName(definition), ...(definition.aliases ?? [])].join(" ").toLowerCase().includes(text) ? 3 : Infinity;
+}
+
+/** Keep boolean searches consistent with the list's address relevance ordering. */
+export function matchesRegisterSearch(definition: RegisterDefinition, input: string): boolean {
+  return Number.isFinite(registerSearchRank(definition, input));
 }
 
 /** Keep common diagnostic labels concise while retaining the official name in details. */

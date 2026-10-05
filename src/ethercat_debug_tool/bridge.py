@@ -1207,6 +1207,11 @@ class BridgeRuntime:
             if definition is None:
                 raise ValueError("Register definition requires position and definition_id")
             return definition
+        if method == "register_raw_read":
+            # Raw access retains the actual read counter without catalog policy.
+            return self._submit(lambda backend: RegisterService(backend).read_raw(
+                int(params["position"]), int(params["address"]), int(params["size"]),
+            ))
         if method == "register_read":
             definition = self._register_definition(params)
             if definition is not None:
@@ -1223,6 +1228,27 @@ class BridgeRuntime:
                     else True,
                 )
             )
+            return result
+        if method == "register_raw_write":
+            # Serialize the raw write and its single readback as one worker task.
+            position, address, size = int(params["position"]), int(params["address"]), int(params["size"])
+            data = bytes.fromhex(str(params["data"]))
+            if len(data) != size:
+                raise ValueError(f"Raw register write must be exactly {size} bytes")
+            details = {"position": position, "address": f"0x{address:04X}", "target": data.hex(" ").upper(), "raw": True}
+            try:
+                result = self._submit(lambda backend: RegisterService(backend).write_raw(position, address, data))
+            except BaseException as exc:
+                self.audit.record("register_write", details, outcome="failed", error=str(exc))
+                raise
+            details["write_wkc"] = result.write_wkc
+            details["read_wkc"] = result.readback.wkc if result.readback else None
+            if result.read_error:
+                details["read_error"] = result.read_error
+            if result.write_error or result.write_wkc != 1:
+                self.audit.record("register_write", details, outcome="failed", error=result.write_error or f"WKC={result.write_wkc}")
+            else:
+                self.audit.record("register_write", details, outcome="succeeded")
             return result
         if method in {"register_snapshot", "register_watch"}:
             return self._read_register_snapshot(params)
