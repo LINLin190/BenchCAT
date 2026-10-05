@@ -10,14 +10,14 @@
   },
   "coverage": {
     "ET1100": {
-      "records_total": 220,
-      "register_records": 217,
+      "records_total": 221,
+      "register_records": 218,
       "register_groups": 1,
       "memory_regions": 2,
-      "bitfields": 632,
-      "registers_with_bitfields": 217,
+      "bitfields": 634,
+      "registers_with_bitfields": 218,
       "bitfield_table_coverage_pct": 100.0,
-      "esc_core_records": 217,
+      "esc_core_records": 218,
       "system_csr_records": 0,
       "phy_template_records": 0,
       "hbi_records": 0,
@@ -6095,6 +6095,62 @@
         "notes": [],
         "alternate_addresses": [],
         "description_zh": "PDI 接口访问错误计数，达到最大值后饱和。"
+      },
+      {
+        "chip": "ET1100",
+        "address": "0x030E-0x030F",
+        "address_space": "ESC Core CSR",
+        "name": "PDI0 error code",
+        "official_name": "PDI0 error code",
+        "alias": ["PDI Error Code"],
+        "record_kind": "register",
+        "category": "Error Counters / Diagnostics",
+        "width_bits": 16,
+        "access_granularity": "byte-addressable ESC register space",
+        "reset_value": "0",
+        "power_on_default": "0",
+        "access": "RO",
+        "master_access": "RO",
+        "pdi_access": "RO",
+        "ethercat_master_access_allowed": true,
+        "pdi_hbi_access_allowed": true,
+        "state_restriction": "not documented",
+        "hardware_condition": "PDI mode determines the error-code meaning",
+        "read_side_effects": [],
+        "write_side_effects": [],
+        "write_sequence": "not writable",
+        "byte_order": "LSB at lower ESC address",
+        "reserved_bits_rule": "ignore reserved read values",
+        "fields": [
+          {
+            "bits": "7:0",
+            "name": "最近一次 PDI 错误原因",
+            "ecat_access": "RO",
+            "pdi_access": "RO",
+            "reset_value": "0",
+            "description": "错误原因位定义取决于 SPI 或微控制器 PDI 模式，见对应接口的错误码表。",
+            "reserved": false,
+            "source": "beckhoff_sec2_v3.3"
+          },
+          {
+            "bits": "15:8",
+            "name": "Reserved",
+            "ecat_access": "RO",
+            "pdi_access": "RO",
+            "reset_value": "0",
+            "description": "ET1100 不实现高字节的扩展错误字段。",
+            "reserved": true,
+            "source": "beckhoff_sec2_v3.3"
+          }
+        ],
+        "source": [
+          {"source_id": "beckhoff_sec2_v3.3", "section": "2.9.5.1", "page": "II-74", "pdf_page": 74},
+          {"source_id": "beckhoff_sec2_v3.3", "section": "2.9.5.3", "page": "II-76", "pdf_page": 76}
+        ],
+        "confidence": "official_explicit",
+        "notes": ["写入 0x030D 的 PDI 错误计数器会同时清除错误计数与此错误码。"],
+        "alternate_addresses": [],
+        "description_zh": "记录最近一次 PDI 接口错误的原因；低字节含义取决于所选 PDI 模式，高字节为 ET1100 保留字段。"
       },
       {
         "chip": "ET1100",
@@ -71565,8 +71621,15 @@
     },
     {
       "address": "0x030E",
-      "classification": "LAN9252_LAN9253_only_at_this_exact_address",
-      "ET1100": null,
+      "classification": "same_address_different_or_not_proven_identical",
+      "ET1100": {
+        "name": "PDI0 error code",
+        "width_bits": 16,
+        "reset_value": "0",
+        "master_access": "RO",
+        "pdi_access": "RO",
+        "category": "Error Counters / Diagnostics"
+      },
       "LAN9252": {
         "name": "Pdi Error Code Register",
         "width_bits": 8,

@@ -9,7 +9,7 @@ from ethercat_debug_tool.models import BackendMode
 
 def test_each_profile_has_its_investigated_register_set_and_domestic_isomorphic() -> None:
     registry = ProfileRegistry()
-    expected_counts = {"ET1100": 2266, "LAN9252": 1245, "LAN9253": 2353}
+    expected_counts = {"ET1100": 2267, "LAN9252": 1245, "LAN9253": 2353}
     for chip, expected in expected_counts.items():
         assert len(registry.catalog(chip)) == expected
 
@@ -42,6 +42,17 @@ def test_same_address_has_profile_scoped_meaning() -> None:
     assert lan9252["name"] == lan9253["name"] == "Product Id Register"
     assert et1100["width"] == 2 and lan9252["width"] == lan9253["width"] == 8
     assert len({et1100["definition_id"], lan9252["definition_id"], lan9253["definition_id"]}) == 3
+
+
+# Reserved field bits do not turn a formally named PDI Error Code register into a reserved address.
+@pytest.mark.parametrize("profile,width", [("ET1100", 2), ("E101", 2), ("LAN9252", 1), ("E252", 1), ("LAN9253", 1), ("E253", 1)])
+def test_pdi_error_code_preserves_chip_width_and_register_identity(profile, width):
+    registry = ProfileRegistry()
+    code = registry.find(profile, "esc_core", 0x030E)
+    assert code and code["width"] == width and not code["is_reserved"]
+    assert code["direct_read_allowed"] and not code["direct_write_allowed"]
+    assert code["access"] == "RO" and code["automatic_read_allowed"]
+    assert registry.find(profile, "esc_core", 0x060D)["is_reserved"]
 
 
 @pytest.mark.parametrize("profile,width", [("ET1100", 16), ("E101", 16), ("LAN9252", 64), ("E252", 64), ("LAN9253", 64), ("E253", 64)])

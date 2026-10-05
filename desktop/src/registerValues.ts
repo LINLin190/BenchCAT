@@ -206,7 +206,7 @@ export function registerManuals(definition: RegisterDefinition): { filename: str
   ];
 }
 
-/** The common view follows the selected diagnostic ranges and implemented channel arrays. */
+/** The common view follows the selected diagnostic registers and byte ranges. */
 export function isCommonRegister(definition: RegisterDefinition): boolean {
   if (definition.address_space !== "esc_core") return false;
   const address = definition.address;
@@ -221,8 +221,10 @@ export function isCommonRegister(definition: RegisterDefinition): boolean {
     || (address >= 0x0310 && address <= 0x0313)
     || (address >= 0x0440 && address <= 0x0441)
     || (address >= 0x0502 && address <= 0x0503)
-    // The catalog already limits FMMU and SM entries to the slave's channel counts.
-    || (address >= 0x0600 && address < 0x0800)
-    || (address >= 0x0800 && address < 0x0900)
-    || (address >= 0x0900 && address < 0x0a00);
+    || address === 0x060c
+    || address === 0x0805
+    || address === 0x0806
+    || (address >= 0x092c && address <= 0x092f)
+    || address === 0x0981
+    || (address >= 0x09a0 && address <= 0x09a3);
 }

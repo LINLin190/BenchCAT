@@ -63,7 +63,7 @@ const groupLabels: Record<string, string> = {
   "PHY Management / Port Status": "PHY 管理", "Distributed Clocks": "分布式时钟",
   "Write Protection / Reset": "写保护与复位", "Digital I/O / General Purpose I/O": "数字 I/O",
   "FMMU": "FMMU 映射", "SyncManager": "SyncManager 通道",
-  "User RAM": "用户 RAM", "Process Data RAM": "过程数据 RAM",
+  "User RAM": "用户 RAM", "Process Data RAM": "PRAM", "Process Data RAM / PRAM": "PRAM",
   "phy": "PHY 寄存器", "lan925x_system_csr": "CSR 寄存器", "hbi_local": "HBI 寄存器",
 };
 const referenceGroups = ["phy", "lan925x_system_csr", "hbi_local"];
@@ -88,6 +88,11 @@ function ecatAccessible(definition: RegisterDefinition): boolean {
   return definition.direct_read_allowed === true || definition.direct_write_allowed === true;
 }
 
+/** A PRAM overview is a navigation row and never a device transaction. */
+function isPramOverview(definition: RegisterDefinition): boolean {
+  return definition.address_space === "process_ram_overview";
+}
+
 /** Explain the missing direct ECAT path without implying that indirect access is impossible. */
 function unavailableReason(definition: RegisterDefinition): string {
   if (definition.address_space === "phy") return "本页不支持通过 ECAT 直接访问；需要通过 PHY 管理接口间接访问。";
@@ -98,6 +103,7 @@ function unavailableReason(definition: RegisterDefinition): string {
 
 /** Manual acquisition policy is distinct from event acknowledgement and buffer access. */
 function readDescription(definition: RegisterDefinition): string {
+  if (isPramOverview(definition)) return "进入 PRAM 分类";
   if (!ecatAccessible(definition)) return unavailableReason(definition);
   if (!requiresManualRead(definition)) return "";
   if (definition.address_space === "user_ram") return "此区域不自动刷新。";
@@ -209,23 +215,23 @@ const RegisterTableRow = memo(function RegisterTableRow({ definition, index, val
   return <TableRow key={key} data-register-key={key} data-register-index={index} aria-rowindex={index + 2} hover selected={selected} tabIndex={writing ? -1 : 0}
     onClick={() => onSelect(definition)} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") onSelect(definition); }}
     sx={{ cursor: "pointer", height: 36, "&:hover .register-favorite, &:focus-within .register-favorite": { visibility: "visible" }, "&.Mui-selected": { bgcolor: "#EDF2FF" } }}>
-    <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650 }}>{hex(definition.address)}</TableCell>
+    <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650, whiteSpace: "pre-line", lineHeight: "14px" }}>{isPramOverview(definition) ? definition.address_text?.replace("-", "-\n") : hex(definition.address)}</TableCell>
     <TableCell sx={{ overflow: "hidden" }}><Tooltip title={<Stack spacing={0.25}><span>{name}</span>{name !== (definition.official_name ?? definition.name) && <span>{definition.official_name ?? definition.name}</span>}</Stack>}><Typography fontSize={12} fontWeight={400} noWrap>{name}</Typography></Tooltip></TableCell>
     <TableCell><Tooltip title={error || readHint(definition) || (monitor && change && value ? `${formatRegisterValue(change.previous, format)} → ${formatRegisterValue(value, format)}` : value ?? "")}>
       <Typography className="mono" fontSize={12} color={error ? "error.main" : "text.primary"} noWrap>
-        {!ecatAccessible(definition) ? "ECAT不可访问" : value ? formatRegisterValue(value, format) : error ? "读取失败" : definition.is_reserved ? "保留地址" : definition.access === "WO" ? "只写" : requiresManualRead(definition) ? "需手动读取" : definition.automatic_read_allowed === false ? "不适用" : reading ? "读取中…" : "未读取"}
+        {isPramOverview(definition) ? "进入 PRAM 分类" : !ecatAccessible(definition) ? "ECAT不可访问" : value ? formatRegisterValue(value, format) : error ? "读取失败" : definition.is_reserved ? "保留地址" : definition.access === "WO" ? "只写" : requiresManualRead(definition) ? "需手动读取" : definition.automatic_read_allowed === false ? "不适用" : reading ? "读取中…" : "未读取"}
         {value && meaning && <Box component="span" sx={{ color: "text.secondary", ml: 0.75, fontFamily: "inherit", fontSize: 11 }}>{meaning}</Box>}
         {value && error && <Box component="span" sx={{ color: "error.main", ml: 0.75, fontSize: 11 }}>旧值 · 读取失败</Box>}
         {monitor && change && <Box component="span" sx={{ color: "warning.main", ml: 0.75, fontSize: 11 }}>变化</Box>}
       </Typography>
     </Tooltip></TableCell>
-    <TableCell><Typography fontSize={11} color="text.secondary"><RegisterAccess access={definition.access} /></Typography></TableCell>
-    <TableCell><Typography fontSize={11} color="text.secondary">{registerWidth(definition)} B</Typography></TableCell>
-    <TableCell sx={{ px: 0.25 }}><IconButton size="small" className="register-favorite" aria-label={monitor ? `移除监视 ${registerLabel(definition.name)}` : `收藏 ${registerLabel(definition.name)}`}
+    <TableCell><Typography fontSize={11} color="text.secondary">{isPramOverview(definition) ? "—" : <RegisterAccess access={definition.access} />}</Typography></TableCell>
+    <TableCell><Typography fontSize={11} color="text.secondary">{isPramOverview(definition) ? "—" : `${registerWidth(definition)} B`}</Typography></TableCell>
+    <TableCell sx={{ px: 0.25 }}>{!isPramOverview(definition) && <IconButton size="small" className="register-favorite" aria-label={monitor ? `移除监视 ${registerLabel(definition.name)}` : `收藏 ${registerLabel(definition.name)}`}
       sx={{ p: 0.5, visibility: monitor || favorite ? "visible" : "hidden" }} onClick={(event) => {
         event.stopPropagation();
         onFavorite(definition, monitor, favorite);
-      }}>{monitor ? <CloseRounded sx={{ fontSize: 16 }} /> : favorite ? <StarRounded className={favoriteFeedback ? "register-star-selected" : undefined} sx={{ fontSize: 16 }} color="warning" /> : <StarBorderRounded sx={{ fontSize: 16 }} />}</IconButton></TableCell>
+      }}>{monitor ? <CloseRounded sx={{ fontSize: 16 }} /> : favorite ? <StarRounded className={favoriteFeedback ? "register-star-selected" : undefined} sx={{ fontSize: 16 }} color="warning" /> : <StarBorderRounded sx={{ fontSize: 16 }} />}</IconButton>}</TableCell>
   </TableRow>;
 });
 
@@ -282,6 +288,7 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
     const top = event.currentTarget.scrollTop;
     setViewport((current) => current.top === top ? current : { ...current, top });
   }} sx={{ flex: 1, minHeight: 0, overflowAnchor: "none" }}>
+    {/* Keep the same column positions in every view; long overview addresses use two lines. */}
     <Table stickyHeader size="small" aria-rowcount={definitions.length + 1} sx={{ tableLayout: "fixed", "& td, & th": { fontSize: 12, py: 0.5, borderColor: "#EEF1F6", boxSizing: "border-box", height: registerRowHeight }, "& th": { py: 0, height: registerHeaderHeight } }}>
       <TableHead><TableRow aria-rowindex={1}>
         <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: 200 }}>当前值</TableCell>
@@ -473,12 +480,25 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     const available = new Set(catalog.filter((item) => ecatAccessible(item) || referenceGroups.includes(functionGroup(item))).map(functionGroup));
     return [...available].filter((item) => !referenceGroups.includes(item)).concat(referenceGroups.filter((item) => available.has(item)));
   }, [catalog]);
+  // Collapse PRAM only in the all-functions view; its category retains actual memory windows.
+  const listCatalog = useMemo(() => {
+    if (view !== "all" || group) return catalog;
+    const pram = catalog.find((item) => item.address_space === "process_ram");
+    if (!pram) return catalog;
+    const overview: RegisterDefinition = {
+      ...pram, definition_id: `${registerProfile}|process_ram_overview`, address_space: "process_ram_overview",
+      address: 0x1000, address_text: "0x1000-0x1FFFF", width: 0x1f000, width_bits: 0xf8000,
+      name: "PRAM", official_name: "Process Data RAM", description: "进入 PRAM 分类",
+      direct_read_allowed: false, direct_write_allowed: false, automatic_read_allowed: false,
+    };
+    return [...catalog.filter((item) => item.address_space !== "process_ram"), overview];
+  }, [catalog, view, group, registerProfile]);
   // Calculate relevance once per row, then keep matching addresses ahead of text.
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase();
-    return catalog.flatMap((item) => {
+    return listCatalog.flatMap((item) => {
       const itemGroup = functionGroup(item);
-      if (!ecatAccessible(item) && !(referenceGroups.includes(group) && itemGroup === group)) return [];
+      if (!ecatAccessible(item) && !isPramOverview(item) && !(referenceGroups.includes(group) && itemGroup === group)) return [];
       if (!showReservedAddresses && item.is_reserved) return [];
       if (view === "favorites" && !favorites.has(definitionKey(item))) return [];
       if (!text && view === "common" && !isCommonRegister(item)) return [];
@@ -487,7 +507,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
       const rank = Number.isFinite(addressRank) ? addressRank : text && (groupLabels[itemGroup] ?? "").includes(text) ? 3 : Infinity;
       return Number.isFinite(rank) ? [{ definition: item, rank }] : [];
     }).sort((left, right) => left.rank - right.rank || left.definition.address - right.definition.address).map((item) => item.definition);
-  }, [catalog, view, group, query, favorites, showReservedAddresses]);
+  }, [listCatalog, view, group, query, favorites, showReservedAddresses]);
   const displayed = monitor ? pinned : filtered;
   const selectedKey = selected ? definitionKey(selected) : "";
   // Reset conditional tables on selection; reset status is the normal read interpretation.
@@ -647,6 +667,12 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
   /** Selecting a register fetches missing values without requiring a second button. */
   const selectDefinition = async (definition: RegisterDefinition) => {
     if (writing || deviceOperationsBlocked) return;
+    // The overview opens the PRAM category without loading a definition or reading memory.
+    if (isPramOverview(definition)) {
+      requestSequence.current += 1;
+      setGroup(definition.group); setQuery(""); setSelected(undefined); setWriteContext(undefined);
+      return;
+    }
     // Re-selecting the current row preserves its editor and avoids redundant state updates.
     if (selectedKey === definitionKey(definition) && !detailError) return;
     const sequence = ++requestSequence.current, requestedContext = context;
@@ -916,7 +942,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
         <TextField size="small" placeholder="搜索名称、地址或地址范围" inputProps={{ "aria-label": "搜索寄存器" }} value={query} disabled={writing}
           onChange={(event) => { setQuery(event.target.value); requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}
           InputProps={{ startAdornment: <SearchRounded sx={{ fontSize: 18, color: "text.secondary", mr: 0.75 }} /> }} sx={{ flex: 1, minWidth: 170, "& input": { fontSize: 12, py: 1 } }} />
-        {view === "all" && <FormControl size="small" sx={{ width: 116, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => { requestSequence.current += 1; setGroup(event.target.value); setSelected(undefined); setWriteContext(undefined); }} sx={{ fontSize: 12 }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
+        {view === "all" && <FormControl size="small" sx={{ width: 108, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => { requestSequence.current += 1; setGroup(event.target.value); setSelected(undefined); setWriteContext(undefined); }} sx={{ fontSize: 11, height: 34, "& .MuiSelect-select": { pl: 1.25, pr: "28px !important", py: 0.75 }, "& .MuiSelect-icon": { fontSize: 18, right: 7 } }} MenuProps={{ slotProps: { paper: { sx: { "& .MuiMenuItem-root": { fontSize: 12, minHeight: 30, py: 0.5 }, "& .MuiList-root": { py: 0.5 } } } } }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
       </>}
       <Button size="small" variant="outlined" sx={{ flexShrink: 0 }} disabled={writing} onClick={() => { setRawOpen(true); setWatching(false); }}>原始地址访问</Button>
       <Tooltip title="刷新整个目录中可自动读取的寄存器"><span><Button size="small" color="inherit" sx={{ flexShrink: 0 }} startIcon={reading ? <CircularProgress size={14} color="inherit" /> : <RefreshRounded sx={{ fontSize: 17 }} />} disabled={controlsBlocked || !catalog.length} onClick={refresh}>刷新全部</Button></span></Tooltip>

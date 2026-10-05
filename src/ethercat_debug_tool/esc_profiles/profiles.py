@@ -181,6 +181,9 @@ class ProfileRegistry:
         manual_read = bool(read_effects or "READ_SIDE_EFFECT" in read_access
                            or (not counter and "ACK_SEMANTIC" in read_access))
         reserved = str(record.get("name", "")).strip().lower().startswith("reserved") or bool(fields and all(field.get("reserved") for field in fields))
+        # PDI Error Code is a named register even when a chip reserves all its fields.
+        if address_space == "esc_core" and address == 0x030E:
+            reserved = False
         memory = address_space in {"user_ram", "process_ram"}
         manual_read = manual_read or memory
         readable = address_space in {"esc_core", "user_ram", "process_ram"} and master_access_allowed and semantic != "WO"
