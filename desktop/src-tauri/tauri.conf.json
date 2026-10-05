@@ -31,7 +31,8 @@
     "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "resources": {
-      "resources/bridge/": "bridge/"
+      "resources/bridge/": "bridge/",
+      "resources/manuals/": "manuals/"
     },
     "icon": [
       "icons/windows_desktop_shortcut.ico"

@@ -211,5 +211,14 @@ export async function openExternal(url: string): Promise<void> {
   await invoke("open_external", { url });
 }
 
+/** Both desktop and browser development open the bundled offline PDF. */
+export async function openRegisterManual(filename: string): Promise<void> {
+  if (!isTauri) {
+    await fetchJson("/api/register-manual", { filename });
+    return;
+  }
+  await invoke("open_register_manual", { filename });
+}
+
 export const previewMode = false;
 export type { AdapterInfo, WorkbenchStatus };

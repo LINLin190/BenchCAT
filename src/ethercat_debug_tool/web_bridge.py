@@ -199,6 +199,9 @@ class WebBridgeHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/reveal":
                 _reveal_path(Path(str(body.get("path", ""))))
                 self._send_json(HTTPStatus.OK, {"revealed": True})
+            elif self.path == "/api/register-manual":
+                _open_register_manual(str(body.get("filename", "")))
+                self._send_json(HTTPStatus.OK, {"opened": True})
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
         except BaseException as exc:
@@ -264,6 +267,21 @@ def _pick_directory() -> str | None:
         return selected or None
     finally:
         root.destroy()
+
+
+def _open_register_manual(filename: str) -> None:
+    """Open only the bundled manuals in the browser development host."""
+    manuals = {
+        "microchip_lan9252_register_zh.pdf", "microchip_lan9252_register_en.pdf",
+        "microchip_lan9253_register_en.pdf", "beckhoff_esc_register_en.pdf",
+        "beckhoff_et1100_datasheet_en.pdf",
+    }
+    if filename not in manuals:
+        raise ValueError("未知的寄存器手册")
+    path = Path(__file__).resolve().parents[2] / "desktop/src-tauri/resources/manuals" / filename
+    if not path.is_file():
+        raise FileNotFoundError(f"缺少离线手册：{filename}")
+    os.startfile(path)
 
 
 def _reveal_path(path: Path) -> None:
