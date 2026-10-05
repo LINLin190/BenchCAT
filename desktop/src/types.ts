@@ -124,6 +124,13 @@ export interface RegisterDefinition {
   master_access_allowed?: boolean;
   direct_read_allowed?: boolean;
   direct_write_allowed?: boolean;
+  automatic_read_allowed?: boolean;
+  requires_manual_read?: boolean;
+  is_reserved?: boolean;
+  aliases?: string[];
+  official_name?: string;
+  channel_kind?: string;
+  channel_index?: number;
   dangerous?: boolean;
   description: string;
   reset_value?: string;

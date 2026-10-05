@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card, Checkbox,
-  CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
+  CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
   FormControl, FormControlLabel, IconButton, InputLabel, Menu, MenuItem, Select, Stack,
   Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs,
   TextField, Tooltip, Typography,
@@ -15,8 +15,8 @@ import { BridgeRequestError, bridgeRequest } from "./api";
 import { operationStore } from "./operationStore";
 import { hex, type RegisterDefinition, type SlaveInfo } from "./types";
 import {
-  decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterValue,
-  hasReadSideEffects, isCommonRegister, parseRegisterAddress, registerMeaning,
+  decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterBinary, formatRegisterValue,
+  hasReadSideEffects, isCommonRegister, matchesRegisterSearch, parseRegisterAddress, registerDisplayName, registerMeaning,
   registerNumber, registerWidth, type RegisterValue, type ValueFormat,
 } from "./registerValues";
 
@@ -26,6 +26,24 @@ interface Props { slave?: SlaveInfo; run: Run; registerProfile: string; deviceOp
 interface WriteContext { definition?: RegisterDefinition; address: number; width: number; access: string; name: string; current?: string }
 interface ValueChange { previous: string; timestamp: number }
 interface ReadJob { definition: RegisterDefinition; automatic: boolean; context: string }
+interface RegisterSnapshot {
+  values: RegisterValue[]; errors: Record<string, string>; skipped: Record<string, string>;
+  cancelled: boolean; frame_count: number; duration_ms: number; timestamp: number;
+  catalog?: RegisterDefinition[]; error?: string;
+}
+interface CachedRegisters { catalog: RegisterDefinition[]; values: Record<string, RegisterValue>; errors: Record<string, string>; snapshot?: RegisterSnapshot }
+const snapshots = new Map<string, CachedRegisters>();
+let cachedSession = "";
+
+/** Restore user choices without storing live values across connection sessions. */
+function registerPreferences(profile: string): { favorites: string[]; pinned: string[]; intervalMs: number; format: ValueFormat } {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(`benchcat-registers:${profile}`) ?? "{}");
+    return { favorites: Array.isArray(saved.favorites) ? saved.favorites : [], pinned: Array.isArray(saved.pinned) ? saved.pinned : [],
+      intervalMs: [500, 1000, 2000, 5000].includes(saved.intervalMs) ? saved.intervalMs : 1000,
+      format: ["hex", "decimal", "bytes"].includes(saved.format) ? saved.format : "hex" };
+  } catch { return { favorites: [], pinned: [], intervalMs: 1000, format: "hex" }; }
+}
 interface WriteResult { readback: string | null; fpwr_wkc: number }
 
 const groupLabels: Record<string, string> = {
@@ -35,6 +53,7 @@ const groupLabels: Record<string, string> = {
   "PDI / ESC Configuration": "PDI 配置", "SII EEPROM Interface": "EEPROM 接口",
   "PHY Management / Port Status": "PHY 管理", "Distributed Clocks": "分布式时钟",
   "Write Protection / Reset": "写保护与复位", "Digital I/O / General Purpose I/O": "数字 I/O",
+  "FMMU": "FMMU 映射", "SyncManager": "SyncManager 通道",
 };
 const disclosureSx = {
   borderTop: 1, borderColor: "divider", "&:before": { display: "none" },
@@ -47,25 +66,31 @@ function registerLabel(name = ""): string {
   return name.replace(/\s+Register\s*$/i, "");
 }
 
+/** Translate undocumented metadata without changing the reference definitions. */
+function documentationText(text?: string): string {
+  return text?.replace(/not documented/gi, "文档未注明") ?? "未记录";
+}
+
 /** Only readable EtherCAT master ranges can create device reads. */
 function canRead(definition: RegisterDefinition): boolean {
-  return definition.direct_read_allowed === true && definition.access !== "WO";
+  return definition.direct_read_allowed === true && definition.access !== "WO" && !definition.is_reserved;
 }
 
 /** Keep communication errors near the affected register. */
 function failureText(error: unknown): string {
+  if (error instanceof BridgeRequestError && !error.failure.session_invalidated) return error.failure.message;
   return error instanceof Error ? error.message : "操作未完成，请检查从站连接。";
 }
 
 /** Secondary information stays available without filling the default workspace. */
-function Disclosure({ title, children }: { title: string; children: ReactNode }) {
-  return <Accordion disableGutters elevation={0} sx={disclosureSx}>
+function Disclosure({ title, children, defaultExpanded = false }: { title: string; children: ReactNode; defaultExpanded?: boolean }) {
+  return <Accordion defaultExpanded={defaultExpanded} disableGutters elevation={0} sx={disclosureSx}>
     <AccordionSummary expandIcon={<ExpandMoreRounded sx={{ fontSize: 17 }} />}><Typography fontSize={12}>{title}</Typography></AccordionSummary>
     <AccordionDetails>{children}</AccordionDetails>
   </Accordion>;
 }
 
-/** Visible ranges load once; selection and explicit refresh share the same value store. */
+/** A session snapshot serves all list views; only explicit monitoring repeats reads. */
 export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlocked, sessionContext }: Props) {
   const outerTheme = useTheme();
   // The nested theme also reaches portal menus and dialogs, without affecting other pages.
@@ -104,19 +129,18 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const [selected, setSelected] = useState<RegisterDefinition>();
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const [batch, setBatch] = useState(false);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const preferences = useMemo(() => registerPreferences(registerProfile), [registerProfile]);
+  const [favorites, setFavorites] = useState<Set<string>>(() => new Set(preferences.favorites));
   const [pinned, setPinned] = useState<RegisterDefinition[]>([]);
   const [values, setValues] = useState<Record<string, RegisterValue>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [changes, setChanges] = useState<Record<string, ValueChange>>({});
-  const [deferred, setDeferred] = useState<Set<string>>(new Set());
-  const [visible, setVisible] = useState<Set<string>>(new Set());
-  const [format, setFormat] = useState<ValueFormat>("hex");
+  const [snapshotInfo, setSnapshotInfo] = useState<RegisterSnapshot>();
+  const [showReservedAddresses, setShowReservedAddresses] = useState(false);
+  const [format, setFormat] = useState<ValueFormat>(preferences.format);
   const [reading, setReading] = useState(false);
   const [watching, setWatching] = useState(false);
-  const [intervalMs, setIntervalMs] = useState(1000);
+  const [intervalMs, setIntervalMs] = useState(preferences.intervalMs);
   const [showReserved, setShowReserved] = useState(false);
   const [watchConfirm, setWatchConfirm] = useState<RegisterDefinition>();
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
@@ -137,7 +161,6 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const [resetConfirm, setResetConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
   const [favoriteFeedback, setFavoriteFeedback] = useState<string>();
-  const tableRoot = useRef<HTMLDivElement>(null);
   const cache = useRef(new Map<string, Promise<RegisterDefinition>>());
   const valuesRef = useRef(values);
   const dirtyRef = useRef(false);
@@ -145,20 +168,20 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const queue = useRef<ReadJob[]>([]);
   const queued = useRef(new Set<string>());
   const automaticPaused = useRef(false);
+  const fullReadQueued = useRef(false);
+  const initialReadDone = useRef(false);
+  const snapshotRequest = useRef<string | undefined>(undefined);
+  const persistedPinned = useRef(preferences.pinned);
   const requestSequence = useRef(0);
   const mounted = useRef(true);
   const busyRef = useRef(false);
   const drainRef = useRef<() => Promise<void>>(async () => {});
-  const visibleRef = useRef(visible);
-  const monitorRef = useRef(monitor);
   const blockedRef = useRef(deviceOperationsBlocked);
   const identity = slave ? `${slave.position}:${slave.configured_address}:${Object.values(slave.identity).join(":")}` : "none";
   const context = `${sessionContext}:${identity}:${registerProfile}`;
   const contextRef = useRef(context);
   contextRef.current = context;
   valuesRef.current = values;
-  visibleRef.current = visible;
-  monitorRef.current = monitor;
   blockedRef.current = deviceOperationsBlocked;
 
   // Clear transient copy feedback when it expires or the displayed value changes.
@@ -180,15 +203,22 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = operationStore.subscribe(() => { void drainRef.current(); });
-    return () => { mounted.current = false; queue.current = []; queued.current.clear(); unsubscribe(); };
+    return () => {
+      mounted.current = false; queue.current = []; queued.current.clear(); unsubscribe();
+      if (snapshotRequest.current) void bridgeRequest("register_cancel", { request_id: snapshotRequest.current }).catch(() => {});
+    };
   }, []);
   useEffect(() => {
     let active = true;
+    if (cachedSession !== sessionContext) { snapshots.clear(); cachedSession = sessionContext; }
+    const saved = snapshots.get(context);
     cache.current = new Map(); queue.current = []; queued.current.clear(); attempted.current.clear();
-    automaticPaused.current = false; dirtyRef.current = false; requestSequence.current += 1;
-    setCatalog([]); setSelected(undefined); setChecked(new Set()); setPinned([]); setVisible(new Set());
-    setValues({}); valuesRef.current = {}; setErrors({}); setChanges({}); setDeferred(new Set()); setReadbackKeys(new Set());
-    setWatching(false); setReading(false); setDetailLoading(false); setBatch(false);
+    automaticPaused.current = false; fullReadQueued.current = false; initialReadDone.current = Boolean(saved?.snapshot);
+    dirtyRef.current = false; requestSequence.current += 1;
+    setCatalog(saved?.catalog ?? []); setSelected(undefined); setPinned([]);
+    setValues(saved?.values ?? {}); valuesRef.current = saved?.values ?? {}; setErrors(saved?.errors ?? {});
+    setChanges({}); setSnapshotInfo(saved?.snapshot); setReadbackKeys(new Set());
+    setWatching(false); setReading(false); setDetailLoading(false);
     setPageError(""); setDetailError(""); setWriteContext(undefined); setWriteDialog(false); setWatchConfirm(undefined);
     setRawOpen(false); setRawResult(undefined); setRawError(""); setResetConfirm(false); setMonitor(false);
     if (!slave) return;
@@ -200,17 +230,35 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     return () => { active = false; };
   }, [context]);
 
+  // Persist UI choices; runtime snapshots are scoped to the current connection.
+  useEffect(() => {
+    if (!catalog.length) return;
+    setPinned((current) => {
+      const ids = new Set([...persistedPinned.current, ...current.map(definitionKey)]);
+      return catalog.filter((item) => ids.has(definitionKey(item)));
+    });
+  }, [catalog]);
+  useEffect(() => {
+    if (!catalog.length) return;
+    const available = new Set(catalog.map(definitionKey));
+    persistedPinned.current = [...persistedPinned.current.filter((id) => !available.has(id)), ...pinned.map(definitionKey)];
+    window.localStorage.setItem(`benchcat-registers:${registerProfile}`, JSON.stringify({ favorites: [...favorites], pinned: persistedPinned.current, intervalMs, format }));
+  }, [favorites, pinned, intervalMs, format, registerProfile]);
+  useEffect(() => {
+    if (catalog.length) snapshots.set(context, { catalog, values, errors, snapshot: snapshotInfo });
+  }, [catalog, values, errors, snapshotInfo, context]);
+
   const groups = useMemo(() => [...new Set(catalog.map((item) => item.group))], [catalog]);
   const filtered = useMemo(() => {
-    const text = query.trim().toLowerCase(), address = text ? parseRegisterAddress(text) : undefined;
+    const text = query.trim().toLowerCase();
     return catalog.filter((item) => {
+      if (!showReservedAddresses && item.is_reserved) return false;
       if (view === "favorites" && !favorites.has(definitionKey(item))) return false;
       if (!text && view === "common" && !isCommonRegister(item)) return false;
       if (group && item.group !== group) return false;
-      if (address !== undefined) return address >= item.address && address < item.address + registerWidth(item);
-      return !text || `${item.name} ${item.description} ${item.group} ${groupLabels[item.group] ?? ""}`.toLowerCase().includes(text);
+      return matchesRegisterSearch(item, text) || Boolean(text && (groupLabels[item.group] ?? "").includes(text));
     }).sort((left, right) => left.address - right.address);
-  }, [catalog, view, group, query, favorites]);
+  }, [catalog, view, group, query, favorites, showReservedAddresses]);
   const displayed = monitor ? pinned : filtered;
   const selectedKey = selected ? definitionKey(selected) : "";
   const selectedValue = values[selectedKey];
@@ -223,24 +271,6 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const writeFields = writeContext?.definition ? decodeRegisterFields(writeContext.definition, writeContext.current ?? Array(writeContext.width).fill("00").join(" ")) : [];
   const controlsBlocked = deviceOperationsBlocked || reading || writing;
   const writable = Boolean(selected?.direct_write_allowed && selected.access !== "RO" && !selected.dangerous);
-  const displayedKey = displayed.map(definitionKey).join("|");
-
-  /** Observe actual viewport rows rather than fetching the entire catalog on entry. */
-  useEffect(() => {
-    const root = tableRoot.current;
-    if (!root) return;
-    const visibleKeys = new Set<string>();
-    setVisible(new Set());
-    const observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        const key = (entry.target as HTMLElement).dataset.registerKey!;
-        if (entry.isIntersecting) visibleKeys.add(key); else visibleKeys.delete(key);
-      }
-      setVisible(new Set(visibleKeys));
-    }, { root, threshold: 0.01 });
-    root.querySelectorAll("[data-register-key]").forEach((row) => observer.observe(row));
-    return () => observer.disconnect();
-  }, [displayedKey, selectedKey, batch]);
 
   /** Detailed permissions and read side effects are resolved before automatic reads. */
   const loadDefinition = (definition: RegisterDefinition): Promise<RegisterDefinition> => {
@@ -272,39 +302,42 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     setErrors((current) => Object.fromEntries(Object.entries(current).filter(([key]) => !keys.includes(key))));
   };
 
-  /** One queue serializes visible reads and prioritizes deliberate selection or refresh. */
+  /** One logical snapshot packs all pending reads; rows update after the batch returns. */
   drainRef.current = async () => {
-    if (!slave || !mounted.current || blockedRef.current || busyRef.current || operationStore.activeHardware() || operationStore.active("register_watch") || !queue.current.length) return;
+    if (!slave || !mounted.current || blockedRef.current || busyRef.current || operationStore.activeHardware() || operationStore.active("register_watch") || (!queue.current.length && !fullReadQueued.current)) return;
     const requestedContext = context;
     busyRef.current = true; setReading(true);
     try {
-      while (queue.current.length && mounted.current && contextRef.current === requestedContext && !blockedRef.current && !operationStore.activeHardware() && !operationStore.active("register_watch")) {
-        const job = queue.current.shift()!, key = definitionKey(job.definition);
+      while ((queue.current.length || fullReadQueued.current) && mounted.current && contextRef.current === requestedContext && !blockedRef.current && !operationStore.activeHardware() && !operationStore.active("register_watch")) {
+        const jobs = queue.current.splice(0).filter((job) => job.context === requestedContext && canRead(job.definition));
+        const readAll = fullReadQueued.current;
+        fullReadQueued.current = false;
+        if (!jobs.length && !readAll) break;
+        const requestId = `register-${crypto.randomUUID()}`;
+        snapshotRequest.current = requestId;
         try {
-          if (job.context !== requestedContext || !canRead(job.definition)) continue;
-          if (job.automatic && (monitorRef.current || automaticPaused.current || !visibleRef.current.has(key) || attempted.current.has(key))) continue;
-          const definition = await loadDefinition(job.definition);
-          if (!mounted.current || contextRef.current !== requestedContext) break;
-          attempted.current.add(key);
-          if (job.automatic && hasReadSideEffects(definition)) {
-            setDeferred((current) => new Set(current).add(key)); continue;
-          }
-          const value = await bridgeRequest<RegisterValue>("register_read", {
-            position: slave.position, address: definition.address, size: registerWidth(definition), definition_id: definition.definition_id, profile: registerProfile,
+          const result = await bridgeRequest<RegisterSnapshot>("register_snapshot", {
+            request_id: requestId, position: slave.position, profile: registerProfile, all: readAll,
+            automatic: jobs.every((job) => job.automatic),
+            requests: jobs.map((job) => ({ address: job.definition.address, size: registerWidth(job.definition), definition_id: job.definition.definition_id })),
           });
-          acceptValues([definition], [value], requestedContext);
+          if (!mounted.current || contextRef.current !== requestedContext) break;
+          if (result.catalog) setCatalog(result.catalog);
+          acceptValues(result.catalog ?? jobs.map((job) => job.definition), result.values, requestedContext);
+          setErrors((current) => ({ ...current, ...result.errors })); setSnapshotInfo(result);
+          if (result.error) setPageError(result.error);
+          for (const job of jobs) attempted.current.add(definitionKey(job.definition));
+          if (result.cancelled) { queue.current = []; fullReadQueued.current = false; break; }
         } catch (error) {
           if (mounted.current && contextRef.current === requestedContext) {
-            setErrors((current) => ({ ...current, [key]: failureText(error) }));
-            // Each automatic range gets one attempt; row errors remain visible.
-            attempted.current.add(key);
-            if (!job.automatic || (error instanceof BridgeRequestError && error.failure.session_invalidated)) {
-              if (!job.automatic) setPageError(failureText(error));
-              automaticPaused.current = true; queue.current = []; queued.current.clear();
-              break;
-            }
+            setErrors((current) => ({ ...current, ...Object.fromEntries(jobs.map((job) => [definitionKey(job.definition), failureText(error)])) }));
+            setPageError(failureText(error)); automaticPaused.current = true;
+            queue.current = []; fullReadQueued.current = false; queued.current.clear(); break;
           }
-        } finally { queued.current.delete(key); }
+        } finally {
+          for (const job of jobs) queued.current.delete(definitionKey(job.definition));
+          if (snapshotRequest.current === requestId) snapshotRequest.current = undefined;
+        }
       }
     } finally {
       busyRef.current = false;
@@ -313,7 +346,8 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   };
 
   /** Explicit jobs replace a pending automatic job without duplicating its device read. */
-  const enqueueReads = (definitions: RegisterDefinition[], automatic = false) => {
+  const enqueueReads = (definitions: RegisterDefinition[], automatic = false, all = false) => {
+    if (all) fullReadQueued.current = true;
     const jobs: ReadJob[] = [];
     for (const definition of definitions.filter(canRead)) {
       const key = definitionKey(definition);
@@ -321,17 +355,20 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
         if (!automatic) queue.current.forEach((job) => { if (definitionKey(job.definition) === key) job.automatic = false; });
         continue;
       }
-      if (automatic && (attempted.current.has(key) || automaticPaused.current)) continue;
+      if (automatic && !all && (attempted.current.has(key) || automaticPaused.current)) continue;
       queued.current.add(key); jobs.push({ definition, automatic, context });
     }
     queue.current = automatic ? [...queue.current, ...jobs] : [...jobs, ...queue.current];
     void drainRef.current();
   };
 
-  // Loading a viewport is a single acquisition, not a background polling loop.
+  // One initial snapshot serves scrolling, search and function filters.
   useEffect(() => {
-    if (!monitor && !deviceOperationsBlocked && !writing && !rawOpen) enqueueReads(filtered.filter((item) => visible.has(definitionKey(item))), true);
-  }, [visible, filtered, monitor, deviceOperationsBlocked, writing, rawOpen]);
+    if (catalog.length && !initialReadDone.current && !deviceOperationsBlocked && !writing && !rawOpen) {
+      initialReadDone.current = true;
+      enqueueReads(catalog, true, true);
+    }
+  }, [catalog, deviceOperationsBlocked, writing, rawOpen]);
 
   /** Selecting a register fetches missing values without requiring a second button. */
   const selectDefinition = async (definition: RegisterDefinition) => {
@@ -343,7 +380,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
       const detail = await loadDefinition(definition);
       if (!mounted.current || contextRef.current !== requestedContext || sequence !== requestSequence.current) return;
       setSelected(detail);
-      if (!valuesRef.current[definitionKey(detail)]) enqueueReads([detail]);
+      if (!valuesRef.current[definitionKey(detail)] && detail.automatic_read_allowed !== false && !hasReadSideEffects(detail)) enqueueReads([detail], true);
     } catch (error) {
       if (mounted.current && contextRef.current === requestedContext && sequence === requestSequence.current) setDetailError(failureText(error));
     } finally {
@@ -363,12 +400,10 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
     initializeEditor({ definition: selected, address: selected.address, width: registerWidth(selected), access: selected.access, name: selected.name, current: selectedValue?.data });
   }, [selected, selectedValue?.data, writable, detailLoading, rawOpen, writeDialog]);
 
-  /** Refresh updates visible rows plus the inspector, or the explicit batch selection. */
+  /** Refresh all always targets the full safe catalog, regardless of list filters. */
   const refresh = () => {
     automaticPaused.current = false; setPageError(""); setWriteError(""); setWriteMessage(""); dirtyRef.current = false;
-    const targets = monitor ? pinned : batch && checked.size ? filtered.filter((item) => checked.has(definitionKey(item))) : filtered.filter((item) => visible.has(definitionKey(item)));
-    const inspector = selected && (!batch || !checked.size || checked.has(selectedKey)) ? [selected] : [];
-    enqueueReads([...new Map([...targets, ...inspector].map((item) => [definitionKey(item), item])).values()]);
+    enqueueReads(catalog, true, true);
   };
 
   /** Read side effects require opt-in before a register enters a repeated watch. */
@@ -379,7 +414,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   const pollKey = pinned.map(definitionKey).join("|");
   useEffect(() => {
     if (!monitor || !watching || !slave || deviceOperationsBlocked || !pinned.length) return;
-    let active = true, timer: number | undefined;
+    let active = true, timer: number | undefined, requestId: string | undefined;
     const requestedContext = context;
     /** Only the explicit monitor view performs repeated hardware transactions. */
     const poll = async () => {
@@ -387,22 +422,32 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
       try {
         if (busyRef.current || operationStore.activeHardware() || operationStore.active("register_watch")) return;
         busyRef.current = true; acquired = true;
-        const results = await bridgeRequest<RegisterValue[]>("register_watch", {
+        requestId = `watch-${crypto.randomUUID()}`;
+        const result = await bridgeRequest<RegisterSnapshot>("register_watch", {
+          request_id: requestId, profile: registerProfile,
           position: slave.position, requests: pinned.map((item) => ({ address: item.address, size: registerWidth(item), definition_id: item.definition_id, profile: registerProfile })),
         });
-        if (active) acceptValues(pinned, results, requestedContext);
+        if (active) {
+          acceptValues(pinned, result.values, requestedContext);
+          setErrors((current) => ({ ...current, ...result.errors }));
+          setSnapshotInfo(result);
+          if (result.error || Object.keys(result.errors).length) { setWatching(false); if (result.error) setPageError(result.error); }
+        }
       } catch (error) {
         if (active && contextRef.current === requestedContext) {
           setWatching(false); setPageError(failureText(error));
           setErrors((current) => ({ ...current, ...Object.fromEntries(pinned.map((item) => [definitionKey(item), failureText(error)])) }));
         }
       } finally {
-        if (acquired) { busyRef.current = false; void drainRef.current(); }
+        if (acquired) { requestId = undefined; busyRef.current = false; void drainRef.current(); }
         if (active) timer = window.setTimeout(poll, intervalMs);
       }
     };
     void poll();
-    return () => { active = false; if (timer !== undefined) window.clearTimeout(timer); };
+    return () => {
+      active = false; if (timer !== undefined) window.clearTimeout(timer);
+      if (requestId) void bridgeRequest("register_cancel", { request_id: requestId }).catch(() => {});
+    };
   }, [watching, monitor, pollKey, intervalMs, context, deviceOperationsBlocked]);
 
   /** Ordinary edits stay in the inspector; raw access uses the same editor in its dialog. */
@@ -538,32 +583,29 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   </Stack>;
 
   /** Compact rows keep timing and raw communication information out of the default table. */
-  const renderTable = () => <TableContainer ref={tableRoot} sx={{ flex: 1, minHeight: 0 }}>
+  const renderTable = () => <TableContainer sx={{ flex: 1, minHeight: 0 }}>
     <Table stickyHeader size="small" sx={{ tableLayout: "fixed", "& td, & th": { fontSize: 12, py: 0.5, borderColor: "#EEF1F6" }, "& th": { height: 34 } }}>
       <TableHead><TableRow>
-        {batch && !monitor && <TableCell padding="checkbox" sx={{ width: 36 }}><Checkbox size="small" inputProps={{ "aria-label": "选择当前分组" }}
-          checked={displayed.some(canRead) && displayed.filter(canRead).every((item) => checked.has(definitionKey(item)))}
-          indeterminate={displayed.some((item) => checked.has(definitionKey(item))) && !displayed.filter(canRead).every((item) => checked.has(definitionKey(item)))}
-          onChange={(_, enabled) => setChecked(enabled ? new Set(displayed.filter(canRead).map(definitionKey)) : new Set())} /></TableCell>}
-        <TableCell sx={{ width: 95 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell align="right" sx={{ width: monitor ? 270 : 225 }}>当前值</TableCell><TableCell sx={{ width: 36 }} />
+        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: 200 }}>当前值</TableCell>
+        <TableCell sx={{ width: 58 }}>权限</TableCell><TableCell sx={{ width: 58 }}>宽度</TableCell><TableCell sx={{ width: 32 }} />
       </TableRow></TableHead>
       <TableBody>{displayed.map((definition) => {
         const key = definitionKey(definition), value = values[key], change = changes[key], error = errors[key], meaning = registerMeaning(definition, value?.data);
         return <TableRow key={key} data-register-key={key} hover selected={key === selectedKey} tabIndex={writing ? -1 : 0}
           onClick={() => void selectDefinition(definition)} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") void selectDefinition(definition); }}
           sx={{ cursor: "pointer", height: 36, "&:hover .register-favorite, &:focus-within .register-favorite": { visibility: "visible" }, "&.Mui-selected": { bgcolor: "#EDF2FF" } }}>
-          {batch && !monitor && <TableCell padding="checkbox"><Checkbox size="small" checked={checked.has(key)} disabled={!canRead(definition)} inputProps={{ "aria-label": `选择 ${registerLabel(definition.name)}` }}
-            onClick={(event) => event.stopPropagation()} onChange={(_, enabled) => setChecked((current) => { const next = new Set(current); if (enabled) next.add(key); else next.delete(key); return next; })} /></TableCell>}
           <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650 }}>{hex(definition.address)}</TableCell>
-          <TableCell sx={{ overflow: "hidden" }}><Typography fontSize={12} fontWeight={400} noWrap title={registerLabel(definition.name)}>{registerLabel(definition.name)}</Typography></TableCell>
-          <TableCell align="right"><Tooltip title={error || (monitor && change && value ? `${formatRegisterValue(change.previous, format)} → ${formatRegisterValue(value.data, format)}` : value?.data ?? "")}>
+          <TableCell sx={{ overflow: "hidden" }}><Tooltip title={<Stack spacing={0.25}><span>{registerDisplayName(definition)}</span>{registerDisplayName(definition) !== (definition.official_name ?? definition.name) && <span>{definition.official_name ?? definition.name}</span>}</Stack>}><Typography fontSize={12} fontWeight={400} noWrap>{registerDisplayName(definition)}</Typography></Tooltip></TableCell>
+          <TableCell><Tooltip title={error || (hasReadSideEffects(definition) ? "读取可能确认事件。请使用右侧的刷新图标手动读取。" : monitor && change && value ? `${formatRegisterValue(change.previous, format)} → ${formatRegisterValue(value.data, format)}` : value?.data ?? "")}>
             <Typography className="mono" fontSize={12} color={error ? "error.main" : "text.primary"} noWrap>
-              {value ? formatRegisterValue(value.data, format) : error ? "获取失败" : deferred.has(key) ? "选择查看" : canRead(definition) ? "—" : "只写"}
+              {value ? formatRegisterValue(value.data, format) : error ? "读取失败" : definition.is_reserved ? "保留地址" : definition.access === "WO" ? "只写" : hasReadSideEffects(definition) ? "需手动读取" : definition.automatic_read_allowed === false ? "不适用" : reading ? "读取中…" : "未读取"}
               {value && meaning && <Box component="span" sx={{ color: "text.secondary", ml: 0.75, fontFamily: "inherit", fontSize: 11 }}>{meaning}</Box>}
-              {value && error && <Box component="span" sx={{ color: "error.main", ml: 0.75, fontSize: 11 }}>获取失败</Box>}
+              {value && error && <Box component="span" sx={{ color: "error.main", ml: 0.75, fontSize: 11 }}>旧值 · 读取失败</Box>}
               {monitor && change && <Box component="span" sx={{ color: "warning.main", ml: 0.75, fontSize: 11 }}>变化</Box>}
             </Typography>
           </Tooltip></TableCell>
+          <TableCell><Tooltip title={definition.master_access ?? definition.access}><Typography fontSize={11} color="text.secondary">{({ RO: "只读", RW: "读写", WO: "只写", WAC: "清零", W1C: "W1C", W1S: "W1S", MIXED: "混合" } as Record<string, string>)[definition.access] ?? definition.access}</Typography></Tooltip></TableCell>
+          <TableCell><Typography fontSize={11} color="text.secondary">{registerWidth(definition)} B</Typography></TableCell>
           <TableCell sx={{ px: 0.25 }}><IconButton size="small" className="register-favorite" aria-label={monitor ? `移除监视 ${registerLabel(definition.name)}` : `收藏 ${registerLabel(definition.name)}`}
             sx={{ p: 0.5, visibility: monitor || favorites.has(key) ? "visible" : "hidden" }} onClick={(event) => {
               event.stopPropagation();
@@ -575,7 +617,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
             }}>{monitor ? <CloseRounded sx={{ fontSize: 16 }} /> : favorites.has(key) ? <StarRounded className={favoriteFeedback === key ? "register-star-selected" : undefined} sx={{ fontSize: 16 }} color="warning" /> : <StarBorderRounded sx={{ fontSize: 16 }} />}</IconButton></TableCell>
         </TableRow>;
       })}
-        {!displayed.length && <TableRow><TableCell colSpan={batch && !monitor ? 5 : 4} sx={{ py: "70px !important", textAlign: "center", color: "text.secondary" }}>
+        {!displayed.length && <TableRow><TableCell colSpan={6} sx={{ py: "70px !important", textAlign: "center", color: "text.secondary" }}>
           {catalogLoading ? <CircularProgress size={22} /> : monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
         </TableCell></TableRow>}
       </TableBody>
@@ -585,7 +627,7 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
   return <ThemeProvider theme={registerTheme}><Stack className="register-workspace" spacing={1.25} sx={{ "& .MuiButton-root": { fontSize: 12 } }}>
     <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ minHeight: 28 }}>
       <Typography fontSize={19} fontWeight={700}>寄存器</Typography>
-      {monitor && <Typography fontSize={12} color="text.secondary">{watching ? "监视中" : "监视已暂停"}</Typography>}
+      <Typography fontSize={12} color="text.secondary">{monitor ? watching ? "监视中" : "监视已暂停" : `ESC ${slave.chip_model} · 参考 ${registerProfile}`}</Typography>
     </Stack>
     <Stack direction="row" spacing={1} alignItems="center" sx={{ minHeight: 36 }}>
       {monitor ? <>
@@ -595,49 +637,54 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
         <Box sx={{ flex: 1 }} />
       </> : <>
         {/* Equal segments share one moving thumb; this anchor never follows the function filter. */}
-        <Tabs className="register-view-tabs" value={view} onChange={(_, value: CatalogView) => { setView(value); setGroup(""); setChecked(new Set()); }} aria-label="寄存器列表范围">
+        <Tabs className="register-view-tabs" value={view} onChange={(_, value: CatalogView) => { setView(value); setGroup(""); }} aria-label="寄存器列表范围">
           <Tab value="common" label="常用" disabled={writing} /><Tab value="all" label="全部" disabled={writing} /><Tab value="favorites" label="收藏" disabled={writing} />
         </Tabs>
-        <TextField size="small" placeholder="搜索名称或地址" inputProps={{ "aria-label": "搜索寄存器" }} value={query} disabled={writing}
-          onChange={(event) => { setQuery(event.target.value); requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); setChecked(new Set()); }}
+        <TextField size="small" placeholder="搜索名称、地址或地址范围" inputProps={{ "aria-label": "搜索寄存器" }} value={query} disabled={writing}
+          onChange={(event) => { setQuery(event.target.value); requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}
           InputProps={{ startAdornment: <SearchRounded sx={{ fontSize: 18, color: "text.secondary", mr: 0.75 }} /> }} sx={{ flex: 1, minWidth: 190, "& input": { fontSize: 12, py: 1 } }} />
-        {view === "all" && <FormControl size="small" sx={{ width: 156, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => { setGroup(event.target.value); setChecked(new Set()); }} sx={{ fontSize: 12 }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
+        {view === "all" && <FormControl size="small" sx={{ width: 156, flexShrink: 0 }}><Select value={group} displayEmpty disabled={writing} inputProps={{ "aria-label": "功能分组" }} onChange={(event) => setGroup(event.target.value)} sx={{ fontSize: 12 }}><MenuItem value="">全部功能</MenuItem>{groups.map((item) => <MenuItem key={item} value={item}>{groupLabels[item] ?? item}</MenuItem>)}</Select></FormControl>}
       </>}
-      <Button size="small" variant="contained" sx={{ flexShrink: 0, minWidth: 76, "& .MuiButton-startIcon": { width: 17, height: 17, alignItems: "center", justifyContent: "center" } }} startIcon={reading ? <CircularProgress size={14} color="inherit" /> : <RefreshRounded sx={{ fontSize: 17 }} />} disabled={controlsBlocked || !displayed.length} onClick={refresh}>刷新{batch && checked.size && !monitor ? ` (${checked.size})` : ""}</Button>
+      <FormControl size="small" sx={{ width: 84, flexShrink: 0 }}><Select value={format} inputProps={{ "aria-label": "值显示格式" }} onChange={(event) => setFormat(event.target.value as ValueFormat)} sx={{ fontSize: 12 }}><MenuItem value="hex">HEX</MenuItem><MenuItem value="decimal">DEC</MenuItem><MenuItem value="bytes">字节</MenuItem></Select></FormControl>
+      <Tooltip title="刷新整个目录中可自动读取的寄存器"><span><Button size="small" variant="text" color="inherit" sx={{ flexShrink: 0, minWidth: 0, px: 1, color: "text.secondary", "&:hover, &:active:not(.Mui-disabled)": { bgcolor: "#EEF1F6" }, "& .MuiButton-startIcon": { width: 17, height: 17, alignItems: "center", justifyContent: "center" } }} startIcon={reading ? <CircularProgress size={14} color="inherit" /> : <RefreshRounded sx={{ fontSize: 17 }} />} disabled={controlsBlocked || !catalog.length} onClick={refresh}>刷新全部</Button></span></Tooltip>
       {!monitor && <Button size="small" color="inherit" disabled={writing} onClick={() => { setMonitor(true); setWatching(false); }}>监视{pinned.length ? ` (${pinned.length})` : ""}</Button>}
       <IconButton size="small" aria-label="更多操作" disabled={writing} onClick={(event) => setMoreAnchor(event.currentTarget)}><MoreHorizRounded sx={{ fontSize: 21 }} /></IconButton>
     </Stack>
     {pageError && <Alert severity="error" onClose={() => setPageError("")}>{pageError}</Alert>}
-    <Box sx={{ display: "grid", gridTemplateColumns: selected ? "minmax(0, 1fr) 320px" : "minmax(0, 1fr)", gap: 1.5, height: "calc(100vh - 235px)", minHeight: 380 }}>
+    <Box sx={{ display: "grid", gridTemplateColumns: selected ? "minmax(0, 1fr) 360px" : "minmax(0, 1fr)", gap: 1.5, height: "calc(100vh - 235px)", minHeight: 380 }}>
       <Card variant="outlined" sx={{ minWidth: 0, overflow: "hidden", borderRadius: 1.5, display: "flex", flexDirection: "column", boxShadow: "none" }}>
         {renderTable()}
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.25, height: 30, flexShrink: 0, borderTop: 1, borderColor: "divider", color: "text.secondary" }}>
-          <Typography fontSize={11}>{displayed.length} 项{batch && !monitor ? ` · 已选择 ${checked.size} 项` : ""}</Typography>
-          {batch && !monitor && <Button size="small" onClick={() => { setBatch(false); setChecked(new Set()); }}>退出批量操作</Button>}
-          {monitor && <Typography fontSize={11}>仅监视已加入的寄存器</Typography>}
-          {!monitor && automaticPaused.current && <Typography fontSize={11} color="error.main">部分值获取失败 · 刷新可继续</Typography>}
-          {!monitor && !automaticPaused.current && displayed.some((item) => errors[definitionKey(item)]) && <Typography fontSize={11} color="error.main">{displayed.filter((item) => errors[definitionKey(item)]).length} 项获取失败</Typography>}
+          <Typography fontSize={11}>{displayed.length} 项 · {displayed.filter((item) => values[definitionKey(item)]).length} 项已有值{displayed.some((item) => errors[definitionKey(item)]) ? ` · ${displayed.filter((item) => errors[definitionKey(item)]).length} 项失败` : ""}{displayed.some(hasReadSideEffects) ? ` · ${displayed.filter(hasReadSideEffects).length} 项需手动读取` : ""}</Typography>
+          <Typography fontSize={11} color={pageError ? "error.main" : "text.secondary"}>{reading ? "正在读取…" : snapshotInfo ? `${snapshotInfo.cancelled ? "读取已取消 · " : ""}${new Date(snapshotInfo.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${snapshotInfo.duration_ms.toFixed(1)} ms · ${snapshotInfo.frame_count} 帧` : "尚未读取"}</Typography>
         </Stack>
       </Card>
       {selected && <Card variant="outlined" sx={{ minWidth: 0, overflow: "auto", borderRadius: 1.5, boxShadow: "none" }}><Stack spacing={1.75} sx={{ p: 2 }}>
         <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={0.5}><Box minWidth={0}>
-          <Typography fontSize={14} fontWeight={400} sx={{ overflowWrap: "anywhere" }}>{registerLabel(selected.name)}</Typography>
+          <Typography fontSize={14} fontWeight={500} sx={{ overflowWrap: "anywhere" }}>{registerDisplayName(selected)}</Typography>
+          {registerDisplayName(selected) !== registerLabel(selected.name) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.25 }}>{registerLabel(selected.name)}</Typography>}
           <Typography fontSize={12} color="text.secondary" sx={{ mt: 0.5 }}><Box component="span" className="mono" sx={{ fontWeight: 650, color: "text.primary" }}>{hex(selected.address)}</Box> · {registerWidth(selected) * 8} bit · {selected.access === "RO" ? "只读" : selected.access === "RW" ? "读写" : selected.access}</Typography>
         </Box><IconButton size="small" aria-label="关闭寄存器详情" disabled={writing} onClick={() => { requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}><CloseRounded sx={{ fontSize: 17 }} /></IconButton></Stack>
         {detailError && <Alert severity="error">{detailError}</Alert>}
         <Box sx={{ bgcolor: "#F6F8FC", borderRadius: 1, p: 1.5 }}>
-          <Stack direction="row" alignItems="center" justifyContent="space-between"><Typography fontSize={11} color="text.secondary">当前值</Typography><Stack direction="row" spacing={0.25}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between"><Typography fontSize={11} color="text.secondary">{errors[selectedKey] ? "上次读取值" : "当前值"}</Typography><Stack direction="row" spacing={0.25}>
+            <Tooltip title={hasReadSideEffects(selected) ? "刷新此寄存器；读取可能确认事件" : "刷新此寄存器"}><span><IconButton size="small" aria-label="刷新此寄存器" disabled={controlsBlocked || !canRead(selected) || detailLoading || Boolean(detailError) || selected.is_reserved} onClick={() => { setWatching(false); setWriteError(""); setWriteMessage(""); enqueueReads([selected]); }}><RefreshRounded sx={{ fontSize: 17 }} /></IconButton></span></Tooltip>
             <Tooltip title={copied ? "已复制" : "复制值"}><span><IconButton size="small" aria-label="复制寄存器值" disabled={!selectedValue} onClick={() => void copyValue()}>{copied ? <CheckRounded className="register-copy-confirmed" sx={{ fontSize: 15 }} color="success" /> : <ContentCopyRounded sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>
             <Tooltip title="加入监视"><span><IconButton size="small" aria-label="加入监视" disabled={!canRead(selected) || detailLoading || Boolean(detailError)} onClick={() => pinned.some((item) => definitionKey(item) === selectedKey) ? setMonitor(true) : addWatch(selected)}><PlaylistAddRounded sx={{ fontSize: 18 }} /></IconButton></span></Tooltip>
           </Stack></Stack>
           <Typography className="mono" fontSize={21} sx={{ overflowWrap: "anywhere", mt: 0.25 }}>{selectedValue ? formatRegisterValue(selectedValue.data, format) : detailLoading || reading ? "…" : "—"}</Typography>
+          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mt: 0.75 }}>
+            <Typography fontSize={11} color="text.secondary" sx={{ lineHeight: 1.7, flexShrink: 0 }}>BIN</Typography>
+            <Typography className="mono" fontSize={12} sx={{ lineHeight: 1.6, overflowWrap: "anywhere", minWidth: 0 }}>{selectedValue ? formatRegisterBinary(selectedValue.data, registerWidth(selected)) : "—"}</Typography>
+          </Stack>
           {selectedValue && registerMeaning(selected, selectedValue.data) && <Typography fontSize={12} color="text.secondary" sx={{ mt: 0.5 }}>{registerMeaning(selected, selectedValue.data)}</Typography>}
+          {hasReadSideEffects(selected) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.5 }}>读取可能确认事件，请点击刷新图标手动读取。</Typography>}
         </Box>
         {errors[selectedKey] && <Alert severity="error" sx={{ fontSize: 12 }}>{errors[selectedKey]}</Alert>}
         {writable && !rawOpen && !writeDialog && renderEditor()}
         {selected.address === 0x0040 && <Button size="small" color="error" variant="outlined" disabled={controlsBlocked} onClick={() => setResetConfirm(true)}>复位 EtherCAT 控制器</Button>}
         <Box>
-          <Disclosure title="位字段解析"><Stack spacing={1}>
+          <Disclosure key={`${selectedKey}-fields`} title="位字段解析" defaultExpanded={[0x0110, 0x0130, 0x0134, 0x0440].includes(selected.address)}><Stack spacing={1}>
             {selectedFields.length ? <Table size="small" sx={{ "& td": { px: 0.5, py: 0.75, fontSize: 11, verticalAlign: "top", borderColor: "#EEF1F6" } }}><TableBody>{selectedFields.filter((field) => showReserved || !field.reserved).map((field, index) => <TableRow key={`${field.bits}-${index}`}>
               <TableCell sx={{ width: 34 }} className="mono">{field.bits}</TableCell><TableCell><Typography fontSize={11} fontWeight={600}>{field.name}</Typography><Typography fontSize={11} color="text.secondary">{field.meaning}</Typography></TableCell><TableCell align="right" className="mono">{field.value.toString()}</TableCell>
             </TableRow>)}</TableBody></Table> : <Typography fontSize={11} color="text.secondary">{selectedValue ? "此寄存器没有位字段定义" : "获取当前值后显示字段解析"}</Typography>}
@@ -649,29 +696,25 @@ export function RegistersPage({ slave, run, registerProfile, deviceOperationsBlo
             })}
           </Stack></Disclosure>
           <Disclosure title="完整说明"><Stack spacing={1}>
-            <Typography fontSize={12} color="text.secondary">{selected.description}</Typography>
-            <Typography fontSize={11} color="text.secondary">主站权限：{selected.master_access ?? selected.access}<br />默认值：{selected.reset_value ?? "未记录"}<br />上电值：{selected.power_on_default ?? "未记录"}<br />状态限制：{selected.state_restriction ?? "未记录"}<br />保留位：{selected.reserved_bits_rule ?? "未记录"}</Typography>
-            {selected.fields?.map((field, index) => <Typography key={index} fontSize={11}><b>{field.bits} · {field.name}</b> [{field.ecat_access ?? "—"}]<br />{field.description}</Typography>)}
+            <Typography fontSize={12} color="text.secondary">{documentationText(selected.description)}</Typography>
+            <Typography fontSize={11} color="text.secondary">主站权限：{documentationText(selected.master_access ?? selected.access)}<br />默认值：{documentationText(selected.reset_value)}<br />上电值：{documentationText(selected.power_on_default)}<br />状态限制：{documentationText(selected.state_restriction)}<br />保留位：{documentationText(selected.reserved_bits_rule)}</Typography>
+            {selected.fields?.map((field, index) => <Typography key={index} fontSize={11}><b>{field.bits} · {field.name}</b> [{documentationText(field.ecat_access ?? "—")}]<br />{documentationText(field.description)}</Typography>)}
             {selected.source?.map((source, index) => <Typography key={index} fontSize={11} color="text.secondary">{source.source_id} · {source.section ?? ""}{source.page ? ` · p.${source.page}` : ""}</Typography>)}
           </Stack></Disclosure>
-          <Disclosure title="通信细节"><Stack spacing={1}>
-            {selectedValue ? <>
-              <Typography fontSize={11} color="text.secondary">{readbackKeys.has(selectedKey) ? "写入回读" : "读取时间"}：{new Date(selectedValue.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false })}<br />{!readbackKeys.has(selectedKey) && `耗时：${selectedValue.duration_ms.toFixed(2)} ms · `}WKC {selectedValue.wkc}</Typography>
-              <Typography className="mono" fontSize={11} sx={{ overflowWrap: "anywhere" }}>原始字节：{selectedValue.data}</Typography>
-              <Typography className="mono" fontSize={11} sx={{ overflowWrap: "anywhere" }}>二进制：{registerNumber(selectedValue.data).toString(2).padStart(registerWidth(selected) * 8, "0")}</Typography>
-            </> : <Typography fontSize={11} color="text.secondary">尚无通信数据</Typography>}
-            {hasReadSideEffects(selected) && <Typography fontSize={11} color="text.secondary">读取可能确认事件或改变状态；此项不随列表自动获取。</Typography>}
-            {changes[selectedKey] && selectedValue && <Typography className="mono" fontSize={11} sx={{ overflowWrap: "anywhere" }}>上次变化：{formatRegisterValue(changes[selectedKey].previous)} → {formatRegisterValue(selectedValue.data)}</Typography>}
-          </Stack></Disclosure>
+          {/* Acquisition metadata stays visible independently of the description disclosure. */}
+          <Box component="footer" sx={{ borderTop: 1, borderColor: "divider", pt: 1.5 }}>
+            <Typography fontSize={11} color="text.secondary" sx={{ lineHeight: 1.8 }}>
+              {readbackKeys.has(selectedKey) ? "写入回读" : "读取时间"}：{selectedValue ? new Date(selectedValue.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false }) : "—"}<br />
+              耗时：{selectedValue && !readbackKeys.has(selectedKey) ? `${selectedValue.duration_ms.toFixed(2)} ms` : "—"} · WKC {selectedValue?.wkc ?? "—"}
+            </Typography>
+          </Box>
         </Box>
       </Stack></Card>}
     </Box>
     <Menu anchorEl={moreAnchor} open={Boolean(moreAnchor)} onClose={() => setMoreAnchor(null)} slotProps={{ paper: { sx: { minWidth: 190 } } }}>
-      {!monitor && <MenuItem onClick={() => { setBatch(!batch); setChecked(new Set()); setMoreAnchor(null); }}>{batch ? "退出批量操作" : "批量操作"}</MenuItem>}
       <MenuItem onClick={() => { setRawOpen(true); setRawResult(rawDefinition ? values[definitionKey(rawDefinition)] : undefined); setRawError(""); setMoreAnchor(null); }}>原始地址访问</MenuItem>
       {monitor && <MenuItem disabled={!pinned.length} onClick={() => { setPinned([]); setWatching(false); setMoreAnchor(null); }}>清空监视列表</MenuItem>}
-      <Divider />
-      <Box sx={{ px: 2, py: 1 }}><Typography fontSize={11} color="text.secondary" sx={{ mb: 0.75 }}>值显示格式</Typography><FormControl fullWidth size="small"><Select value={format} inputProps={{ "aria-label": "值显示格式" }} onChange={(event) => { setFormat(event.target.value as ValueFormat); setMoreAnchor(null); }} sx={{ fontSize: 12 }}><MenuItem value="hex">HEX 数值</MenuItem><MenuItem value="decimal">十进制</MenuItem><MenuItem value="bytes">原始字节</MenuItem></Select></FormControl></Box>
+      {!monitor && <MenuItem onClick={() => { setShowReservedAddresses(!showReservedAddresses); setMoreAnchor(null); }}>{showReservedAddresses ? "隐藏保留地址" : "显示保留地址"}</MenuItem>}
     </Menu>
     <Dialog open={rawOpen} onClose={() => { if (!controlsBlocked) { setRawOpen(false); dirtyRef.current = false; } }} fullWidth maxWidth="sm">
       <DialogTitle>原始地址访问</DialogTitle><DialogContent><Stack spacing={2} sx={{ pt: 1 }}>

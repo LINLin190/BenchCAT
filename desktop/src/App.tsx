@@ -777,6 +777,11 @@ export default function App() {
   const eepromExclusive = isEepromOperation(progress?.operation) && progress!.percent < 100;
   const updating = isUpdateInProgress(updateState);
   const busy = hardwareBusy || updating;
+  // A disconnect cancels pending register frames before closing the same Worker.
+  const disconnectBusy = updating || [...operations.values()].some((operation) =>
+    ["queued", "running"].includes(operation.phase) && operation.lane === "hardware"
+    && !["register_snapshot", "register_watch", "request_state"].includes(operation.method)
+  );
   const updateBlockedReason = eepromExclusive
     ? "EEPROM 操作进行中，完成后即可更新。"
     : hardwareBusy || stateRequestBusy ? "设备操作进行中，完成后即可更新。" : "";
@@ -1208,7 +1213,7 @@ export default function App() {
           </Box>}
           <Box sx={{ display: "flex", alignItems: "center", alignContent: "center", justifyContent: "flex-end", flex: "0 1 auto", minWidth: 0, ml: "auto", flexWrap: "wrap", gap: 0.65 }}>
             <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} MenuProps={{ PaperProps: { sx: { width: 270, maxWidth: 270 } } }} value={adapter} disabled={!bridgeAvailable || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name} title={item.description || item.name} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
-            <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || busy || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
+            <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || (status.connected ? disconnectBusy : busy) || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
             <Button size="small" variant="outlined" startIcon={<RefreshRounded className={scanning ? "operation-icon-spinning" : undefined} />} disabled={!bridgeAvailable || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
           </Box>
         </Toolbar>

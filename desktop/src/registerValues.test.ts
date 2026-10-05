@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterValue, hasReadSideEffects, parseRegisterAddress, registerMeaning } from "./registerValues";
+import { decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterValue, hasReadSideEffects, matchesRegisterSearch, parseRegisterAddress, registerMeaning } from "./registerValues";
 import type { RegisterDefinition } from "./types";
 
 const status: RegisterDefinition = { address: 0x0130, address_space: "esc_core", width: 2, name: "AL status", group: "AL State Machine", access: "RO", description: "", fields: [
@@ -54,5 +54,23 @@ describe("register interpretation", () => {
   });
   it("does not apply AL decoding to the matching local address", () => {
     expect(registerMeaning({ ...status, address_space: "system_csr" }, "12 00")).toBe("");
+  });
+  it("uses the documented distinction between read acknowledgements and write-clear counters", () => {
+    expect(hasReadSideEffects({ ...status, requires_manual_read: false })).toBe(false);
+    expect(hasReadSideEffects({ ...status, fields: [], requires_manual_read: true })).toBe(true);
+  });
+});
+
+describe("register search", () => {
+  it("finds an interior byte and ranges overlapping a multi-byte register", () => {
+    expect(matchesRegisterSearch(status, "0131")).toBe(true);
+    expect(matchesRegisterSearch(status, "0x012F～0x0130")).toBe(true);
+    expect(matchesRegisterSearch(status, "0132-0134")).toBe(false);
+    expect(matchesRegisterSearch(status, "0134-0130")).toBe(false);
+  });
+  it("finds Chinese diagnostic labels and documented aliases", () => {
+    expect(matchesRegisterSearch(status, "AL 状态")).toBe(true);
+    expect(matchesRegisterSearch({ ...status, aliases: ["Application Layer Status"] }, "application layer")).toBe(true);
+    expect(matchesRegisterSearch(status, "链路")).toBe(false);
   });
 });
