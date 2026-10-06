@@ -39,7 +39,7 @@ from .models import AccessSemantics, BackendMode, EtherCatState, OperationProgre
 from .services.eeprom_service import EepromService, compare_images
 from .services.register_service import RegisterService, RegisterWritePlan, ResetService
 from .sii.generator import SiiGenerationReport, SiiGenerator
-from .sii.parser import SiiParser, crc8, inspect_sii_header
+from .sii.parser import SiiParser, crc8, inspect_sii_header, validate_eeprom_range
 from .worker import EtherCatWorker
 from .worker.ethercat_worker import Priority
 
@@ -241,6 +241,7 @@ _OPERATION_LABELS = {
 }
 
 
+# Describe missing XML sources explicitly while preserving other operation errors.
 def _user_error_message(exc: BaseException, code: str, method: str, mutating: bool) -> str:
     if isinstance(exc, StateRequestDisplayError):
         return str(exc)
@@ -254,6 +255,10 @@ def _user_error_message(exc: BaseException, code: str, method: str, mutating: bo
         return "当前操作较多，请稍后再试"
     if code == "WORKER_STALLED":
         return "通信服务无响应，请重新启动软件后再连接设备"
+    if method == "esi_load" and (
+        isinstance(exc, FileNotFoundError) or isinstance(exc.__cause__, FileNotFoundError)
+    ):
+        return "无法找到该XML文件，请检查文件是否存在。"
     action = _OPERATION_LABELS.get(method)
     if action is None:
         if method.startswith("eeprom_"):
@@ -332,7 +337,6 @@ class BridgeRuntime:
         mode: BackendMode = BackendMode.REAL,
         *,
         audit_path: Path | None = None,
-        stability_wait_s: float = 0.5,
         rediscovery_timeout_s: float = 3.0,
         rediscovery_poll_s: float = 0.1,
     ) -> None:
@@ -347,7 +351,6 @@ class BridgeRuntime:
         self._asset_lock = threading.Lock()
         self.profiles = ProfileRegistry()
         self.audit = AuditLogger(audit_path)
-        self.stability_wait_s = stability_wait_s
         self.rediscovery_timeout_s = rediscovery_timeout_s
         self.rediscovery_poll_s = rediscovery_poll_s
         self._command_lock = threading.Lock()
@@ -634,18 +637,7 @@ class BridgeRuntime:
                 hardware = bytes.fromhex(expected.esc_hardware)
                 if register(0x0E00, len(hardware)) != hardware:
                     raise RuntimeError("烧录失败：目标从站已变化，请重新扫描。")
-            if expected.eeprom_prefix or expected.identity_valid:
-                length = 32 if expected.identity_valid else 16
-                actual = backend.eeprom_read_block(position, 0, length).data
-                if expected.eeprom_prefix and actual[:16] != bytes.fromhex(expected.eeprom_prefix):
-                    raise RuntimeError("烧录失败：目标从站 EEPROM 已变化，请重新扫描。")
-                if expected.identity_valid:
-                    identity = expected.identity
-                    stored = b"".join(value.to_bytes(4, "little") for value in (
-                        identity.vendor_id, identity.product_code, identity.revision, identity.serial_number,
-                    ))
-                    if actual[16:32] != stored:
-                        raise RuntimeError("烧录失败：目标从站已变化，请重新扫描。")
+            # Old EEPROM contents are deliberately excluded so repair remains possible.
 
         try:
             self._submit(check)
@@ -1396,7 +1388,8 @@ class BridgeRuntime:
                 except KeyError:
                     pass
                 else:
-                    response["comparison"] = compare_images(target, raw)
+                    # Compare only the target range, excluding an odd BIN's adjacent byte.
+                    response["comparison"] = compare_images(target, raw[:len(target)])
             return response
         if method == "eeprom_capacity":
             if self.cycle_running:
@@ -1412,7 +1405,7 @@ class BridgeRuntime:
             header = fixed[:16]
             return {
                 "header": header,
-                "config_data": header[:10],
+                "config_data": header[:14],
                 "crc_valid": crc8(header) == 0,
                 "size": description.capacity,
                 "sii_status": description.status,
@@ -1420,7 +1413,7 @@ class BridgeRuntime:
             }
         if method == "eeprom_backup":
             if self.cycle_running:
-                raise RuntimeError("备份 EEPROM 前必须先安全停止周期通信")
+                raise RuntimeError("导出 BIN 文件前必须先安全停止周期通信")
             self.cancel.clear()
             position = int(params["position"])
             return self._submit(
@@ -1440,8 +1433,23 @@ class BridgeRuntime:
                 return {"directory": str(library or ""), "entries": [], "errors": []}
             entries: list[dict[str, Any]] = []
             errors: list[dict[str, str]] = []
-            for source in sorted(library.glob("*.xml"), key=lambda item: item.name.casefold()):
+            sources = (item for item in library.iterdir() if item.is_file() and item.suffix.lower() in {".xml", ".bin"})
+            for source in sorted(sources, key=lambda item: item.name.casefold()):
                 try:
+                    # Raw BIN entries do not depend on SII identity or header validity.
+                    if source.suffix.lower() == ".bin":
+                        size = source.stat().st_size
+                        if not size:
+                            raise ValueError("烧录文件不能为空")
+                        validate_eeprom_range(0, size + size % 2)
+                        raw = source.read_bytes()
+                        entries.append({
+                            "path": str(source), "sha256": hashlib.sha256(raw).hexdigest(),
+                            "vendor_id": 0, "vendor_name": "", "ordinal": -1,
+                            "device_name": "原始 BIN", "type_name": "原始 BIN",
+                            "product_code": 0, "revision": 0, "byte_size": len(raw), "config_data": b"",
+                        })
+                        continue
                     document = EsiParser().parse(source)
                 except BaseException as exc:
                     errors.append({"path": str(source), "error": str(exc)})
@@ -1475,6 +1483,25 @@ class BridgeRuntime:
                 "vendor_name": document.vendor_name,
                 "devices": document.devices,
             }
+        if method == "eeprom_bin_load":
+            # Freeze file bytes at selection time, just like an XML-generated target.
+            path = Path(params["path"]).resolve()
+            size = path.stat().st_size
+            if not size:
+                raise ValueError("烧录文件不能为空")
+            validate_eeprom_range(0, size + size % 2)
+            raw = path.read_bytes()
+            validate_eeprom_range(0, len(raw) + len(raw) % 2)
+            selected_position = int(params["position"]) if params.get("position") else None
+            selected_slave = self._slave(selected_position) if selected_position is not None else None
+            target_id = uuid.uuid4().hex
+            self._remember_asset(
+                self.targets, target_id,
+                (raw, None, self.session_id, selected_position, selected_slave),
+                MAX_STORED_SII_TARGETS,
+            )
+            return {"target_id": target_id, "path": str(path), "size": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest()}
         if method == "sii_generate":
             document = self._get_asset(self.documents, str(params["document_id"]))
             ordinal = int(params["ordinal"])
@@ -1487,8 +1514,10 @@ class BridgeRuntime:
                     config_data = bytes.fromhex(str(params["config_data"]))
                 except ValueError as exc:
                     raise ValueError("ConfigData 必须是十六进制字节") from exc
-                if len(config_data) != 10:
-                    raise ValueError("ConfigData 必须正好包含 10 个字节")
+                if not 1 <= len(config_data) <= 14:
+                    raise ValueError("ConfigData 必须包含 1 到 14 个字节")
+                # A shorter edit preserves the XML's remaining ESC configuration bytes.
+                config_data += original_config_data[len(config_data):]
                 device = dataclasses.replace(device, config_data=config_data)
             report: SiiGenerationReport = SiiGenerator().generate(device)
             target_id = uuid.uuid4().hex
@@ -1563,9 +1592,8 @@ class BridgeRuntime:
                 "initial_state": slave.state.name,
                 "target_sha256": hashlib.sha256(target).hexdigest(),
                 "size": len(target),
-                "vendor_id": device.vendor_id,
-                "product_code": device.product_code,
-                "revision": device.revision,
+                **({"vendor_id": device.vendor_id, "product_code": device.product_code,
+                    "revision": device.revision} if device is not None else {}),
             }
             try:
                 self._assert_eeprom_target(position, target_slave or slave)
@@ -1573,14 +1601,13 @@ class BridgeRuntime:
                 result = self._submit(
                     lambda backend: EepromService(
                         backend,
-                        stability_wait_s=self.stability_wait_s,
                         rediscovery_timeout_s=self.rediscovery_timeout_s,
                         rediscovery_poll_s=self.rediscovery_poll_s,
                     ).flash(
                         position,
                         target,
                         device,
-                        auto_reset=bool(params.get("auto_reset", True)),
+                        auto_reset=bool(params.get("auto_reset", False)),
                         progress=self._progress,
                         cancel=self.cancel.is_set,
                     ),
@@ -1629,13 +1656,12 @@ class BridgeRuntime:
                 result = self._submit(
                     lambda backend: EepromService(
                         backend,
-                        stability_wait_s=self.stability_wait_s,
                         rediscovery_timeout_s=self.rediscovery_timeout_s,
                         rediscovery_poll_s=self.rediscovery_poll_s,
                     ).restore(
                         position,
                         path,
-                        auto_reset=bool(params.get("auto_reset", True)),
+                        auto_reset=bool(params.get("auto_reset", False)),
                         progress=self._progress,
                         cancel=self.cancel.is_set,
                     ),

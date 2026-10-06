@@ -60,7 +60,7 @@ def test_mock_flash_does_not_create_backup_and_fully_verifies(sample_esi) -> Non
         target = SiiGenerator().generate(device).image
         backend._eeprom[0][0] ^= 0xFF
         progress = []
-        result = EepromService(backend, stability_wait_s=0, rediscovery_timeout_s=0).flash(
+        result = EepromService(backend, rediscovery_timeout_s=0).flash(
             1, target, device, auto_reset=True, progress=progress.append
         )
         assert result.bytes_read_back == 2048
@@ -70,9 +70,7 @@ def test_mock_flash_does_not_create_backup_and_fully_verifies(sample_esi) -> Non
         assert result.rediscovered is True and result.reload_verified is True
         stages = {item.stage for item in progress}
         assert {
-            "read-current",
             "write-verify",
-            "stability-wait",
             "full-verify",
             "reset",
             "reload-verify",
@@ -89,7 +87,7 @@ def test_flash_uses_xml_length_when_current_capacity_declaration_is_corrupt(samp
         target = SiiGenerator().generate(device).image
         backend._eeprom[0][0] ^= 1  # Current configuration CRC is invalid.
         backend._eeprom[0][0x7C:0x7E] = b"\xf0\x90"  # Declares 4,749,440 bytes.
-        service = EepromService(backend, stability_wait_s=0)
+        service = EepromService(backend)
         with pytest.raises(ValueError, match="容量未知"):
             service.read_capacity(1)
 
@@ -109,7 +107,7 @@ def test_flash_uses_xml_length_when_current_header_is_valid(sample_esi) -> None:
         backend._eeprom[0].extend(b"\xff" * 2048)
         device = replace(sample_esi.devices[0], byte_size=4096)
         target = SiiGenerator().generate(device).image
-        service = EepromService(backend, stability_wait_s=0)
+        service = EepromService(backend)
         assert service.read_capacity(1) == 2048
 
         result = service.flash(1, target, device, auto_reset=False)
@@ -121,49 +119,39 @@ def test_flash_uses_xml_length_when_current_header_is_valid(sample_esi) -> None:
         backend.disconnect()
 
 
-def test_unchanged_flash_skips_wait_reset_and_duplicate_read(sample_esi, monkeypatch) -> None:
+def test_flash_writes_all_words_before_any_read_and_defaults_to_no_reset(sample_esi, monkeypatch):
     backend = MockBackend()
     backend.connect("demo0")
     try:
-        slave = backend.scan()[0]
-        device = replace(
-            sample_esi.devices[0],
-            vendor_id=slave.identity.vendor_id,
-            product_code=slave.identity.product_code,
-            revision=slave.identity.revision,
-        )
-        target = SiiGenerator().generate(device).image
+        target = SiiGenerator().generate(sample_esi.devices[0]).image
         backend._eeprom[0][:] = target
-        reads = []
+        events = []
         sleeps = []
-        progress = []
-        original_read = backend.eeprom_read_block
+        read, write = backend.eeprom_read_block, backend.eeprom_write
 
-        def tracked_read(position, word, byte_count):
-            reads.append((word, byte_count))
-            return original_read(position, word, byte_count)
+        def tracked_write(position, word, data):
+            events.append(("write", word))
+            write(position, word, data)
 
-        def unexpected_write(*args):
-            pytest.fail("An unchanged image must not be written or reset")
+        def tracked_read(position, word, size):
+            assert sum(kind == "write" for kind, _ in events) == len(target) // 2
+            events.append(("read", word))
+            return read(position, word, size)
 
+        monkeypatch.setattr(backend, "eeprom_write", tracked_write)
         monkeypatch.setattr(backend, "eeprom_read_block", tracked_read)
-        monkeypatch.setattr(backend, "eeprom_write", unexpected_write)
-        monkeypatch.setattr(backend, "register_write", unexpected_write)
-        result = EepromService(backend, sleep=sleeps.append).flash(
-            1, target, device, auto_reset=True, progress=progress.append
-        )
-        assert result.image_success and result.words_written == 0
-        assert result.comparison.target_sha256 == result.comparison.readback_sha256
+        monkeypatch.setattr(backend, "register_write", lambda *_: pytest.fail("Reset must be opt-in"))
+        result = EepromService(backend, sleep=sleeps.append).flash(1, target, sample_esi.devices[0])
+        assert result.image_success and result.words_written == len(target) // 2
+        assert events[:len(target) // 2] == [("write", word) for word in range(len(target) // 2)]
+        assert len(events) == len(target) // 2 + 16
         assert result.reset_sequence is None and result.reload_verified is None
-        assert len(reads) == 16  # One complete 2 KiB read, based on XML target length.
         assert sleeps == []
-        assert {item.stage for item in progress} == {"read-current", "write-verify"}
-        assert "镜像已一致" not in result.image_verification
     finally:
         backend.disconnect()
 
 
-def test_changed_flash_waits_half_second_before_full_verification(sample_esi) -> None:
+def test_flash_has_no_fixed_wait_after_completed_controller_commands(sample_esi) -> None:
     backend = MockBackend()
     backend.connect("demo0")
     try:
@@ -181,15 +169,15 @@ def test_changed_flash_waits_half_second_before_full_verification(sample_esi) ->
         result = EepromService(backend, sleep=sleeps.append).flash(
             1, target, device, auto_reset=False
         )
-        assert result.image_success and result.words_written == 1
-        assert sleeps == [0.5]
+        assert result.image_success and result.words_written == len(target) // 2
+        assert sleeps == []
         assert result.reset_sequence is None
     finally:
         backend.disconnect()
 
 
 @pytest.mark.parametrize("first_write", ["dropped", "wkc_error"])
-def test_flash_rewrites_differences_after_full_read(sample_esi, monkeypatch, first_write) -> None:
+def test_flash_reports_errors_without_rewriting(sample_esi, monkeypatch, first_write) -> None:
     backend = MockBackend()
     backend.connect("demo0")
     try:
@@ -214,13 +202,16 @@ def test_flash_rewrites_differences_after_full_read(sample_esi, monkeypatch, fir
             original_write(position, word, data)
 
         monkeypatch.setattr(backend, "eeprom_write", transient_write)
-        result = EepromService(backend, stability_wait_s=0, sleep=sleeps.append).flash(
-            1, target, device, auto_reset=False
-        )
-        assert result.image_success
-        assert calls == 2
-        assert result.attempts == 2
-        assert sleeps == [0, 0]
+        service = EepromService(backend, sleep=sleeps.append)
+        if first_write == "wkc_error":
+            with pytest.raises(CommunicationError, match="word 0x0000.*WKC"):
+                service.flash(1, target, device, auto_reset=False)
+        else:
+            result = service.flash(1, target, device, auto_reset=False)
+            assert not result.image_success and result.comparison.first_difference == 0
+            assert result.attempts == 1
+        assert calls == 1
+        assert sleeps == []
     finally:
         backend.disconnect()
 
@@ -243,14 +234,14 @@ def test_flash_persistent_mismatch_finishes_writes_then_reports_diagnostics(samp
                 original_write(position, word, data)
 
         monkeypatch.setattr(backend, "eeprom_write", failed_first_write)
-        result = EepromService(backend, stability_wait_s=0, sleep=lambda _: None).flash(
+        result = EepromService(backend, sleep=lambda _: None).flash(
             1, target, device, auto_reset=False
         )
         assert writes[:2] == [0, 1]
         assert len(writes) > 2
         assert not result.image_success
         assert result.comparison.differing_bytes > 0
-        assert result.attempts == 3 and writes.count(0) == 3
+        assert result.attempts == 1 and writes.count(0) == 1
         assert result.reset_sequence is None
         for field in ("烧录失败", "expected=", "actual=", "word 0x0000"):
             assert field in result.image_verification
@@ -315,7 +306,7 @@ def test_flash_ignores_cancel_after_programming_begins(sample_esi, monkeypatch) 
             writes += 1
 
         monkeypatch.setattr(backend, "eeprom_write", tracked_write)
-        result = EepromService(backend, stability_wait_s=0).flash(
+        result = EepromService(backend).flash(
             1,
             target,
             device,
@@ -325,7 +316,7 @@ def test_flash_ignores_cancel_after_programming_begins(sample_esi, monkeypatch) 
         )
 
         assert writes > 0 and result.image_success
-        assert all(not item.cancellable for item in progress if item.stage != "read-current")
+        assert all(not item.cancellable for item in progress)
     finally:
         backend.disconnect()
 
@@ -364,7 +355,7 @@ def test_blank_eeprom_supports_explicit_raw_read_and_reflash(sample_esi, fill):
     backend.connect("demo0")
     try:
         backend._eeprom[0][:] = bytes([fill]) * 2048
-        service = EepromService(backend, stability_wait_s=0)
+        service = EepromService(backend)
         with pytest.raises(ValueError, match="容量未知"):
             service.read_full(1)
         assert service.read_full(1, capacity=2048) == bytes([fill]) * 2048
@@ -375,33 +366,34 @@ def test_blank_eeprom_supports_explicit_raw_read_and_reflash(sample_esi, fill):
         backend.disconnect()
 
 
-def test_initial_read_failure_does_not_prohibit_reprogramming(sample_esi, monkeypatch):
+def test_old_eeprom_is_not_read_before_reprogramming(sample_esi, monkeypatch):
     backend = MockBackend()
     backend.connect("demo0")
     try:
         device = sample_esi.devices[0]
         target = SiiGenerator().generate(device).image
-        read = backend.eeprom_read_block
-        calls = 0
+        read, write = backend.eeprom_read_block, backend.eeprom_write
+        written = []
 
-        def unavailable_initially(*args):
-            nonlocal calls
-            calls += 1
-            if calls <= 3:
-                raise CommunicationError("read unavailable")
+        def tracked_write(position, word, data):
+            written.append(word)
+            write(position, word, data)
+
+        def unreadable_before_write(*args):
+            if len(written) != len(target) // 2:
+                raise CommunicationError("Old EEPROM cannot be read")
             return read(*args)
 
-        monkeypatch.setattr(backend, "eeprom_read_block", unavailable_initially)
-        result = EepromService(backend, stability_wait_s=0, sleep=lambda _: None).flash(
-            1, target, device, auto_reset=False,
-        )
+        monkeypatch.setattr(backend, "eeprom_write", tracked_write)
+        monkeypatch.setattr(backend, "eeprom_read_block", unreadable_before_write)
+        result = EepromService(backend).flash(1, target, device)
         assert result.image_success and result.words_written == len(target) // 2
         assert result.bytes_read_back == len(target)
     finally:
         backend.disconnect()
 
 
-def test_partial_write_failure_retries_remaining_words(sample_esi, monkeypatch):
+def test_partial_write_failure_stops_at_the_failed_word(sample_esi, monkeypatch):
     backend = MockBackend()
     backend.connect("demo0")
     try:
@@ -418,10 +410,10 @@ def test_partial_write_failure_retries_remaining_words(sample_esi, monkeypatch):
             write(position, word, data)
 
         monkeypatch.setattr(backend, "eeprom_write", dropped_write)
-        result = EepromService(backend, stability_wait_s=0).flash(1, target, device, auto_reset=False)
-        assert result.image_success and result.attempts == 2
-        assert calls.count(calls[0]) == 1  # Completed words are not rolled back or rewritten.
-        assert calls.count(calls[4]) == 2
+        with pytest.raises(CommunicationError, match="word 0x0004.*已写入 4 Word.*write failed halfway"):
+            EepromService(backend).flash(1, target, device, auto_reset=False)
+        assert calls == [0, 1, 2, 3, 4]
+        assert bytes(backend._eeprom[0][:8]) == target[:8]
     finally:
         backend.disconnect()
 
@@ -435,8 +427,8 @@ def test_permanent_full_read_failure_is_programming_failure(sample_esi, monkeypa
 
         monkeypatch.setattr(backend, "eeprom_read_block", unreadable)
         device = sample_esi.devices[0]
-        with pytest.raises(CommunicationError, match="烧录失败.*3 轮.*完整回读失败"):
-            EepromService(backend, stability_wait_s=0, sleep=lambda _: None).flash(
+        with pytest.raises(CommunicationError, match="烧录失败.*完整回读失败"):
+            EepromService(backend, sleep=lambda _: None).flash(
                 1, SiiGenerator().generate(device).image, device, auto_reset=False,
             )
     finally:
@@ -452,8 +444,8 @@ def test_reset_failure_is_separate_from_completed_image(sample_esi, monkeypatch)
 
         monkeypatch.setattr(backend, "register_write", failed_reset)
         device = sample_esi.devices[0]
-        result = EepromService(backend, stability_wait_s=0, rediscovery_timeout_s=0).flash(
-            1, SiiGenerator().generate(device).image, device,
+        result = EepromService(backend, rediscovery_timeout_s=0).flash(
+            1, SiiGenerator().generate(device).image, device, auto_reset=True,
         )
         assert result.image_success and result.reload_verified is False
         assert "RES write failed" in result.reload_error
@@ -466,6 +458,38 @@ def test_rediscovery_does_not_accept_a_different_slave_at_same_position(sample_e
     backend.connect("demo0")
     try:
         assert not EepromService(backend, rediscovery_timeout_s=0)._rediscover(1, sample_esi.devices[0])
+    finally:
+        backend.disconnect()
+
+
+@pytest.mark.parametrize("raw", [b"\x01", b"\x01\x02\x03", b"\xff\xff", bytes(128), b"\xff" * 2048])
+def test_raw_bin_programming_preserves_bytes_and_neighbours(tmp_path, raw):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        backend._eeprom[0][:] = b"\x5a" * 2048
+        source = tmp_path / "raw.bin"
+        source.write_bytes(raw)
+        result = EepromService(backend).restore(1, source)
+        assert result.image_success and result.comparison.equal
+        assert result.bytes_read_back == len(raw)
+        assert result.words_written == (len(raw) + 1) // 2
+        assert result.semantic_valid is None and not result.sii_valid
+        assert bytes(backend._eeprom[0][:len(raw)]) == raw
+        assert bytes(backend._eeprom[0][len(raw):]) == b"\x5a" * (2048 - len(raw))
+        assert result.reset_sequence is None
+    finally:
+        backend.disconnect()
+
+
+def test_sii_semantics_do_not_override_exact_programming_result(sample_esi):
+    backend = MockBackend()
+    backend.connect("demo0")
+    try:
+        target = SiiGenerator().generate(sample_esi.devices[0]).image
+        different = replace(sample_esi.devices[0], product_code=0x12345678)
+        result = EepromService(backend).flash(1, target, different)
+        assert result.image_success and result.sii_valid and not result.semantic_valid
     finally:
         backend.disconnect()
 

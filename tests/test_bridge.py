@@ -638,7 +638,6 @@ def test_esi_full_flash_flow_uses_scan_init_and_config_override(tmp_path, worksp
         writer,
         BackendMode.DEMO,
         audit_path=audit_path,
-        stability_wait_s=0,
         rediscovery_timeout_s=0,
     )  # type: ignore[arg-type]
     try:
@@ -666,7 +665,7 @@ def test_esi_full_flash_flow_uses_scan_init_and_config_override(tmp_path, worksp
         assert runtime.dispatch("eeprom_capacity", {"position": 1}) == {"size": 2048}
         header = runtime.dispatch("eeprom_header", {"position": 1})
         assert len(header["header"]) == 16
-        assert len(header["config_data"]) == 10
+        assert len(header["config_data"]) == 14
         assert header["size"] == 2048
 
         result = runtime.dispatch(
@@ -690,9 +689,9 @@ def test_esi_full_flash_flow_uses_scan_init_and_config_override(tmp_path, worksp
             {"position": 1, "target_id": target["target_id"], "auto_reset": True},
         )
         assert repeated["success"] is True
-        assert repeated["result"].words_written == 0
-        assert repeated["result"].reset_sequence is None
-        assert repeated["result"].reload_verified is None
+        assert repeated["result"].words_written == target["size"] // 2
+        assert repeated["result"].reset_sequence == (True, True, True)
+        assert repeated["result"].reload_verified is True
 
         read = runtime.dispatch("eeprom_read", {"position": 1, "target_id": target["target_id"]})
         assert read["sii_valid"] is True
@@ -708,12 +707,35 @@ def test_esi_full_flash_flow_uses_scan_init_and_config_override(tmp_path, worksp
         runtime.shutdown()
 
 
+# A partial override must retain the extended XML configuration and leave the source intact.
+def test_sii_generate_preserves_extended_config_after_short_edit(tmp_path, workspace) -> None:
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO, audit_path=tmp_path / "audit.jsonl")
+    try:
+        source = workspace / "ESI示例" / "SlaveCTT_900e80.xml"
+        loaded = runtime.dispatch("esi_load", {"path": str(source)})
+        document = runtime.documents[loaded["document_id"]]
+        original = bytes.fromhex("890E80CC88130000000000800000")
+        runtime.documents[loaded["document_id"]] = replace(
+            document, devices=(replace(document.devices[0], config_data=original), *document.devices[1:]),
+        )
+        override = bytes.fromhex("8D0E80CC881300000000")
+        target = runtime.dispatch(
+            "sii_generate",
+            {"document_id": loaded["document_id"], "ordinal": 0, "config_data": override.hex()},
+        )
+        assert target["original_config_data"] == original
+        assert target["effective_config_data"] == override + original[10:]
+        assert runtime.targets[target["target_id"]][0][:14] == override + original[10:]
+        assert runtime.documents[loaded["document_id"]].devices[0].config_data == original
+    finally:
+        runtime.shutdown()
+
+
 def test_sii_generate_keeps_xml_capacity_when_connected_eeprom_size_differs(tmp_path, workspace) -> None:
     runtime = BridgeRuntime(
         RecordingWriter(),
         BackendMode.DEMO,
         audit_path=tmp_path / "audit.jsonl",
-        stability_wait_s=0,
         rediscovery_timeout_s=0,
     )  # type: ignore[arg-type]
     try:
@@ -739,7 +761,7 @@ def test_sii_generate_keeps_xml_capacity_when_connected_eeprom_size_differs(tmp_
 
 def test_blank_eeprom_raw_read_and_bound_flash_do_not_require_init(tmp_path, workspace) -> None:
     runtime = BridgeRuntime(
-        RecordingWriter(), BackendMode.DEMO, audit_path=tmp_path / "audit.jsonl", stability_wait_s=0,
+        RecordingWriter(), BackendMode.DEMO, audit_path=tmp_path / "audit.jsonl",
     )
     try:
         runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
@@ -747,7 +769,7 @@ def test_blank_eeprom_raw_read_and_bound_flash_do_not_require_init(tmp_path, wor
         runtime.dispatch("scan", {})
         header = runtime.dispatch("eeprom_header", {"position": 1})
         assert header["sii_status"] == "blank" and header["size"] is None
-        assert header["config_data"] == b"\xff" * 10
+        assert header["config_data"] == b"\xff" * 14
         with pytest.raises(ValueError, match="容量未知"):
             runtime.dispatch("eeprom_read", {"position": 1})
         raw = runtime.dispatch("eeprom_read", {"position": 1, "capacity": 2048})
@@ -960,5 +982,51 @@ def test_manual_state_request_keeps_worker_failure_as_service_error(monkeypatch)
         )
         assert error["code"] == "WORKER_STALLED"
         assert "通信服务无响应" in error["user_message"]
+    finally:
+        runtime.shutdown()
+
+
+
+def test_bin_target_is_frozen_and_writes_over_changed_old_sii(tmp_path):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO, audit_path=tmp_path / "audit.jsonl")
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        raw = b"\x10\x20\x30"
+        source = tmp_path / "original.bin"
+        source.write_bytes(raw)
+        target = runtime.dispatch("eeprom_bin_load", {"path": str(source), "position": 1})
+        source.write_bytes(b"changed")
+        # Contents changed since scanning must not prevent repairing the selected ESC.
+        runtime._submit(lambda backend: backend._eeprom[0].__setitem__(slice(None), b"\xff" * 2048))
+        result = runtime.dispatch("eeprom_flash", {"position": 1, "target_id": target["target_id"]})
+        assert result["success"] and result["result"].semantic_valid is None
+        assert result["result"].reset_sequence is None
+        assert result["result"].bytes_read_back == 3
+        actual = runtime._submit(lambda backend: bytes(backend._eeprom[0][:4]))
+        assert actual == raw + b"\xff"
+        read = runtime.dispatch("eeprom_read", {"position": 1, "target_id": target["target_id"], "capacity": 4})
+        assert read["data"] == actual and read["comparison"].equal
+        short = runtime.dispatch("eeprom_read", {"position": 1, "target_id": target["target_id"], "capacity": 2})
+        assert not short["comparison"].equal
+        with pytest.raises(RuntimeError, match="已变化"):
+            runtime.dispatch("eeprom_flash", {"position": 2, "target_id": target["target_id"]})
+        runtime.dispatch("scan", {})
+        with pytest.raises(RuntimeError, match="已变化"):
+            runtime.dispatch("eeprom_flash", {"position": 1, "target_id": target["target_id"]})
+    finally:
+        runtime.shutdown()
+
+
+def test_bin_library_accepts_raw_images_and_rejects_empty_files(tmp_path):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO, audit_path=tmp_path / "audit.jsonl")
+    try:
+        (tmp_path / "raw.BIN").write_bytes(b"\xff")
+        (tmp_path / "empty.bin").write_bytes(b"")
+        result = runtime.dispatch("esi_library_list", {"directory": str(tmp_path)})
+        assert len(result["entries"]) == 1 and len(result["errors"]) == 1
+        entry = result["entries"][0]
+        assert entry["ordinal"] == -1 and entry["byte_size"] == 1
+        with pytest.raises(ValueError, match="不能为空"):
+            runtime.dispatch("eeprom_bin_load", {"path": str(tmp_path / "empty.bin")})
     finally:
         runtime.shutdown()
