@@ -66,13 +66,16 @@ class _Strings:
 class SiiGenerator:
     """Converts the supported standard ESI subset into a complete SII image."""
 
+    # Build a fixed-size image, dropping only complete optional categories.
     def generate(self, device: EsiDevice) -> SiiGenerationReport:
         capacity = device.byte_size
         if capacity < 128 or capacity % 128:
             raise ValueError("EEPROM ByteSize must be a positive multiple of 128")
         validate_eeprom_range(0, capacity)
         image = bytearray(b"\xff" * capacity)
-        config = device.config_data[:10].ljust(10, b"\x00") + b"\x00" * 4
+        if not 1 <= len(device.config_data) <= 14:
+            raise ValueError("ConfigData must contain 1 to 14 bytes")
+        config = device.config_data.ljust(14, b"\x00")
         image[:14] = config
         image[14] = crc8(config)
         image[15] = 0
@@ -82,73 +85,61 @@ class SiiGenerator:
         image[0x20:0x28] = b"\x00" * 8
         # Bootstrap mailbox (words 0x14-0x17): receive offset/size and send
         # offset/size. The ESI BootStrap hex carries exactly these four fields.
-        if device.bootstrap:
-            image[0x28:0x30] = device.bootstrap[:8].ljust(8, b"\x00")
-        else:
-            image[0x28:0x30] = b"\x00" * 8
-        # Standard mailbox (words 0x18-0x1B): receive from MBoxOut, send from
-        # MBoxIn. SSC-style ESI files spell the kinds "MBoxOut"/"MBoxIn";
-        # the parser canonicalises them to "mailboxout"/"mailboxin".
-        for sm in device.sync_managers[:2]:
-            if sm.kind == "mailboxout":
-                struct.pack_into("<HH", image, 0x30, sm.start_address, sm.default_size)
-            elif sm.kind == "mailboxin":
-                struct.pack_into("<HH", image, 0x34, sm.start_address, sm.default_size)
-        # Word 0x1C: standard mailbox protocols; word 0x1D: bootstrap protocols.
+        image[0x28:0x38] = b"\x00" * 16
+        if len(device.bootstrap) == 8:
+            image[0x28:0x30] = device.bootstrap
+        # Explicit EEPROM mailbox bytes take precedence over the first SM pair.
+        if device.eeprom_mailbox is not None and len(device.eeprom_mailbox) == 8:
+            image[0x30:0x38] = device.eeprom_mailbox
+        elif device.eeprom_mailbox is None and len(device.sync_managers) >= 2:
+            receive, send = device.sync_managers[:2]
+            if receive.kind == "mailboxout" and send.kind == "mailboxin":
+                struct.pack_into("<HHHH", image, 0x30, receive.start_address, receive.default_size,
+                                 send.start_address, send.default_size)
+        # Word 0x1C holds mailbox protocols; words 0x1D onward are reserved.
         struct.pack_into("<H", image, 0x38, device.mailbox_protocol)
-        struct.pack_into("<H", image, 0x3A, device.mailbox_protocol if device.bootstrap else 0)
-        image[0x3C:0x80] = b"\x00" * (0x80 - 0x3C)
+        image[0x3A:0x80] = b"\x00" * (0x80 - 0x3A)
         struct.pack_into("<HH", image, 0x7C, capacity // 128 - 1, 1)
 
         categories: list[tuple[int, bytes]] | None = None
         included_pdo = bool(device.tx_pdos or device.rx_pdos)
         included_dc = bool(device.dc_modes)
-        included_entry_names = True
         last_error: Exception | None = None
-        failed_attempts: list[tuple[bool, bool, bool, Exception]] = []
-        # Descending fidelity ladder: full PDO names first, then PDO structure
-        # without entry names (DC is functional while names are cosmetic, so
-        # nameless PDO + DC outranks named PDO without DC), then no PDO, then
-        # no DC. Keeps the most configuration-critical data within the
-        # declared EEPROM capacity.
-        attempts = [
-            (True, True, True),
-            (True, False, True),
-            (True, True, False),
-            (True, False, False),
-            (False, True, True),
-            (False, True, False),
-        ]
-        for include_pdo, include_entry_names, include_dc in attempts:
-            try:
-                candidate = self._categories(
-                    device,
-                    include_pdo=include_pdo,
-                    include_dc=include_dc,
-                    include_entry_names=include_entry_names,
-                )
-                encoded = self._encoded_size(candidate)
-                if encoded + SiiParser.CATEGORY_START + 2 > capacity:
-                    raise _SiiEncodingLimit(
-                        f"encoded categories need {encoded} bytes plus the "
-                        f"{SiiParser.CATEGORY_START + 2}-byte fixed area; capacity is {capacity}"
+        included_custom = len(device.eeprom_categories)
+        # Prefer DC when large PDO descriptions do not fit, as in TwinCAT images.
+        # Rebuild strings so omitted categories leave no unused names behind.
+        # Keep explicit categories first; if necessary remove complete trailing ones.
+        for custom_count in range(len(device.eeprom_categories), -1, -1):
+            for include_pdo, include_dc in ((True, True), (False, True), (True, False), (False, False)):
+                try:
+                    candidate = list(device.eeprom_categories[:custom_count]) + self._categories(
+                        device,
+                        include_pdo=include_pdo,
+                        include_dc=include_dc,
                     )
-            except _SiiEncodingLimit as exc:
-                last_error = exc
-                failed_attempts.append((include_pdo, include_entry_names, include_dc, exc))
-                continue
-            categories = candidate
-            included_pdo = include_pdo
-            included_dc = include_dc
-            included_entry_names = include_entry_names
-            break
+                    encoded = self._encoded_size(candidate)
+                    if encoded + SiiParser.CATEGORY_START + 2 > capacity:
+                        raise _SiiEncodingLimit(
+                            f"encoded categories need {encoded} bytes plus the "
+                            f"{SiiParser.CATEGORY_START + 2}-byte fixed area; capacity is {capacity}"
+                        )
+                except _SiiEncodingLimit as exc:
+                    last_error = exc
+                    continue
+                categories = candidate
+                included_pdo = include_pdo and bool(device.tx_pdos or device.rx_pdos)
+                included_dc = include_dc and bool(device.dc_modes)
+                included_custom = custom_count
+                break
+            if categories is not None:
+                break
         if categories is None:
             raise ValueError(f"Unable to generate a capacity-safe SII image: {last_error}") from last_error
 
         offset = SiiParser.CATEGORY_START
         for kind, payload in categories:
             if len(payload) % 2:
-                payload += b"\x00"
+                payload += b"\xff"
             encoded = struct.pack("<HH", kind, len(payload) // 2) + payload
             image[offset : offset + len(encoded)] = encoded
             offset += len(encoded)
@@ -160,82 +151,79 @@ class SiiGenerator:
             supported.append("FMMU")
         if device.sync_managers:
             supported.append("SyncManager")
+        if device.sync_units:
+            supported.append("SyncUnit")
         if included_pdo:
             supported.append("PDO")
         if included_dc:
             supported.append("DC")
+        if included_custom:
+            supported.append("explicit EEPROM categories")
         omitted = [
-            "vendor-specific categories",
             "EoE/FoE protocol-specific data",
             "explicit ESI DataTypes dictionary",
         ]
+        if included_custom < len(device.eeprom_categories):
+            omitted.append(f"Explicit EEPROM categories omitted (XML ByteSize {capacity})")
         if (device.tx_pdos or device.rx_pdos) and not included_pdo:
-            omitted.append(self._pdo_omission_reason(device, capacity, failed_attempts))
-        elif included_pdo and not included_entry_names:
-            omitted.append(self._pdo_names_omission_reason(device, failed_attempts))
+            omitted.append(f"PDO categories omitted (XML ByteSize {capacity})")
         if device.dc_modes and not included_dc:
-            omitted.append("DC category (PDO takes precedence within the EEPROM capacity)")
+            omitted.append(f"DC category omitted (XML ByteSize {capacity})")
         return SiiGenerationReport(result, tuple(supported), tuple(omitted))
 
-    @staticmethod
-    def _pdo_names_omission_reason(
-        device: EsiDevice, failed_attempts: list[tuple[bool, bool, bool, Exception]]
-    ) -> str:
-        count = sum(len(pdo.entries) for pdo in (*device.tx_pdos, *device.rx_pdos))
-        reason = next(
-            (str(exc) for pdo, names, dc, exc in failed_attempts if pdo and names), "string table limit"
-        )
-        return f"PDO entry names omitted ({count} entries; {reason})"
-
-    @staticmethod
-    def _pdo_omission_reason(
-        device: EsiDevice, capacity: int, failed_attempts: list[tuple[bool, bool, bool, Exception]]
-    ) -> str:
-        nameless = [exc for pdo, names, dc, exc in failed_attempts if pdo and not names]
-        detail = str(nameless[0]) if nameless else str(failed_attempts[-1][3])
-        return f"PDO categories omitted ({detail})"
-
+    # Register only strings referenced by the selected complete categories.
     def _categories(
         self,
         device: EsiDevice,
         *,
         include_pdo: bool,
         include_dc: bool,
-        include_entry_names: bool = True,
     ) -> list[tuple[int, bytes]]:
         strings = _Strings()
-        group_index = strings.index(device.group_type)
         order_index = strings.index(device.type_name)
+        group_index = strings.index(device.group_type)
+        group_name_index = strings.index(device.group_name or device.group_type)
         name_index = strings.index(device.name)
-        if include_pdo:
-            for pdo in (*device.tx_pdos, *device.rx_pdos):
-                strings.index(pdo.name)
-                if include_entry_names:
-                    for entry in pdo.entries:
-                        strings.index(entry.name)
         if include_dc:
             for mode in device.dc_modes:
                 strings.index(mode.name)
-                strings.index(mode.description)
+        if include_pdo:
+            for pdo in (*device.tx_pdos, *device.rx_pdos):
+                strings.index(pdo.name)
+                for entry in pdo.entries:
+                    strings.index(entry.name)
 
         categories: list[tuple[int, bytes]] = [(0x000A, strings.payload())]
         general = bytearray(32)
         general[0:4] = bytes([group_index, 0, order_index, name_index])
+        # TwinCAT derives the compatibility byte from the physical-port descriptor.
+        physical_port = self._physical_port(device.physics)
+        general[4] = self._physical_type(physical_port)
         general[5] = device.coe_details & 0xFF
-        general[11:13] = struct.pack("<H", device.general_flags)
-        general[16] = self._physical_port(device.physics)
+        general[6] = int(bool(device.mailbox_protocol & (1 << 3)))
+        general[7] = int(bool(device.mailbox_protocol & (1 << 1)))
+        general[8] = device.soe_channels & 0xFF
+        general[9] = device.ds402_channels
+        general[11] = device.general_flags & 0xFF
+        # EBus current is a signed word; retain its two's-complement representation.
+        struct.pack_into("<H", general, 12, device.ebus_current & 0xFFFF)
+        general[14] = group_name_index
+        struct.pack_into("<H", general, 16, physical_port)
+        if device.identification_ado and device.identification_ado != 0x0134:
+            struct.pack_into("<H", general, 18, device.identification_ado & 0xFFFF)
         categories.append((0x001E, bytes(general)))
         if device.fmmu:
-            mapping = {"outputs": 2, "inputs": 1, "mboxstate": 3}
+            mapping = {"outputs": 1, "inputs": 2, "mboxstate": 3}
             categories.append((0x0028, bytes(mapping.get(x.strip().lower(), 0) for x in device.fmmu)))
         if device.sync_managers:
             categories.append((0x0029, b"".join(self._sm(sm) for sm in device.sync_managers)))
-        if device.mailbox_protocol:
-            categories.append((0x002B, b"\xff\xff"))
+        # Emit SyncUnit only for explicit Su elements; odd payloads receive FF padding.
+        if device.sync_units:
+            categories.append((0x002B, bytes(device.sync_units)))
         if include_pdo and device.tx_pdos:
-            categories.append((0x0032, self._pdos(device.tx_pdos, strings, include_entry_names)))
+            categories.append((0x0032, self._pdos(device.tx_pdos, strings)))
         if include_pdo and device.rx_pdos:
-            categories.append((0x0033, self._pdos(device.rx_pdos, strings, include_entry_names)))
+            categories.append((0x0033, self._pdos(device.rx_pdos, strings)))
         if include_dc and device.dc_modes:
             categories.append((0x003C, b"".join(self._dc(mode, strings) for mode in device.dc_modes)))
         return categories
@@ -245,14 +233,27 @@ class SiiGenerator:
         return sum(4 + len(payload) + (len(payload) % 2) for _, payload in categories)
 
     @staticmethod
+    # General encodes each physical port in its own four-bit descriptor.
     def _physical_port(physics: str) -> int:
-        mapping = {"Y": 1, "K": 2, "H": 3}
+        mapping = {"Y": 1, "B": 2, "K": 3, "H": 4}
+        # TwinCAT leaves an overlong Physics declaration empty instead of truncating it.
+        if len(physics) > 4:
+            return 0
         value = 0
-        # ESI lists physical ports 0,1,2,3; the SII descriptor stores 0,3,1,2.
-        shifts = (0, 4, 6, 2)
-        for index, character in enumerate(physics[:4]):
-            value |= mapping.get(character.upper(), 0) << shifts[index]
+        for index, character in enumerate(physics):
+            value |= mapping.get(character.upper(), 0) << (index * 4)
         return value
+
+    @staticmethod
+    # Preserve the native TwinCAT physical-port classification, including its zero fallback.
+    def _physical_type(ports: int) -> int:
+        return {
+            0x0001: 6, 0x0003: 11, 0x0011: 1, 0x0013: 10,
+            0x0021: 13, 0x0022: 20, 0x0031: 3, 0x0032: 22, 0x0033: 12,
+            0x0111: 4, 0x0131: 2, 0x0232: 21, 0x0311: 5,
+            0x1111: 30, 0x1131: 31, 0x1311: 32, 0x1331: 34,
+            0x3111: 33, 0x3131: 35, 0x3311: 36, 0x3331: 37,
+        }.get(ports, 0)
 
     @staticmethod
     def _sm(sm: EsiSyncManager) -> bytes:
@@ -262,9 +263,10 @@ class SiiGenerator:
         )
 
     @staticmethod
-    def _entry(entry: EsiEntry, strings: _Strings, include_entry_names: bool) -> bytes:
+    # PDO entries contain single-byte string and data-type indices.
+    def _entry(entry: EsiEntry, strings: _Strings) -> bytes:
         data_type = DATA_TYPES.get((entry.data_type or "").upper(), 0)
-        name_index = strings.index(entry.name) if include_entry_names else 0
+        name_index = strings.index(entry.name)
         return struct.pack(
             "<HBBBBH",
             entry.index,
@@ -275,29 +277,40 @@ class SiiGenerator:
             entry.flags,
         )
 
-    def _pdos(self, pdos: tuple[EsiPdo, ...], strings: _Strings, include_entry_names: bool) -> bytes:
+    # The PDO header has separate byte-sized DC synchronization and name fields.
+    def _pdos(self, pdos: tuple[EsiPdo, ...], strings: _Strings) -> bytes:
         chunks = []
         for pdo in pdos:
             if len(pdo.entries) > 255:
                 raise _SiiEncodingLimit(f"PDO 0x{pdo.index:04X} has more than 255 entries")
             sm = 0xFF if pdo.sync_manager is None else pdo.sync_manager
             chunks.append(
-                struct.pack("<HBBHH", pdo.index, len(pdo.entries), sm, strings.index(pdo.name), pdo.flags)
+                struct.pack(
+                    "<HBBBBH", pdo.index, len(pdo.entries), sm, pdo.dc_sync,
+                    strings.index(pdo.name), pdo.flags,
+                )
             )
-            chunks.extend(self._entry(entry, strings, include_entry_names) for entry in pdo.entries)
+            chunks.extend(self._entry(entry, strings) for entry in pdo.entries)
         return b"".join(chunks)
 
     @staticmethod
+    # SII DC records hold SYNC1 as a factor, followed by activation and SYNC0 factor.
     def _dc(mode: EsiDcMode, strings: _Strings) -> bytes:
+        sync1_factor = mode.cycle_factor_sync1 if mode.assign_activate & 0x0400 else 0
+        if mode.assign_activate & 0x0400 and mode.cycle_time_sync1:
+            if not mode.cycle_time_sync0 or mode.cycle_time_sync1 % mode.cycle_time_sync0:
+                raise _SiiEncodingLimit("DC SYNC1 period cannot be represented as a SII cycle factor")
+            sync1_factor = mode.cycle_time_sync1 // mode.cycle_time_sync0
+        if not -32768 <= sync1_factor <= 32767:
+            raise _SiiEncodingLimit("DC SYNC1 cycle factor exceeds its signed 16-bit field")
         return struct.pack(
-            "<IHiIHiHBB",
+            "<IiihHhBB4x",
             mode.cycle_time_sync0,
-            mode.cycle_factor_sync0,
             mode.shift_time_sync0,
-            mode.cycle_time_sync1,
-            mode.cycle_factor_sync1,
             mode.shift_time_sync1,
+            sync1_factor,
             mode.assign_activate,
+            mode.cycle_factor_sync0 if not mode.cycle_time_sync0 else 0,
             strings.index(mode.name),
-            strings.index(mode.description),
+            0,
         )

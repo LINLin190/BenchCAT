@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import struct
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,7 @@ class EsiPdo:
     sync_manager: int | None
     entries: tuple[EsiEntry, ...]
     flags: int = 0
+    dc_sync: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +125,14 @@ class EsiDevice:
     mailbox_protocol: int
     general_flags: int
     objects: tuple[EsiObjectEntry, ...] = ()
+    group_name: str = ""
+    ds402_channels: int = 0
+    sync_units: tuple[int, ...] = ()
+    eeprom_mailbox: bytes | None = None
+    eeprom_categories: tuple[tuple[int, bytes], ...] = ()
+    soe_channels: int = 0
+    ebus_current: int = 0
+    identification_ado: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,15 +161,24 @@ class EsiParser:
             raise EsiValidationError("ESI XML must contain Vendor and Devices")
         vendor_id = parse_number(_text(_child(vendor, "Id")))
         vendor_name = _text(_child(vendor, "Name"), "Unknown vendor")
+        # Preserve group declaration order for exact matching and TwinCAT's fallback.
+        groups_node = _child(descriptions, "Groups")
+        groups = {
+            _text(_child(group, "Type")): _localized_name(group)
+            for group in (_children(groups_node, "Group") if groups_node is not None else [])
+        }
         devices = tuple(
-            self._parse_device(i, element, vendor_id)
+            self._parse_device(i, element, vendor_id, groups)
             for i, element in enumerate(_children(devices_node, "Device"))
         )
         if not devices:
             raise EsiValidationError("ESI XML contains no Device definitions")
         return EsiDocument(source, hashlib.sha256(raw).hexdigest(), vendor_id, vendor_name, devices)
 
-    def _parse_device(self, ordinal: int, device: ET.Element, vendor_id: int) -> EsiDevice:
+    # Retain the full ESC configuration and the metadata used by SII General.
+    def _parse_device(
+        self, ordinal: int, device: ET.Element, vendor_id: int, groups: dict[str, str]
+    ) -> EsiDevice:
         type_element = _child(device, "Type")
         if type_element is None:
             raise EsiValidationError(f"Device {ordinal + 1} has no Type")
@@ -172,6 +191,8 @@ class EsiParser:
         if byte_size <= 0 or byte_size % 2:
             raise EsiValidationError(f"Device {name} EEPROM ByteSize must be a positive even number")
         config_data = self._hex(_text(_child(eeprom, "ConfigData")), "ConfigData", name)
+        if not 1 <= len(config_data) <= 14:
+            raise EsiValidationError(f"Device {name} ConfigData must contain 1 to 14 bytes")
         bootstrap = self._hex(_text(_child(eeprom, "BootStrap")), "BootStrap", name, allow_empty=True)
         info = _child(device, "Info")
         controller = None
@@ -182,11 +203,28 @@ class EsiParser:
             node = _child(controller, name_) if controller is not None else None
             return parse_number(_text(node), default=0) if node is not None else None
 
+        # TwinCAT falls back to the first declared group when the reference is unmatched.
+        group_type = _text(_child(device, "GroupType"))
+        if group_type not in groups and groups:
+            group_type = next(iter(groups))
+        group_name = groups.get(group_type, "")
+        mailbox_node = _child(eeprom, "Mailbox")
+        mailbox_data = self._hex(_text(mailbox_node), "Mailbox", name, allow_empty=True) if mailbox_node is not None else None
+        mailbox = _child(device, "Mailbox")
+        soe = _child(mailbox, "SoE") if mailbox is not None else None
+        electrical = _child(info, "Electrical") if info is not None else None
+        identification = 0
+        if info is not None:
+            identification = (
+                0x0134 if _text(_child(info, "IdentificationReg134")).lower() in {"true", "1"}
+                else parse_number(_text(_child(info, "IdentificationAdo")), default=0)
+            )
+
         return EsiDevice(
             ordinal,
             name,
             type_name,
-            _text(_child(device, "GroupType")),
+            group_type,
             vendor_id,
             parse_number(type_element.attrib.get("ProductCode")),
             parse_number(type_element.attrib.get("RevisionNo")),
@@ -205,6 +243,58 @@ class EsiParser:
             device.attrib.get("Physics", ""),
             *self._mailbox(device, info),
             self._objects(device),
+            group_name,
+            sum(
+                parse_number(_text(node), default=0) == 402
+                for profile in _children(device, "Profile")
+                for node in profile.iter()
+                if _local(node.tag) == "ProfileNo"
+            ),
+            self._sync_units(device),
+            mailbox_data,
+            self._eeprom_categories(eeprom, name),
+            parse_number(soe.attrib.get("ChannelCount"), default=1) if soe is not None else 0,
+            parse_number(_text(_child(electrical, "EBusCurrent") if electrical is not None else None), default=0),
+            identification,
+        )
+
+    # Preserve explicit EEPROM categories ahead of generated categories, as TwinCAT does.
+    def _eeprom_categories(self, eeprom: ET.Element, name: str) -> tuple[tuple[int, bytes], ...]:
+        result = []
+        for category in _children(eeprom, "Category"):
+            kind = parse_number(_text(_child(category, "CatNo")))
+            if not 0 <= kind < 0xFFFF:
+                raise EsiValidationError(f"Device {name} has invalid EEPROM category number")
+            payload = b""
+            for node in category:
+                field = _local(node.tag)
+                if field == "Data":
+                    payload = self._hex(_text(node), field, name, allow_empty=True)
+                    # TwinCAT ignores odd-length raw category data rather than padding it.
+                    if len(payload) % 2:
+                        payload = b""
+                elif field == "DataString":
+                    payload = (node.text or "").encode("latin-1", errors="replace") + b"\x00"
+                elif field in {"DataUINT", "DataUDINT"}:
+                    width = 16 if field == "DataUINT" else 32
+                    payload = struct.pack("<H" if width == 16 else "<I", parse_number(_text(node)) & ((1 << width) - 1))
+                else:
+                    continue
+                break
+            result.append((kind, payload))
+        return tuple(result)
+
+    # Preserve each declared sync unit's flags in XML order.
+    @staticmethod
+    def _sync_units(device: ET.Element) -> tuple[int, ...]:
+        attributes = ("SeparateSu", "SeparateFrame", "DependOnInputState", "FrameRepeatSupport")
+        # TwinCAT leaves the reserved high nibble set; absent attributes clear flags.
+        return tuple(
+            0xF0 | sum(
+                1 << bit for bit, attribute in enumerate(attributes)
+                if unit.attrib.get(attribute, "false").lower() in {"true", "1"}
+            )
+            for unit in _children(device, "Su")
         )
 
     @staticmethod
@@ -318,6 +408,7 @@ class EsiParser:
             parse_number(sm_text) if sm_text else None,
             tuple(entries),
             flags,
+            parse_number(element.attrib.get("DcSync"), default=0),
         )
 
     @staticmethod
@@ -348,11 +439,10 @@ class EsiParser:
         return tuple(result)
 
     @staticmethod
+    # Derive mailbox protocols and the independent General capability flags.
     def _mailbox(device: ET.Element, info: ET.Element | None) -> tuple[int, int, int]:
         mailbox = _child(device, "Mailbox")
-        if mailbox is None:
-            return 0, 0, 0
-        coe = _child(mailbox, "CoE")
+        coe = _child(mailbox, "CoE") if mailbox is not None else None
         coe_details = 0
         if coe is not None:
             coe_details = 1
@@ -366,17 +456,31 @@ class EsiParser:
                 if coe.attrib.get(attribute, "false").lower() in {"true", "1"}:
                     coe_details |= 1 << bit
         protocol = (1 << 2) if coe is not None else 0
-        if _child(mailbox, "FoE") is not None:
-            protocol |= 1 << 3
-        if _child(mailbox, "EoE") is not None:
-            protocol |= 1 << 1
-        if _child(mailbox, "VoE") is not None:
-            protocol |= 1 << 5
-        flags = 0x04 if mailbox.attrib.get("DataLinkLayer", "false").lower() in {"true", "1"} else 0
+        if mailbox is not None:
+            for tag, bit in (("AoE", 0), ("EoE", 1), ("FoE", 3), ("SoE", 4), ("VoE", 5)):
+                node = _child(mailbox, tag)
+                if node is None:
+                    continue
+                # An AoE AdsRouter explicitly selects TwinCAT's AoE-capable device class.
+                if tag == "AoE" and node.attrib.get("AdsRouter", "false").lower() not in {"true", "1"}:
+                    continue
+                if tag == "SoE" and parse_number(node.attrib.get("ChannelCount"), default=1) <= 0:
+                    continue
+                protocol |= 1 << bit
+        flags = 0x04 if mailbox is not None and mailbox.attrib.get("DataLinkLayer", "false").lower() in {"true", "1"} else 0
+        # TwinCAT's final General flags use Type attributes, independently of mailbox presence.
+        type_node = _child(device, "Type")
+        if type_node is not None:
+            for attribute, bit in (("TcCfgModeSafeOp", 0), ("UseLrdLwr", 1)):
+                if type_node.attrib.get(attribute, "false").lower() in {"true", "1"}:
+                    flags |= 1 << bit
         if (
             info is not None
-            and _text(next((x for x in info.iter() if _local(x.tag) == "IdentificationReg134"), None)).lower()
-            == "true"
+            and _text(_child(info, "IdentificationReg134")).lower() in {"true", "1"}
         ):
             flags |= 0x08
+        elif info is not None:
+            ado = parse_number(_text(_child(info, "IdentificationAdo")), default=0)
+            if ado:
+                flags |= 0x08 if ado == 0x0134 else 0x10
         return coe_details, protocol, flags
