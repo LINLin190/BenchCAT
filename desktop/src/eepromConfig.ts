@@ -32,11 +32,13 @@ export function pdiMeaning(value: number): string {
   return PDI_TYPES[value] ?? "含义未收录";
 }
 
+// Preserve the XML's actual configuration length, including extended bytes.
 export function normalizeConfigData(value: string): { formatted?: string; bytes?: number[]; error?: string } {
   const compact = value.replace(/[\s,_-]/g, "");
   if (!/^[0-9a-fA-F]*$/.test(compact)) return { error: "只能输入十六进制字节" };
-  if (compact.length !== 20) return { error: `需要 10 byte，当前 ${Math.floor(compact.length / 2)} byte` };
-  const bytes = Array.from({ length: 10 }, (_, index) => Number.parseInt(compact.slice(index * 2, index * 2 + 2), 16));
+  if (compact.length % 2) return { error: "每个字节需要两个十六进制字符" };
+  if (compact.length < 2 || compact.length > 28) return { error: `需要 1–14 byte，当前 ${compact.length / 2} byte` };
+  const bytes = Array.from({ length: compact.length / 2 }, (_, index) => Number.parseInt(compact.slice(index * 2, index * 2 + 2), 16));
   return { bytes, formatted: bytes.map((item) => item.toString(16).toUpperCase().padStart(2, "0")).join(" ") };
 }
 
@@ -52,10 +54,11 @@ export interface DecodedConfigData {
   stationAlias: number;
 }
 
+// Decode the common fields while retaining all bytes in the formatted value.
 export function decodeConfigData(value: string): DecodedConfigData | undefined {
   const parsed = normalizeConfigData(value);
   if (!parsed.bytes || !parsed.formatted) return undefined;
-  const bytes = parsed.bytes;
+  const bytes = Array.from({ length: 10 }, (_, index) => parsed.bytes![index] ?? 0);
   const word = (offset: number) => bytes[offset] | (bytes[offset + 1] << 8);
   return {
     formatted: parsed.formatted,
@@ -88,6 +91,18 @@ export interface FlashHistoryEntry {
   slaveKey: string;
 }
 
+export interface EepromBinTarget {
+  target_id: string;
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+// Detect the source format consistently in dialogs, history, and favorites.
+export function isBinFile(path: string): boolean {
+  return path.toLowerCase().endsWith(".bin");
+}
+
 export interface FixedEsiEntry {
   path: string;
   sha256: string;
@@ -110,8 +125,9 @@ export interface FixedEsiState {
 export const FLASH_HISTORY_KEY = "benchcat.eeprom-flash-history-v1";
 export const FIXED_ESI_STATE_KEY = "benchcat.eeprom-fixed-list-v1";
 export const QUICK_FLASH_TAB_KEY = "benchcat.eeprom-quick-tab-v1";
-export const EEPROM_AUTO_RESET_KEY = "benchcat.eeprom-auto-reset-v1";
-export const FLASH_HISTORY_LIMIT = 20;
+// Start with reset disabled after upgrading; later explicit choices use this key.
+export const EEPROM_AUTO_RESET_KEY = "benchcat.eeprom-auto-reset-v2";
+export const FLASH_HISTORY_LIMIT = 25;
 
 export function fixedEsiKey(entry: Pick<FixedEsiEntry, "path" | "ordinal">): string {
   return `${entry.path.toLowerCase()}|${entry.ordinal}`;
@@ -149,8 +165,9 @@ export function saveQuickFlashTab(tab: number, storage: Pick<Storage, "setItem">
   return value;
 }
 
+// Only a new explicit choice enables reset for XML and BIN programming.
 export function loadEepromAutoReset(storage: Pick<Storage, "getItem"> = window.localStorage): boolean {
-  return storage.getItem(EEPROM_AUTO_RESET_KEY) !== "false";
+  return storage.getItem(EEPROM_AUTO_RESET_KEY) === "true";
 }
 
 export function saveEepromAutoReset(enabled: boolean, storage: Pick<Storage, "setItem"> = window.localStorage): boolean {
@@ -167,15 +184,13 @@ export function loadFlashHistory(storage: Pick<Storage, "getItem"> = window.loca
   }
 }
 
+// Record each successful flash, including repeated use of the same source.
 export function saveFlashHistory(
   entry: FlashHistoryEntry,
   storage: Pick<Storage, "setItem"> = window.localStorage,
   current = loadFlashHistory(),
 ): FlashHistoryEntry[] {
-  const key = `${entry.path.toLowerCase()}|${entry.ordinal}|${entry.effectiveConfigData}`;
-  const next = [entry, ...current.filter((item) =>
-    `${item.path.toLowerCase()}|${item.ordinal}|${item.effectiveConfigData}` !== key
-  )].slice(0, FLASH_HISTORY_LIMIT);
+  const next = [entry, ...current].slice(0, FLASH_HISTORY_LIMIT);
   storage.setItem(FLASH_HISTORY_KEY, JSON.stringify(next));
   return next;
 }

@@ -75,7 +75,7 @@ import { alStatusInfo, type AlStatusLanguage } from "./alStatus";
 import { BridgeRequestError, bridgeRequest, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
 import { minimumBusState } from "./busState";
 import { operationStore } from "./operationStore";
-import { decodeConfigData, loadEepromAutoReset, normalizeConfigData, saveEepromAutoReset } from "./eepromConfig";
+import { decodeConfigData, isBinFile, loadEepromAutoReset, normalizeConfigData, saveEepromAutoReset, type EepromBinTarget } from "./eepromConfig";
 import { QuickEepromFlashDialog, type EepromDetailSelection, type EepromProgressState } from "./QuickEepromFlashDialog";
 import type {
   BridgeEvent,
@@ -475,18 +475,13 @@ function IoPage({ slave, status, snapshot, run, refresh }: { slave?: SlaveInfo; 
 }
 
 interface EsiResult { document_id: string; path: string; vendor_id: number; vendor_name: string; devices: EsiDevice[] }
-interface SiiLayoutItem { kind?: number; name: string; offset: number; length: number; content: string }
-interface TargetResult { target_id: string; size: number; sha256: string; supported: string[]; omitted: string[]; device: EsiDevice; layout: SiiLayoutItem[]; original_config_data?: string; effective_config_data?: string }
+interface TargetResult { target_id: string; size: number; sha256: string; supported: string[]; omitted: string[]; device: EsiDevice; original_config_data?: string; effective_config_data?: string }
 type ProgressState = EepromProgressState;
-interface EepromComparisonResult { equal: boolean; differing_bytes: number; first_difference?: number; target_sha256: string; readback_sha256: string }
+interface EepromComparisonResult { equal: boolean; differing_bytes: number; first_difference?: number | null; target_sha256: string; readback_sha256: string }
 interface EepromReadResult { data: string; size: number; sha256: string; read_at: string; sii_valid: boolean; sii_error?: string; identity?: { vendor_id: number; product_code: number; revision: number; serial_number: number }; category_count?: number; categories?: number[]; end_offset?: number; comparison?: EepromComparisonResult }
-interface EepromFlashDetails { bytes_read_back: number; words_written: number; comparison: EepromComparisonResult; sii_valid: boolean; semantic_valid: boolean; image_verification: string; reset_sequence?: boolean[] | null; rediscovered?: boolean | null; reload_verified?: boolean | null; reload_error?: string | null }
+interface EepromFlashDetails { bytes_read_back: number; words_written: number; comparison: EepromComparisonResult; sii_valid: boolean; semantic_valid: boolean | null; image_verification: string; reset_sequence?: boolean[] | null; rediscovered?: boolean | null; reload_verified?: boolean | null; reload_error?: string | null }
 interface EepromFlashPayload { success: boolean; result: EepromFlashDetails; slaves: SlaveInfo[] }
 interface EepromOperationResult { title: string; severity: "success" | "warning" | "error" | "info"; payload?: EepromFlashPayload; error?: string }
-
-function targetNeedsAttention(target: TargetResult): boolean {
-  return target.omitted.some((item) => /PDO entry names omitted|PDO categories omitted|DC category/.test(item));
-}
 
 function formatHexView(data: string): string {
   const bytes = data.trim().split(/\s+/).filter(Boolean);
@@ -527,16 +522,19 @@ interface EepromPageProps {
   deviceOperationsBlocked: boolean;
 }
 
+// Temporary ConfigData lives in this page and is discarded when navigation unmounts it.
 function EepromPage({ slave, status, progress, setProgress, run, readResult, setReadResult, initialSelection, onInitialSelectionConsumed, autoResetEsc, fileDropEnabled, deviceOperationsBlocked }: EepromPageProps) {
   const [esi, setEsi] = useState<EsiResult>();
+  const [bin, setBin] = useState<EepromBinTarget>();
   const [ordinal, setOrdinal] = useState(-1);
   const [target, setTarget] = useState<TargetResult>();
+  const flashTarget = bin ?? target;
   const [generationError, setGenerationError] = useState("");
   const [backupPath, setBackupPath] = useState("");
   const [readLength, setReadLength] = useState("");
   const capacity = readLength.trim() ? Number(readLength) : undefined;
   const invalidReadLength = capacity !== undefined && (!Number.isInteger(capacity) || capacity < 2 || capacity > 131072 || capacity % 2 !== 0);
-  const readLengthRequired = capacity === undefined && slave?.eeprom_capacity == null
+  const readLengthRequired = capacity === undefined && !flashTarget && slave?.eeprom_capacity == null
     && (slave?.sii_status === "blank" || slave?.sii_status === "invalid");
   const readLengthHint = invalidReadLength ? "请输入 2–131072 范围的偶数"
     : readLengthRequired ? "请先填写读取长度" : "";
@@ -559,16 +557,17 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
   const configDataResult = normalizeConfigData(configData);
   const configDecoded = decodeConfigData(configData);
   const operationInProgress = isEepromOperation(progress?.operation) && progress!.percent < 100;
-  const canFlash = Boolean(slave && target && targetContextRef.current === contextKey && !status.cycle_running && !operationInProgress && !deviceOperationsBlocked);
-  const blockers = [deviceOperationsBlocked && "软件正在更新", operationInProgress && "已有 EEPROM 操作正在执行", !target && "需要选择有效 XML", status.cycle_running && "需要停止周期通信"].filter(Boolean) as string[];
+  const canFlash = Boolean(slave && flashTarget && (!esi || !configDataResult.error) && !generationError && targetContextRef.current === contextKey && !status.cycle_running && !operationInProgress && !deviceOperationsBlocked);
+  const blockers = [deviceOperationsBlocked && "软件正在更新", operationInProgress && "已有 EEPROM 操作正在执行", !flashTarget && "需要选择 XML/BIN", status.cycle_running && "需要停止周期通信"].filter(Boolean) as string[];
   useEffect(() => {
     generationRequestRef.current += 1;
     loadRequestRef.current += 1;
     generatedConfigRef.current = "";
-    setEsi(undefined); setOrdinal(-1); setTarget(undefined); setConfigData(""); setOriginalConfigData("");
+    setEsi(undefined); setBin(undefined); setOrdinal(-1); setTarget(undefined); setConfigData(""); setOriginalConfigData("");
     setGenerationError(""); setOperationResult(undefined); setBackupPath(""); setReadLength("");
   }, [contextKey]);
 
+  // Generate a new XML target whenever its selected Device or ConfigData changes.
   const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig?: string) => {
     const requestId = ++generationRequestRef.current;
     const context = contextKey;
@@ -593,7 +592,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
     const context = contextKey;
     generationRequestRef.current += 1;
     generatedConfigRef.current = "";
-    setTarget(undefined); setEsi(undefined); setGenerationError("");
+    setTarget(undefined); setEsi(undefined); setBin(undefined); setGenerationError("");
     const document = await run(() => bridgeRequest<EsiResult>("esi_load", { path }));
     if (document && loadRequestRef.current === loadId && contextRef.current === context) {
       const nextRecent = [path, ...recentEsi.filter((item) => item !== path)].slice(0, 5);
@@ -609,24 +608,50 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
       if (selectedOrdinal >= 0) await generate(document, selectedOrdinal, effective);
     }
   }, [contextKey, generate, recentEsi, run, slaveIdentityKey(slave)]);
+  // Load BIN bytes into a frozen target; XML follows the existing Device workflow.
+  const loadFile = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
+    if (!isBinFile(path)) return loadXml(path, preferredOrdinal, overrideConfig);
+    const loadId = ++loadRequestRef.current;
+    const context = contextKey;
+    generationRequestRef.current += 1;
+    generatedConfigRef.current = "";
+    setEsi(undefined); setBin(undefined); setTarget(undefined); setOrdinal(-1);
+    setConfigData(""); setOriginalConfigData(""); setGenerationError(""); setOperationResult(undefined);
+    const value = await run(async () => {
+      try { return await bridgeRequest<EepromBinTarget>("eeprom_bin_load", { path, position: slave?.position }); }
+      catch (error) {
+        if (loadRequestRef.current === loadId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法加载所选 BIN。");
+        throw error;
+      }
+    });
+    if (value && loadRequestRef.current === loadId && contextRef.current === context) {
+      targetContextRef.current = context;
+      setBin(value);
+      const nextRecent = [path, ...recentEsi.filter((item) => item !== path)].slice(0, 5);
+      setRecentEsi(nextRecent);
+      window.localStorage.setItem(RECENT_ESI_KEY, JSON.stringify(nextRecent));
+    }
+  }, [contextKey, loadXml, recentEsi, run, slave?.position]);
+
   useEffect(() => {
     if (!initialSelection) return;
     onInitialSelectionConsumed();
-    void loadXml(initialSelection.path, initialSelection.ordinal, initialSelection.configData);
-  }, [initialSelection, loadXml, onInitialSelectionConsumed]);
-  const selectXml = async () => {
-    const path = await pickFile(["xml"]); if (path) await loadXml(path);
+    void loadFile(initialSelection.path, initialSelection.ordinal, initialSelection.configData);
+  }, [initialSelection, loadFile, onInitialSelectionConsumed]);
+  // XML and BIN use one picker and one programming button.
+  const selectFile = async () => {
+    const path = await pickFile(["xml", "bin"]); if (path) await loadFile(path);
   };
   useEffect(() => {
     if (!fileDropEnabled) return;
     let cancelled = false;
     let dispose: (() => void) | undefined;
     void onFileDrop((paths) => {
-      const xml = paths.find((path) => path.toLowerCase().endsWith(".xml"));
-      if (xml && !operationInProgress) void loadXml(xml);
+      const source = paths.find((path) => /\.(xml|bin)$/i.test(path));
+      if (source && !operationInProgress && !deviceOperationsBlocked) void loadFile(source);
     }).then((value) => { if (cancelled) value(); else dispose = value; });
     return () => { cancelled = true; dispose?.(); };
-  }, [fileDropEnabled, loadXml, operationInProgress]);
+  }, [fileDropEnabled, loadFile, operationInProgress, deviceOperationsBlocked]);
   useEffect(() => {
     if (!esi || ordinal < 0 || !configDataResult.formatted || configDataResult.formatted === generatedConfigRef.current) return;
     setTarget(undefined);
@@ -652,8 +677,8 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
       if (flashPayload && typeof flashPayload === "object" && "success" in flashPayload) {
         if (!flashPayload.success) {
           const title = "烧录失败";
-          setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: "写入后的内容与目标不一致，或设备信息未能解析。请重新读取设备确认结果。", tone: "error" });
-          setOperationResult({ title, severity: "error", payload: flashPayload, error: "写入后的内容与目标不一致，或设备信息未能解析。请重新读取设备确认结果。" });
+          setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: flashPayload.result.image_verification, tone: "error" });
+          setOperationResult({ title, severity: "error", payload: flashPayload, error: flashPayload.result.image_verification });
           return value;
         }
         const reloadFailed = flashPayload.result.reload_verified === false;
@@ -679,49 +704,74 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
   };
   const readFull = async () => {
     if (!slave || invalidReadLength || readLengthRequired) return;
-    const value = await operation(() => bridgeRequest<EepromReadResult>("eeprom_read", { position: slave.position, target_id: target?.target_id, capacity }), "完整读取完成");
+    const value = await operation(() => bridgeRequest<EepromReadResult>("eeprom_read", { position: slave.position, target_id: flashTarget?.target_id, capacity: capacity ?? (flashTarget ? flashTarget.size + flashTarget.size % 2 : undefined) }), "完整读取完成");
     if (value) setReadResult(value);
   };
-  const backup = async () => { if (!slave || invalidReadLength || readLengthRequired) return; const directory = await pickDirectory(); if (directory) { const value = await operation(() => bridgeRequest<{ binary_path: string }>("eeprom_backup", { position: slave.position, directory, capacity }), "BIN 备份完成"); if (value) setBackupPath(value.binary_path); } };
-  const restore = async () => {
-    if (!slave) return;
-    const context = contextKey;
-    const path = await pickFile(["bin"]);
-    if (!path) return;
-    if (contextRef.current !== context) {
-      setOperationResult({ title: "恢复失败", severity: "error", error: "目标从站或连接已变化，请重新操作。" });
-      return;
-    }
-    await operation(() => bridgeRequest<EepromFlashPayload>("eeprom_restore", { position: slave.position, path, auto_reset: autoResetEsc }), "恢复并校验完成", "烧录失败");
+  // Export the raw bytes under the selected slave's name.
+  const exportBin = async () => {
+    if (!slave || invalidReadLength || readLengthRequired) return;
+    const directory = await pickDirectory();
+    if (!directory) return;
+    const value = await operation(() => bridgeRequest<{ binary_path: string }>("eeprom_backup", {
+      position: slave.position,
+      directory,
+      capacity: capacity ?? (flashTarget ? flashTarget.size + flashTarget.size % 2 : undefined),
+    }), "BIN 文件导出完成");
+    if (value) setBackupPath(value.binary_path);
   };
-  const flash = () => canFlash && slave && target && operation(() => bridgeRequest<EepromFlashPayload>("eeprom_flash", { position: slave.position, target_id: target.target_id, auto_reset: autoResetEsc }), "烧录并校验完成", "烧录失败");
+  // Both sources write the frozen target selected for this slave and session.
+  const flash = () => canFlash && slave && flashTarget && operation(() => bridgeRequest<EepromFlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc }), autoResetEsc ? "烧录完成" : "烧录完成，未复位 ESC", "烧录失败");
 
-  return <><PageTitle title="EEPROM" subtitle="ESI 预览、完整读取、BIN 备份与安全烧录" />
-    <Box sx={{ mb: 1.25, p: 1.25, border: "1px dashed", borderColor: "primary.light", borderRadius: 1.5, bgcolor: "rgba(25,118,210,.035)" }}><Stack direction="row" alignItems="center" gap={1} flexWrap="wrap"><Typography variant="body2" fontWeight={700}>可将 ESI XML 拖入窗口</Typography><Typography variant="caption" color="text.secondary">最近文件：</Typography>{recentEsi.length ? recentEsi.map((path) => <Chip key={path} size="small" variant="outlined" disabled={operationInProgress} label={path.split(/[\\/]/).at(-1)} title={path} onClick={() => void loadXml(path)} />) : <Typography variant="caption" color="text.secondary">暂无</Typography>}</Stack></Box>
-    {backupPath && <Alert severity="success" action={<Button size="small" onClick={() => revealPath(backupPath)}>打开位置</Button>} sx={{ mb: 1.25 }}><Typography fontWeight={700}>BIN 备份已保存</Typography><Typography variant="body2" className="mono" sx={{ overflowWrap: "anywhere" }}>{backupPath}</Typography></Alert>}
-    {operationResult?.payload && <Alert severity="info" sx={{ mb: 1.25 }}><Typography variant="body2"><strong>技术详情 · 首个差异：</strong>{operationResult.payload.result.comparison.first_difference === undefined ? "无" : hex(operationResult.payload.result.comparison.first_difference, 4)}</Typography></Alert>}
-    {target?.layout && <Card sx={{ ...cardSx, mb: 1.25 }}><CardContent><Typography variant="h6">Smart View · 目标 SII 布局</Typography><Typography variant="caption" color="text.secondary">类别偏移和长度含类别头；内容最多预览前 32 byte。</Typography><TableContainer sx={{ mt: 1, maxHeight: 260 }}><Table size="small" stickyHeader><TableHead><TableRow><TableCell>类别</TableCell><TableCell>类型</TableCell><TableCell>偏移</TableCell><TableCell>长度</TableCell><TableCell>内容预览</TableCell></TableRow></TableHead><TableBody>{target.layout.map((item) => <TableRow key={`${item.offset}-${item.name}`}><TableCell>{item.name}</TableCell><TableCell className="mono">{item.kind === undefined || item.kind === null ? "—" : hex(item.kind)}</TableCell><TableCell className="mono">{hex(item.offset, 4)}</TableCell><TableCell>{item.length} B</TableCell><TableCell className="mono" sx={{ maxWidth: 420 }}><Typography variant="caption" noWrap title={item.content}>{item.content || "（空）"}</Typography></TableCell></TableRow>)}</TableBody></Table></TableContainer></CardContent></Card>}
-    {progress && isEepromOperation(progress.operation) && <Card sx={{ ...cardSx, mb: 1.25, borderColor: progress.tone === "error" ? "error.main" : progress.tone === "success" ? "success.main" : "primary.main" }}><CardContent sx={{ py: "10px !important" }}><Stack direction="row" alignItems="center" justifyContent="space-between" gap={2}><Box minWidth={0}><Typography fontWeight={700}>{progress.stage}</Typography><Typography variant="caption" color="text.secondary" noWrap>{progress.detail}</Typography></Box><Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 230 }}><LinearProgress color={progress.tone === "error" ? "error" : progress.tone === "success" ? "success" : "primary"} variant="determinate" value={progress.percent} sx={{ flex: 1, height: 5, borderRadius: 4 }} /><Typography className="mono" variant="caption" sx={{ width: 34, textAlign: "right" }}>{progress.percent}%</Typography>{progress.percent < 100 && progress.cancellable !== false && <Button size="small" onClick={() => bridgeRequest("cancel")}>取消</Button>}</Stack></Stack></CardContent></Card>}
+  return <><PageTitle title="EEPROM" subtitle="XML/BIN 烧录、原始读取与 BIN 文件导出" />
+    <Box sx={{ mb: 1.25, p: 1.25, border: "1px dashed", borderColor: "primary.light", borderRadius: 1.5, bgcolor: "rgba(25,118,210,.035)" }}>
+      <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+        <Typography variant="body2" fontWeight={700}>可将 XML/BIN 拖入窗口</Typography><Typography variant="caption" color="text.secondary">最近文件：</Typography>
+        {recentEsi.length ? recentEsi.map((path) => <Chip key={path} size="small" variant="outlined" disabled={operationInProgress || deviceOperationsBlocked} label={path.split(/[\\/]/).at(-1)} title={path} onClick={() => void loadFile(path)} />) : <Typography variant="caption" color="text.secondary">暂无</Typography>}
+      </Stack>
+    </Box>
+    {backupPath && <Alert severity="success" action={<Button size="small" onClick={() => revealPath(backupPath)}>打开位置</Button>} sx={{ mb: 1.25 }}><Typography fontWeight={700}>BIN 文件已导出</Typography><Typography variant="body2" className="mono" sx={{ overflowWrap: "anywhere" }}>{backupPath}</Typography></Alert>}
+    {progress && isEepromOperation(progress.operation) && <Card sx={{ ...cardSx, mb: 1.25, borderColor: progress.tone === "error" ? "error.main" : progress.tone === "success" ? "success.main" : "primary.main" }}><CardContent sx={{ py: "10px !important" }}><Stack direction="row" alignItems="center" justifyContent="space-between" gap={2}><Box minWidth={0}><Typography fontWeight={700}>{progress.stage}</Typography><Typography variant="caption" color="text.secondary">{progress.detail}</Typography></Box><Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 230 }}><LinearProgress color={progress.tone === "error" ? "error" : progress.tone === "success" ? "success" : "primary"} variant="determinate" value={progress.percent} sx={{ flex: 1, height: 5, borderRadius: 4 }} /><Typography className="mono" variant="caption" sx={{ width: 34, textAlign: "right" }}>{progress.percent}%</Typography>{progress.percent < 100 && progress.cancellable !== false && <Button size="small" onClick={() => bridgeRequest("cancel")}>取消</Button>}</Stack></Stack></CardContent></Card>}
     {!slave ? <EmptyState text="请先选择目标从站" /> : <Stack spacing={1.5}>
-      <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(320px, .85fr)", gap: 1.25, alignItems: "start" }}>
-        <Card sx={cardSx}><CardContent><Stack direction="row" alignItems="center" justifyContent="space-between"><Box><Typography variant="h6">烧录目标</Typography><Typography color="text.secondary">XML 或 Device 变化时自动生成</Typography></Box><Button disabled={operationInProgress} variant="outlined" startIcon={<FolderOpenRounded />} onClick={selectXml}>选择 XML</Button></Stack><Divider sx={{ my: 2 }} />
-          {esi ? <Stack spacing={1.5}>
-            <TextField label="XML 文件" size="small" value={esi.path} InputProps={{ readOnly: true }} />
-            <FormControl disabled={operationInProgress} fullWidth size="small"><InputLabel>Device</InputLabel><Select label="Device" value={ordinal} onChange={(e) => changeDevice(Number(e.target.value))}><MenuItem value={-1} disabled>请选择烧录设备</MenuItem>{esi.devices.map((device, i) => <MenuItem value={i} key={i}>{esiDeviceDisplayName(device)} · {hex(device.product_code, 8)}</MenuItem>)}</Select></FormControl>
-            <Box sx={{ p: 1.4, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#FAFBFD" }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 0.8 }}><Box><Typography variant="subtitle2">本次烧录 ConfigData</Typography><Typography variant="caption" color="text.secondary">10 byte；修改只作用于本次内存目标，原 XML 不变</Typography></Box><Button size="small" disabled={operationInProgress || configData === originalConfigData} onClick={() => { generationRequestRef.current += 1; generatedConfigRef.current = ""; setTarget(undefined); setConfigData(originalConfigData); }}>恢复原值</Button></Stack>
-              <TextField fullWidth size="small" value={configData} disabled={operationInProgress || ordinal < 0} error={Boolean(configDataResult.error)} helperText={configDataResult.error ?? (configDecoded ? `PDI ${configDecoded.formatted.slice(0, 2)} · ${configDecoded.pdiLabel}` : "输入 10 个十六进制字节")} onChange={(event) => { generationRequestRef.current += 1; generatedConfigRef.current = ""; setConfigData(event.target.value.toUpperCase()); setTarget(undefined); }} onBlur={() => configDataResult.formatted && setConfigData(configDataResult.formatted)} inputProps={{ className: "mono", spellCheck: false }} />
-            </Box>
-            {generationError ? <Alert severity="error"><Typography fontWeight={700}>目标生成失败</Typography>{generationError}</Alert> : target ? <Alert severity={targetNeedsAttention(target) ? "warning" : "success"}>{targetNeedsAttention(target) ? "目标已生成，但有容量降级或关键类别未写入；请查看 Smart View。" : "目标已生成，烧录时将写入并回读校验。"}</Alert> : <Alert severity="info">{ordinal < 0 ? "XML 包含多个 Device，请明确选择烧录设备。" : "正在生成 Smart View…"}</Alert>}
-          </Stack> : <Box sx={{ py: 6, textAlign: "center", color: "text.secondary" }}>选择厂商 ESI XML 后自动解析并生成目标</Box>}
-        </CardContent></Card>
-        <Card sx={cardSx}><CardContent><Typography variant="h6">Smart View</Typography><Typography color="text.secondary">随当前 XML 和 Device 实时更新</Typography><Divider sx={{ my: 2 }} />
-          {currentDevice && target ? <Stack spacing={1.5}><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>{[["设备", esiDeviceDisplayName(currentDevice)], ["厂商", esi?.vendor_name], ["Product Code（产品代码）", hex(currentDevice.product_code, 8)], ["Revision（修订版本）", hex(deviceRevision(currentDevice), 8)], ["SHA-256", target.sha256]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("Code") || label === "SHA-256" ? "mono" : ""} noWrap title={String(value)}>{value}</Typography></Box>)}</Box><Divider /><Box><Typography variant="subtitle2">已转换内容</Typography><Stack direction="row" flexWrap="wrap" gap={0.7} sx={{ mt: 1 }}>{target.supported.map((item) => <Chip size="small" color="success" variant="outlined" label={item} key={item} />)}</Stack></Box>{target.omitted.length > 0 && <Box><Typography variant="subtitle2" color={targetNeedsAttention(target) ? "warning.main" : "text.primary"}>{targetNeedsAttention(target) ? "容量降级或未写入类别" : "转换范围说明"}</Typography>{target.omitted.map((item) => <Typography variant="body2" color={targetNeedsAttention(target) ? "warning.main" : "text.secondary"} key={item}>• {item}</Typography>)}</Box>}</Stack> : <Box sx={{ py: 6, textAlign: "center", color: "text.secondary" }}>尚无可预览的烧录目标</Box>}
-        </CardContent></Card>
-      </Box>
-      <Card sx={cardSx}><CardContent><Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 1.15fr) minmax(300px, .85fr)", gap: 2, alignItems: "start" }}><Box><Typography variant="h6">读取与恢复</Typography><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.25 }}>完整读取只刷新 Smart/Hex View；备份 BIN 会保存原始数据（空白或损坏 BIN 不能直接恢复）。</Typography><TextField size="small" fullWidth label="读取长度（字节，可选）" value={readLength} disabled={operationInProgress} error={invalidReadLength} helperText={readLengthHint} onChange={(event) => setReadLength(event.target.value)} sx={{ mb: 1.25 }} /><Stack direction="row" gap={0.75} flexWrap="wrap"><Tooltip title={status.cycle_running ? "完整读取前必须停止周期通信" : readLengthRequired ? "请先填写读取长度" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress || invalidReadLength || readLengthRequired} onClick={readFull}>完整读取</Button></span></Tooltip><Tooltip title={status.cycle_running ? "备份前必须停止周期通信" : readLengthRequired ? "请先填写读取长度" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress || invalidReadLength || readLengthRequired} startIcon={<SaveAltRounded />} onClick={backup}>备份 BIN</Button></span></Tooltip><Tooltip title={status.cycle_running ? "恢复前必须停止周期通信" : ""}><span><Button size="small" color="warning" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress} onClick={restore}>从 BIN 恢复</Button></span></Tooltip>{backupPath && <Button size="small" onClick={() => revealPath(backupPath)} startIcon={<FolderOpenRounded />}>打开备份位置</Button>}</Stack></Box><Box sx={{ borderLeft: { sm: 1 }, borderColor: "divider", pl: { sm: 2 } }}><Typography variant="h6">烧录</Typography><Stack direction="row" gap={0.6} flexWrap="wrap" sx={{ my: 1 }}><Chip color={target ? "success" : "default"} label={target ? "目标已生成" : "缺少目标"} /><Chip color={!status.cycle_running ? "success" : "warning"} label={!status.cycle_running ? "周期已停止" : "周期运行中"} /></Stack><Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={flash}>烧录</Button></span></Tooltip>{blockers.length > 0 && <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>{blockers.join("；")}</Typography>}</Box></Box></CardContent></Card>
+      <Card sx={cardSx}><CardContent>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2}>
+          <Box><Typography variant="h6">烧录目标</Typography><Typography variant="body2" color="text.secondary">从站 {slave.position} · {slaveDisplayName(slave)} · {slave.chip_model}</Typography></Box>
+          <Button disabled={operationInProgress || deviceOperationsBlocked} variant="outlined" startIcon={<FolderOpenRounded />} onClick={selectFile}>选择 XML/BIN</Button>
+        </Stack><Divider sx={{ my: 1.5 }} />
+        {bin ? <Stack spacing={1.25}>
+          <TextField label="BIN 文件" size="small" value={bin.path} InputProps={{ readOnly: true }} />
+          <Stack direction="row" gap={1}><Chip label="BIN · 原始数据" color="primary" variant="outlined" /><Chip label={`待写入 ${bin.size} B`} /></Stack>
+          <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>SHA-256：{bin.sha256}</Typography>
+          <Alert severity="info">从 EEPROM 地址 0 开始写入文件原始字节，不修改 ConfigData、CRC、身份或 SII 类别。</Alert>
+        </Stack> : esi ? <Stack spacing={1.5}>
+          <TextField label="XML 文件" size="small" value={esi.path} InputProps={{ readOnly: true }} />
+          <FormControl disabled={operationInProgress || deviceOperationsBlocked} fullWidth size="small"><InputLabel>Device</InputLabel><Select label="Device" value={ordinal} onChange={(e) => changeDevice(Number(e.target.value))}><MenuItem value={-1} disabled>请选择烧录设备</MenuItem>{esi.devices.map((device, i) => <MenuItem value={i} key={i}>{esiDeviceDisplayName(device)} · {hex(device.product_code, 8)}</MenuItem>)}</Select></FormControl>
+          <Box sx={{ p: 1.4, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#FAFBFD" }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 0.8 }}><Box><Typography variant="subtitle2">本次烧录 ConfigData</Typography><Typography variant="caption" color="text.secondary">1–14 byte；修改只作用于本次内存目标，原 XML 不变</Typography></Box><Button size="small" disabled={operationInProgress || deviceOperationsBlocked || configData === originalConfigData} onClick={() => { generationRequestRef.current += 1; generatedConfigRef.current = ""; setTarget(undefined); setConfigData(originalConfigData); }}>恢复原值</Button></Stack>
+            <TextField fullWidth size="small" value={configData} disabled={operationInProgress || deviceOperationsBlocked || ordinal < 0} error={Boolean(configDataResult.error)} helperText={configDataResult.error ?? (configDecoded ? `PDI ${configDecoded.formatted.slice(0, 2)} · ${configDecoded.pdiLabel}` : "输入 1–14 个十六进制字节")} onChange={(event) => { generationRequestRef.current += 1; generatedConfigRef.current = ""; setConfigData(event.target.value.toUpperCase()); setTarget(undefined); }} onBlur={() => configDataResult.formatted && setConfigData(configDataResult.formatted)} inputProps={{ className: "mono", spellCheck: false }} />
+          </Box>
+          {target ? <Box>
+            <Typography variant="body2" fontWeight={700}>待写入 {target.size} B · 保留 XML 声明长度</Typography>
+            <Typography className="mono" variant="caption" sx={{ display: "block", overflowWrap: "anywhere", mt: 0.5 }}>SHA-256：{target.sha256}</Typography>
+          </Box> : !generationError && <Alert severity="info">{ordinal < 0 ? "XML 包含多个 Device，请明确选择烧录设备。" : "正在生成烧录目标…"}</Alert>}
+        </Stack> : <Box sx={{ py: 4, textAlign: "center", color: "text.secondary" }}>选择 XML 或 BIN 文件准备烧录</Box>}
+        {generationError && <Alert severity="error" sx={{ mt: 1.25 }}>{generationError}</Alert>}
+        <Divider sx={{ my: 1.5 }} />
+        <Stack direction="row" gap={1.25} alignItems="center">
+          <Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={flash}>烧录</Button></span></Tooltip>
+          <Typography variant="caption" color="text.secondary">{blockers.join("；") || (autoResetEsc ? "写入后自动复位 ESC" : "烧录后不复位 ESC")}</Typography>
+        </Stack>
+      </CardContent></Card>
+      <Card sx={cardSx}><CardContent>
+        <Typography variant="h6">读取与导出</Typography><Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1.25 }}>读取 EEPROM 原始数据并显示 Hex View；导出 BIN 文件保留空白或损坏内容。选择文件后，默认按目标长度读取。</Typography>
+        <TextField size="small" fullWidth label="读取长度（字节，可选）" value={readLength} disabled={operationInProgress} error={invalidReadLength} helperText={readLengthHint} onChange={(event) => setReadLength(event.target.value)} sx={{ mb: 1.25 }} />
+        <Stack direction="row" gap={0.75} flexWrap="wrap">
+          <Tooltip title={status.cycle_running ? "完整读取前必须停止周期通信" : readLengthRequired ? "请先填写读取长度" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress || invalidReadLength || readLengthRequired} onClick={readFull}>完整读取</Button></span></Tooltip>
+          <Tooltip title={status.cycle_running ? "导出前必须停止周期通信" : readLengthRequired ? "请先填写读取长度" : ""}><span><Button size="small" variant="outlined" disabled={deviceOperationsBlocked || status.cycle_running || operationInProgress || invalidReadLength || readLengthRequired} startIcon={<SaveAltRounded />} onClick={exportBin}>导出BIN文件</Button></span></Tooltip>
+          {backupPath && <Button size="small" onClick={() => revealPath(backupPath)} startIcon={<FolderOpenRounded />}>打开导出位置</Button>}
+        </Stack>
+      </CardContent></Card>
       {readResult && <Card sx={cardSx}><CardContent><Typography variant="h6">最近 EEPROM 读取</Typography><Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 1.25, mt: 1.25 }}>{[["读取时间", new Date(readResult.read_at).toLocaleString()], ["读取长度", `${readResult.size} B`], ["SII 结构", readResult.sii_valid ? `${readResult.category_count ?? 0} 个 Category` : fullSiiRead ? "无效" : "未解析"], ["差异", readResult.comparison ? `${readResult.comparison.differing_bytes} byte` : "未选择目标"], ["Vendor ID（厂商 ID）", readResult.identity ? hex(readResult.identity.vendor_id, 8) : "—"], ["Product Code（产品代码）", readResult.identity ? hex(readResult.identity.product_code, 8) : "—"], ["Revision（修订版本）", readResult.identity ? hex(readResult.identity.revision, 8) : "—"], ["SHA-256", readResult.sha256]].map(([label, value]) => <Box key={label} minWidth={0}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={label === "SHA-256" || label.includes("Code") ? "mono" : ""} noWrap title={value}>{value}</Typography></Box>)}</Box>{!readResult.sii_valid && fullSiiRead && <Alert severity="warning" sx={{ mt: 1.25 }}>原始数据已读取，但设备信息未能解析。可在下方查看原始内容。</Alert>}<Accordion disableGutters sx={{ mt: 1.25 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>Hex View（只读）</Typography></AccordionSummary><AccordionDetails><Box component="pre" className="mono data-surface" sx={{ m: 0, p: 1.25, maxHeight: 320, overflow: "auto", fontSize: 12 }}>{formatHexView(readResult.data)}</Box></AccordionDetails></Accordion></CardContent></Card>}
-      {operationResult && <Card sx={cardSx}><CardContent><Alert severity={operationResult.severity}><Typography fontWeight={700}>{operationResult.title}</Typography>{operationResult.error}</Alert>{operationResult.payload && <Accordion disableGutters sx={{ mt: 1.2 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>技术详情</Typography></AccordionSummary><AccordionDetails><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>{[["写入 Word", operationResult.payload.result.words_written], ["完整回读", `${operationResult.payload.result.bytes_read_back} B`], ["差异字节", operationResult.payload.result.comparison.differing_bytes], ["目标 SHA-256", operationResult.payload.result.comparison.target_sha256], ["回读 SHA-256", operationResult.payload.result.comparison.readback_sha256], ["SII 结构", operationResult.payload.result.sii_valid ? "通过" : "失败"], ["XML 语义", operationResult.payload.result.semantic_valid ? "通过" : "失败"], ["RES 序列", operationResult.payload.result.reset_sequence == null ? "未执行" : operationResult.payload.result.reset_sequence.every(Boolean) ? "三帧成功" : "未完成"], ["重新发现", operationResult.payload.result.rediscovered == null ? "未执行" : operationResult.payload.result.rediscovered ? "成功" : "失败"], ["重新加载复核", operationResult.payload.result.reload_verified == null ? "未执行" : operationResult.payload.result.reload_verified ? "成功" : "失败"]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("SHA") ? "mono" : ""} noWrap title={String(value)}>{String(value)}</Typography></Box>)}</Box></AccordionDetails></Accordion>}</CardContent></Card>}
+      {operationResult && <Card sx={cardSx}><CardContent><Alert severity={operationResult.severity}><Typography fontWeight={700}>{operationResult.title}</Typography>{operationResult.error}</Alert>{operationResult.payload && <Accordion disableGutters sx={{ mt: 1.2 }}><AccordionSummary expandIcon={<ExpandMoreRounded />}><Typography fontWeight={700}>技术详情</Typography></AccordionSummary><AccordionDetails><Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>{[["写入 Word", operationResult.payload.result.words_written], ["完整回读", `${operationResult.payload.result.bytes_read_back} B`], ["差异字节", operationResult.payload.result.comparison.differing_bytes], ["首个差异字节地址", operationResult.payload.result.comparison.first_difference == null ? "无" : hex(operationResult.payload.result.comparison.first_difference, 4)], ["目标 SHA-256", operationResult.payload.result.comparison.target_sha256], ["回读 SHA-256", operationResult.payload.result.comparison.readback_sha256], ["SII 结构（辅助信息）", operationResult.payload.result.sii_valid ? "可解析" : "未解析"], ["XML 语义（辅助信息）", operationResult.payload.result.semantic_valid == null ? "不适用" : operationResult.payload.result.semantic_valid ? "可解析" : "与 XML 描述不同"], ["RES 序列", operationResult.payload.result.reset_sequence == null ? "未执行" : operationResult.payload.result.reset_sequence.every(Boolean) ? "三帧成功" : "未完成"], ["重新发现", operationResult.payload.result.rediscovered == null ? "未执行" : operationResult.payload.result.rediscovered ? "成功" : "失败"], ["重新加载复核", operationResult.payload.result.reload_verified == null ? "未执行" : operationResult.payload.result.reload_verified ? "成功" : "失败"]].map(([label, value]) => <Box key={String(label)}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography className={String(label).includes("SHA") ? "mono" : ""} noWrap title={String(value)}>{String(value)}</Typography></Box>)}</Box></AccordionDetails></Accordion>}</CardContent></Card>}
     </Stack>}</>;
 }
 
@@ -990,14 +1040,12 @@ export default function App() {
         const next = event.data as OperationProgress;
         const fraction = next.total > 0 ? Math.min(1, next.completed / next.total) : 0;
         const ranges: Record<string, [number, number]> = {
-          "read-current": [0, 20], "write-verify": [20, 65], "stability-wait": [65, 75],
-          "full-verify": [75, 95], reset: [95, 97], "reload-verify": [97, 100],
+          "write-verify": [0, 75], "full-verify": [75, 95], reset: [95, 97], "reload-verify": [97, 99],
         };
         const range = ranges[next.stage];
         const calculated = Math.round(range ? range[0] + (range[1] - range[0]) * fraction : fraction * 100);
         const labels: Record<string, string> = {
-          read: "完整读取", "backup-read": "读取并保存 BIN", "read-current": "读取当前 EEPROM",
-          "write-verify": "写入 EEPROM", "stability-wait": "等待 EEPROM 稳定",
+          read: "完整读取", "backup-read": "读取并保存 BIN", "write-verify": "写入 EEPROM",
           "full-verify": "完整回读校验", reset: "复位并重新发现", "reload-verify": "复位后重新加载复核",
         };
         setProgress((previous) => {
@@ -1261,13 +1309,13 @@ export default function App() {
         {settingsTab === 0 ? <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>AL 状态码语言</Typography><Typography variant="body2" color="text.secondary">切换概览页 AL 状态名称、说明与排查建议。</Typography></Box><FormControl size="small" sx={{ width: 150 }}><InputLabel>Language</InputLabel><Select label="Language" value={alLanguage} onChange={(event) => { const value = event.target.value as AlStatusLanguage; setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }}><MenuItem value="zh">中文</MenuItem><MenuItem value="en">English</MenuItem></Select></FormControl></Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>自动检查更新</Typography><Typography variant="body2" color="text.secondary">开启后发现新版本会显示更新弹窗；关闭后启动时仅在右下角短暂提示，仍可在“关于”页面手动检查。</Typography></Box><Switch checked={autoCheckUpdates} onChange={(event) => { const enabled = event.target.checked; setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} /></Box>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>EEPROM 写入后复位 ESC</Typography><Typography variant="body2" color="text.secondary">用于 XML 烧录和 BIN 恢复；关闭后仍会完整回读校验，但不执行 ESC RES 复位、重新发现和重新加载复核。</Typography></Box><Switch checked={eepromAutoReset} disabled={eepromExclusive} onChange={(event) => setEepromAutoReset(saveEepromAutoReset(event.target.checked))} /></Box>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>EEPROM 写入后复位 ESC</Typography><Typography variant="body2" color="text.secondary">用于 XML/BIN 烧录，默认关闭；关闭后仍会完整回读校验，但不执行 ESC RES 复位、重新发现和重新加载复核。</Typography></Box><Switch checked={eepromAutoReset} disabled={eepromExclusive} onChange={(event) => setEepromAutoReset(saveEepromAutoReset(event.target.checked))} /></Box>
         </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#F8FAFF" }}>
             <Box component="img" src={brandIconUrl} alt="BenchCAT" sx={{ width: 72, height: 72, borderRadius: 1.5, display: "block", flexShrink: 0 }} />
             <Box sx={{ minWidth: 0, flex: 1 }}><Stack direction="row" alignItems="center" gap={1}><Typography variant="h6">BenchCAT</Typography><Chip size="small" variant="outlined" label={`v${packageInfo.version}`} /></Stack><Typography variant="body2" color="text.secondary">面向 Windows 的 EtherCAT 从站调试与诊断工作台</Typography></Box>
           </Box>
-          <Typography variant="body2" color="text.secondary">聚焦从站概览、ESC 标准寄存器诊断与 EEPROM 安全读取、备份、烧录和恢复。硬件通信由独立 Python Bridge 与 Worker 串行执行。</Typography>
+          <Typography variant="body2" color="text.secondary">聚焦从站概览、ESC 标准寄存器诊断与 EEPROM 原始读取、BIN 文件导出及 XML/BIN 烧录。硬件通信由独立 Python Bridge 与 Worker 串行执行。</Typography>
           <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1.2 }}>
             {[["版本", packageInfo.version], ["通信核心", "pySOEM 1.1.13"], ["许可证", "PolyForm NC 1.0"]].map(([label, value]) => <Box key={label} sx={{ p: 1.4, border: 1, borderColor: "divider", borderRadius: 1 }}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography variant="body2" fontWeight={700} sx={{ mt: 0.3 }}>{value}</Typography></Box>)}
           </Box>

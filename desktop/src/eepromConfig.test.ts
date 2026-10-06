@@ -29,9 +29,14 @@ describe("EEPROM ConfigData helpers", () => {
     expect(pdiMeaning(0xFF)).toBe("含义未收录");
   });
 
-  it("normalizes compact hex and rejects non-ten-byte input", () => {
+  // Keep extended ESC bytes visible while rejecting incomplete or oversized input.
+  it("normalizes complete configuration bytes up to the fourteen-byte ESC area", () => {
     expect(normalizeConfigData("8d0e03440a0000000000").formatted).toBe("8D 0E 03 44 0A 00 00 00 00 00");
-    expect(normalizeConfigData("05 0E").error).toContain("10 byte");
+    expect(normalizeConfigData("890e80cc88130000000000800000").formatted).toBe("89 0E 80 CC 88 13 00 00 00 00 00 80 00 00");
+    expect(decodeConfigData("890e80cc88130000000000800000")?.pdiCode).toBe(0x89);
+    expect(normalizeConfigData("050e0344102700").bytes).toHaveLength(7);
+    expect(normalizeConfigData("05 0").error).toContain("两个");
+    expect(normalizeConfigData("00".repeat(15)).error).toContain("1–14 byte");
   });
 
   it("keeps the effective ConfigData in recent flash history", () => {
@@ -49,8 +54,8 @@ describe("EEPROM ConfigData helpers", () => {
     expect(JSON.parse(stored)[0].path).toBe(entry.path);
   });
 
-  it("keeps at most twenty recent flash records", () => {
-    const entries = Array.from({ length: 21 }, (_, index): FlashHistoryEntry => ({
+  it("keeps at most twenty-five recent flash records", () => {
+    const entries = Array.from({ length: 26 }, (_, index): FlashHistoryEntry => ({
       path: `C:\\device-${index}.xml`, documentSha256: String(index), ordinal: 0, deviceName: `Device ${index}`,
       vendorId: 1, productCode: index, revision: 1, byteSize: 2048,
       originalConfigData: "05 0E 03 44 0A 00 00 00 00 00",
@@ -58,8 +63,8 @@ describe("EEPROM ConfigData helpers", () => {
       flashedAt: "2026-09-02T00:00:00Z", slaveKey: `slave-${index}`,
     }));
     const storage = { getItem: () => JSON.stringify(entries) };
-    expect(loadFlashHistory(storage)).toHaveLength(20);
-    expect(loadFlashHistory(storage).at(-1)?.path).toBe("C:\\device-19.xml");
+    expect(loadFlashHistory(storage)).toHaveLength(25);
+    expect(loadFlashHistory(storage).at(-1)?.path).toBe("C:\\device-24.xml");
   });
 
   it("persists fixed entries, removed entries, and the selected tab", () => {
@@ -79,13 +84,14 @@ describe("EEPROM ConfigData helpers", () => {
     expect(loadQuickFlashTab(storage)).toBe(1);
   });
 
-  it("defaults EEPROM auto reset to enabled and persists an explicit choice", () => {
+  it("defaults EEPROM auto reset to disabled after upgrading and persists an explicit choice", () => {
     const values = new Map<string, string>();
     const storage = {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => { values.set(key, value); },
     };
-    expect(loadEepromAutoReset(storage)).toBe(true);
+    values.set("benchcat.eeprom-auto-reset-v1", "true");
+    expect(loadEepromAutoReset(storage)).toBe(false);
     expect(saveEepromAutoReset(false, storage)).toBe(false);
     expect(loadEepromAutoReset(storage)).toBe(false);
     expect(saveEepromAutoReset(true, storage)).toBe(true);
