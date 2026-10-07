@@ -1422,18 +1422,25 @@ async fn bridge_request(
 }
 
 #[tauri::command]
+// Quote the selected path separately from Explorer's switch to preserve spaces and commas.
 fn reveal_path(path: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
+    let target = std::path::absolute(&path).map_err(|e| format!("无法解析路径：{e}"))?;
     if !target.exists() {
         return Err(format!("路径不存在：{path}"));
     }
-    let arg = if target.is_file() {
-        format!("/select,{}", target.display())
+    let mut command = Command::new("explorer.exe");
+    if target.is_file() {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.raw_arg(format!("/select,\"{}\"", target.display()));
+        }
+        #[cfg(not(windows))]
+        command.arg(format!("/select,{}", target.display()));
     } else {
-        target.display().to_string()
-    };
-    Command::new("explorer.exe")
-        .arg(arg)
+        command.arg(&target);
+    }
+    command
         .spawn()
         .map_err(|e| format!("无法打开资源管理器：{e}"))?;
     Ok(())

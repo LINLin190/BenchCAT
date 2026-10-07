@@ -76,3 +76,29 @@ def test_web_event_writer_publishes_snapshot_generation() -> None:
     assert event["host_generation"] == web_bridge.HOST_GENERATION
     assert event["data"]["host_generation"] == web_bridge.HOST_GENERATION
     assert event["session_id"] == 3
+
+
+# File selection quotes only the path so Explorer preserves spaces, commas, and Unicode.
+def test_reveal_export_uses_absolute_quoted_file_argument(monkeypatch, tmp_path):
+    if web_bridge.os.name != "nt":
+        pytest.skip("Windows Explorer command")
+    source = tmp_path / "BIN 输出, Motor" / "Slave 1 (CAN MOTOR).bin"
+    source.parent.mkdir()
+    source.write_bytes(b"EEPROM")
+    commands = []
+    monkeypatch.setattr(web_bridge.subprocess, "Popen", commands.append)
+    monkeypatch.chdir(tmp_path)
+    web_bridge._reveal_path(source.relative_to(tmp_path))
+    assert commands == [f'explorer.exe /select,"{source.resolve()}"']
+    commands.clear()
+    web_bridge._reveal_path(source.parent)
+    assert commands == [["explorer.exe", str(source.parent.resolve())]]
+
+
+# Missing exports report an error instead of opening an unrelated default folder.
+def test_reveal_missing_export_does_not_open_explorer(monkeypatch, tmp_path):
+    commands = []
+    monkeypatch.setattr(web_bridge.subprocess, "Popen", commands.append)
+    with pytest.raises(FileNotFoundError):
+        web_bridge._reveal_path(tmp_path / "missing.bin")
+    assert commands == []

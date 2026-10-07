@@ -760,6 +760,8 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
     if (!slave || invalidReadLength || readLengthRequired) return;
     const directory = await pickDirectory();
     if (!directory) return;
+    // Clear the previous export before attempting another destination.
+    setBackupPath("");
     const value = await operation(() => bridgeRequest<{ binary_path: string }>("eeprom_backup", {
       position: slave.position,
       directory,
@@ -841,7 +843,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
         <Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={() => void flash()}>烧录 EEPROM</Button></span></Tooltip>
       </Stack>
       {activeProgress && <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 1 }}><Typography variant="caption" sx={{ minWidth: 120 }}>{progress.stage}</Typography><LinearProgress variant="determinate" value={progress.percent} sx={{ flex: 1, height: 5, borderRadius: 4 }} /><Typography variant="caption" className="mono">{progress.percent}%</Typography><Typography variant="caption" color="text.secondary" noWrap title={progress.detail} sx={{ maxWidth: "45%" }}>{progress.detail}</Typography>{progress.cancellable !== false && <Button size="small" onClick={() => void run(() => bridgeRequest("cancel"))}>取消</Button>}</Stack>}
-      {!operationInProgress && backupPath && <Button size="small" sx={{ mt: 0.75 }} onClick={() => revealPath(backupPath)}>打开导出位置</Button>}
+      {!operationInProgress && backupPath && <Button size="small" sx={{ mt: 0.75 }} title={backupPath} onClick={() => void run(() => revealPath(backupPath))}>打开导出位置</Button>}
       {!operationInProgress && operationResult && <Alert severity={operationResult.severity} sx={{ mt: 1, py: 0 }} action={<Button size="small" color="inherit" onClick={() => setDetailsOpen(true)}>详情</Button>}>{operationResult.title}{operationResult.error ? `：${operationResult.error}` : ""}</Alert>}
     </Box>
     <EepromDataView read={readResult} targetId={flashTarget?.target_id} fullRead={fullSiiRead} />

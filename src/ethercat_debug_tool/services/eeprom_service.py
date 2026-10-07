@@ -185,6 +185,8 @@ class EepromService:
             progress_stage="backup-read",
         )
         sha256 = hashlib.sha256(raw).hexdigest()
+        # Return an absolute location so opening exports never depends on a later working directory.
+        directory = directory.resolve()
         directory.mkdir(parents=True, exist_ok=True)
         device_name = slave.product_model or slave.name or "Unknown"
         device_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", device_name).strip() or "Unknown"

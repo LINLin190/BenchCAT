@@ -284,14 +284,17 @@ def _open_register_manual(filename: str) -> None:
     os.startfile(path)
 
 
+# Explorer requires the switch outside the quoted filename, including spaces and commas.
 def _reveal_path(path: Path) -> None:
     target = path.resolve()
     if not target.exists():
         raise FileNotFoundError(f"路径不存在：{target}")
     if os.name != "nt":
         raise RuntimeError("打开文件位置目前仅支持 Windows")
-    argument = f"/select,{target}" if target.is_file() else str(target)
-    subprocess.Popen(["explorer.exe", argument])
+    if target.is_file():
+        subprocess.Popen(f'explorer.exe /select,"{target}"')
+    else:
+        subprocess.Popen(["explorer.exe", str(target)])
 
 
 def main() -> int:

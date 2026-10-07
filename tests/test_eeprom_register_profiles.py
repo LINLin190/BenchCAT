@@ -1,4 +1,5 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -335,14 +336,18 @@ def test_corrupt_sii_can_still_be_backed_up_as_raw_bin(tmp_path) -> None:
         backend.disconnect()
 
 
-def test_backups_do_not_overwrite_same_second(tmp_path) -> None:
+def test_backups_do_not_overwrite_same_second(tmp_path, monkeypatch) -> None:
     backend = MockBackend()
     backend.connect("demo0")
     try:
         slave = backend.scan()[0]
         service = EepromService(backend)
-        first = service.backup(1, tmp_path, slave)
-        second = service.backup(1, tmp_path, slave)
+        # A relative destination must still return the exact absolute exported filename.
+        monkeypatch.chdir(tmp_path)
+        first = service.backup(1, Path("BIN 输出, Motor"), slave)
+        second = service.backup(1, tmp_path / "BIN 输出, Motor", slave)
+        assert first.binary_path.is_absolute()
+        assert first.binary_path.parent == tmp_path / "BIN 输出, Motor"
         assert first.binary_path != second.binary_path
         assert first.binary_path.read_bytes() == second.binary_path.read_bytes()
     finally:
