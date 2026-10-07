@@ -9,7 +9,7 @@ from ethercat_debug_tool.models import BackendMode
 
 def test_each_profile_has_its_investigated_register_set_and_domestic_isomorphic() -> None:
     registry = ProfileRegistry()
-    expected_counts = {"ET1100": 2267, "LAN9252": 1245, "LAN9253": 2353}
+    expected_counts = {"ET1100": 2298, "LAN9252": 1276, "LAN9253": 2384}
     for chip, expected in expected_counts.items():
         assert len(registry.catalog(chip)) == expected
 
@@ -124,7 +124,7 @@ def test_bridge_can_use_a_manually_selected_register_profile() -> None:
         runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
         catalog = runtime.dispatch("register_catalog", {"position": 1, "profile": "LAN9252"})
         product_id = next(item for item in catalog if item["address_space"] == "esc_core" and item["address"] == 0x0E00)
-        assert len(catalog) == 1245
+        assert len(catalog) == 1276
         assert product_id["name"] == "Product Id Register"
         assert "fields" not in product_id
         detail = runtime.dispatch(
@@ -160,8 +160,8 @@ def test_lan_catalogs_do_not_wait_for_hardware_command_lock() -> None:
         lan9252 = runtime.dispatch("register_catalog", {"position": 1, "profile": "LAN9252"})
         lan9253 = runtime.dispatch("register_catalog", {"position": 1, "profile": "LAN9253"})
         assert time.perf_counter() - started < 0.5
-        assert len(lan9252) == 1245
-        assert len(lan9253) == 2353
+        assert len(lan9252) == 1276
+        assert len(lan9253) == 2384
     finally:
         release.set()
         holder.join(timeout=1)

@@ -52,6 +52,11 @@ interface WriteResult { readback: string | null; fpwr_wkc: number }
 interface RawWriteResult { write_wkc: number | null; readback: RegisterValue | null; write_error: string | null; read_error: string | null }
 type RawFormat = "hex" | "decimal";
 
+/** Add a thin visual gap between hex byte pairs without changing numeric inputs. */
+function spaceHexValue(value: string): string {
+  return value.startsWith("0x") ? `0x${value.slice(2).replace(/(..)(?=.)/g, "$1\u2009")}` : value;
+}
+
 /** Raw ranges remain whole unsigned integers even beyond eight bytes. */
 function formatRawValue(data: string, format: RawFormat): string {
   const value = registerNumber(data);
@@ -91,9 +96,9 @@ function ecatAccessible(definition: RegisterDefinition): boolean {
   return definition.direct_read_allowed === true || definition.direct_write_allowed === true;
 }
 
-/** A PRAM overview is a navigation row and never a device transaction. */
-function isPramOverview(definition: RegisterDefinition): boolean {
-  return definition.address_space === "process_ram_overview";
+/** RAM overviews are navigation rows and never device transactions. */
+function isMemoryOverview(definition: RegisterDefinition): boolean {
+  return definition.address_space === "process_ram_overview" || definition.address_space === "user_ram_overview";
 }
 
 /** Explain the missing direct ECAT path without implying that indirect access is impossible. */
@@ -106,7 +111,7 @@ function unavailableReason(definition: RegisterDefinition): string {
 
 /** Manual acquisition policy is distinct from event acknowledgement and buffer access. */
 function readDescription(definition: RegisterDefinition): string {
-  if (isPramOverview(definition)) return "进入 PRAM 分类";
+  if (isMemoryOverview(definition)) return `进入 ${groupLabels[definition.group] ?? definition.group} 分类`;
   if (!ecatAccessible(definition)) return unavailableReason(definition);
   if (!requiresManualRead(definition)) return "";
   if (definition.address_space === "user_ram") return "此区域不自动刷新。";
@@ -218,20 +223,20 @@ const RegisterTableRow = memo(function RegisterTableRow({ definition, index, val
   return <TableRow key={key} data-register-key={key} data-register-index={index} aria-rowindex={index + 2} hover selected={selected} tabIndex={writing ? -1 : 0}
     onClick={() => onSelect(definition)} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") onSelect(definition); }}
     sx={{ cursor: "pointer", height: 36, "&:hover .register-favorite, &:focus-within .register-favorite": { visibility: "visible" }, "&.Mui-selected": { bgcolor: "#EDF2FF" } }}>
-    <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650, whiteSpace: "pre-line", lineHeight: "14px" }}>{isPramOverview(definition) ? definition.address_text?.replace("-", "-\n") : hex(definition.address)}</TableCell>
+    <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650, whiteSpace: "pre-line", lineHeight: "14px" }}>{isMemoryOverview(definition) ? definition.address_text?.replace("-", "-\n") : hex(definition.address)}</TableCell>
     {/* Show bilingual register names only after a deliberate hover. */}
     <TableCell sx={{ overflow: "hidden" }}><Tooltip title={<Stack spacing={0.25}><span>{name}</span>{name !== (definition.official_name ?? definition.name) && <span>{definition.official_name ?? definition.name}</span>}</Stack>}><Typography fontSize={12} fontWeight={400} noWrap>{name}</Typography></Tooltip></TableCell>
-    <TableCell><Tooltip title={error || readHint(definition) || (monitor && change && value ? `${formatRegisterValue(change.previous, format)} → ${formatRegisterValue(value, format)}` : value ?? "")}>
+    <TableCell><Tooltip title={error || readHint(definition) || (monitor && change && value ? `${spaceHexValue(formatRegisterValue(change.previous, format))} → ${spaceHexValue(formatRegisterValue(value, format))}` : value ?? "")}>
       <Typography className="mono" fontSize={12} color={error ? "error.main" : "text.primary"} noWrap>
-        {isPramOverview(definition) ? "进入 PRAM 分类" : !ecatAccessible(definition) ? "ECAT不可访问" : value ? formatRegisterValue(value, format) : error ? "读取失败" : definition.is_reserved ? "保留地址" : definition.access === "WO" ? "只写" : requiresManualRead(definition) ? "需手动读取" : definition.automatic_read_allowed === false ? "不适用" : reading ? "读取中…" : "未读取"}
+        {isMemoryOverview(definition) ? readDescription(definition) : !ecatAccessible(definition) ? "ECAT不可访问" : value ? spaceHexValue(formatRegisterValue(value, format)) : error ? "读取失败" : definition.is_reserved ? "保留地址" : definition.access === "WO" ? "只写" : requiresManualRead(definition) ? "需手动读取" : definition.automatic_read_allowed === false ? "不适用" : reading ? "读取中…" : "未读取"}
         {value && meaning && <Box component="span" sx={{ color: "text.secondary", ml: 0.75, fontFamily: "inherit", fontSize: 11 }}>{meaning}</Box>}
         {value && error && <Box component="span" sx={{ color: "error.main", ml: 0.75, fontSize: 11 }}>旧值 · 读取失败</Box>}
         {monitor && change && <Box component="span" sx={{ color: "warning.main", ml: 0.75, fontSize: 11 }}>变化</Box>}
       </Typography>
     </Tooltip></TableCell>
-    <TableCell><Typography fontSize={11} color="text.secondary">{isPramOverview(definition) ? "—" : <RegisterAccess access={definition.access} />}</Typography></TableCell>
-    <TableCell><Typography fontSize={11} color="text.secondary">{isPramOverview(definition) ? "—" : `${registerWidth(definition)} B`}</Typography></TableCell>
-    <TableCell sx={{ px: 0.25 }}>{!isPramOverview(definition) && <IconButton size="small" className="register-favorite" aria-label={monitor ? `移除监视 ${registerLabel(definition.name)}` : `收藏 ${registerLabel(definition.name)}`}
+    <TableCell><Typography fontSize={11} color="text.secondary">{isMemoryOverview(definition) ? "—" : <RegisterAccess access={definition.access} />}</Typography></TableCell>
+    <TableCell><Typography fontSize={11} color="text.secondary">{isMemoryOverview(definition) ? "—" : `${registerWidth(definition)} B`}</Typography></TableCell>
+    <TableCell sx={{ px: 0.25 }}>{!isMemoryOverview(definition) && <IconButton size="small" className="register-favorite" aria-label={monitor ? `移除监视 ${registerLabel(definition.name)}` : `收藏 ${registerLabel(definition.name)}`}
       sx={{ p: 0.5, visibility: monitor || favorite ? "visible" : "hidden" }} onClick={(event) => {
         event.stopPropagation();
         onFavorite(definition, monitor, favorite);
@@ -487,25 +492,32 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     const available = new Set(catalog.filter((item) => ecatAccessible(item) || referenceGroups.includes(functionGroup(item))).map(functionGroup));
     return [...available].filter((item) => !referenceGroups.includes(item)).concat(referenceGroups.filter((item) => available.has(item)));
   }, [catalog]);
-  // Collapse PRAM only in the all-functions view; its category retains actual memory windows.
+  // Collapse RAM in the all-functions view; each category retains its individual read windows.
   const listCatalog = useMemo(() => {
     if (view !== "all" || group) return catalog;
-    const pram = catalog.find((item) => item.address_space === "process_ram");
-    if (!pram) return catalog;
-    const overview: RegisterDefinition = {
-      ...pram, definition_id: `${registerProfile}|process_ram_overview`, address_space: "process_ram_overview",
-      address: 0x1000, address_text: "0x1000-0x1FFFF", width: 0x1f000, width_bits: 0xf8000,
-      name: "PRAM", official_name: "Process Data RAM", description: "进入 PRAM 分类",
-      direct_read_allowed: false, direct_write_allowed: false, automatic_read_allowed: false,
-    };
-    return [...catalog.filter((item) => item.address_space !== "process_ram"), overview];
+    const memorySpaces = ["user_ram", "process_ram"];
+    const overviews = memorySpaces.flatMap((space): RegisterDefinition[] => {
+      const windows = catalog.filter((item) => item.address_space === space);
+      if (!windows.length) return [];
+      const first = windows[0], processRam = space === "process_ram";
+      const start = processRam ? 0x1000 : first.address;
+      const end = processRam ? 0x1FFF : Math.max(...windows.map((item) => item.address + registerWidth(item) - 1));
+      const name = processRam ? "PRAM" : "用户 RAM";
+      return [{
+        ...first, definition_id: `${registerProfile}|${space}_overview`, address_space: `${space}_overview`,
+        address: start, address_text: `${hex(start)}-${hex(end)}`, width: end - start + 1, width_bits: (end - start + 1) * 8,
+        name, official_name: processRam ? "Process Data RAM" : "User RAM", description: `进入 ${name} 分类`,
+        direct_read_allowed: false, direct_write_allowed: false, automatic_read_allowed: false,
+      }];
+    });
+    return [...catalog.filter((item) => !memorySpaces.includes(item.address_space ?? "")), ...overviews];
   }, [catalog, view, group, registerProfile]);
   // Calculate relevance once per row, then keep matching addresses ahead of text.
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase();
     return listCatalog.flatMap((item) => {
       const itemGroup = functionGroup(item);
-      if (!ecatAccessible(item) && !isPramOverview(item) && !(referenceGroups.includes(group) && itemGroup === group)) return [];
+      if (!ecatAccessible(item) && !isMemoryOverview(item) && !(referenceGroups.includes(group) && itemGroup === group)) return [];
       if (!showReservedAddresses && item.is_reserved) return [];
       if (view === "favorites" && !favorites.has(definitionKey(item))) return [];
       if (!text && view === "common" && !isCommonRegister(item)) return [];
@@ -674,8 +686,8 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
   /** Selecting a register fetches missing values without requiring a second button. */
   const selectDefinition = async (definition: RegisterDefinition) => {
     if (writing || deviceOperationsBlocked) return;
-    // The overview opens the PRAM category without loading a definition or reading memory.
-    if (isPramOverview(definition)) {
+    // Open the RAM category without loading a definition or reading memory.
+    if (isMemoryOverview(definition)) {
       requestSequence.current += 1;
       setGroup(definition.group); setQuery(""); setSelected(undefined); setWriteContext(undefined);
       return;
@@ -915,8 +927,8 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     {writeMessage && <Typography fontSize={12} color="success.main">{writeMessage}</Typography>}
     <Disclosure title="写入细节"><Stack spacing={0.75}>
       {writeBytes && <>
-        <Typography variant="caption" className="mono">目标值：{formatRegisterValue(writeBytes.match(/../g)!.join(" "))}</Typography>
-        {writeContext?.access === "RW" && writeContext.current && <Typography variant="caption" className="mono">变化掩码：0x{(registerNumber(writeContext.current) ^ registerNumber(writeBytes.match(/../g)!.join(" "))).toString(16).toUpperCase()}</Typography>}
+        <Typography variant="caption" className="mono">目标值：{spaceHexValue(formatRegisterValue(writeBytes.match(/../g)!.join(" ")))}</Typography>
+        {writeContext?.access === "RW" && writeContext.current && <Typography variant="caption" className="mono">变化掩码：{spaceHexValue(`0x${(registerNumber(writeContext.current) ^ registerNumber(writeBytes.match(/../g)!.join(" "))).toString(16).toUpperCase()}`)}</Typography>}
         <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>发送字节：{writeBytes.match(/../g)!.join(" ")}</Typography>
       </>}
     </Stack></Disclosure>
@@ -989,7 +1001,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
             <Tooltip title={copied ? "已复制" : "复制值"}><span><IconButton size="small" aria-label="复制寄存器值" disabled={!selectedValue} onClick={() => void copyValue()}>{copied ? <CheckRounded className="register-copy-confirmed" sx={{ fontSize: 15 }} color="success" /> : <ContentCopyRounded sx={{ fontSize: 15 }} />}</IconButton></span></Tooltip>
             <Tooltip title="加入监视"><span><IconButton size="small" aria-label="加入监视" disabled={!canRead(selected) || detailLoading || Boolean(detailError)} onClick={() => pinned.some((item) => definitionKey(item) === selectedKey) ? setMonitor(true) : addWatch(selected)}><PlaylistAddRounded sx={{ fontSize: 18 }} /></IconButton></span></Tooltip>
           </Stack></Stack>
-          <Typography className="mono" fontSize={21} sx={{ overflowWrap: "anywhere", mt: 0.25 }}>{selectedValue ? formatRegisterValue(selectedValue.data, format) : detailLoading || reading ? "…" : "—"}</Typography>
+          <Typography className="mono" fontSize={21} sx={{ overflowWrap: "anywhere", mt: 0.25 }}>{selectedValue ? spaceHexValue(formatRegisterValue(selectedValue.data, format)) : detailLoading || reading ? "…" : "—"}</Typography>
           {registerWidth(selected) <= 8 && <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mt: 0.75 }}>
             <Typography fontSize={11} color="text.secondary" sx={{ lineHeight: 1.7, flexShrink: 0 }}>BIN</Typography>
             <Typography className="mono" fontSize={12} sx={{ lineHeight: 1.6, overflowWrap: "anywhere", minWidth: 0 }}>{selectedValue ? formatRegisterBinary(selectedValue.data, registerWidth(selected)) : "—"}</Typography>
@@ -1083,7 +1095,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
         </Stack>
         <Typography fontSize={11} color="text.secondary">{rawDefinition ? registerDisplayName(rawDefinition) : "ESC 直接读写"}</Typography>
         <Stack direction="row" spacing={1.25} alignItems="flex-start">
-          <TextField label="读取值" size="small" multiline maxRows={4} value={rawResult ? formatRawValue(rawResult.data, rawFormat) : ""} placeholder="—" InputLabelProps={{ shrink: true }}
+          <TextField label="读取值" size="small" multiline maxRows={4} value={rawResult ? spaceHexValue(formatRawValue(rawResult.data, rawFormat)) : ""} placeholder="—" InputLabelProps={{ shrink: true }}
             InputProps={{ readOnly: true }} inputProps={{ className: "mono", style: { fontSize: 13 } }} sx={{ flex: 1, "& .MuiInputBase-root": { bgcolor: "#F6F8FC" } }} />
           <Button variant="outlined" sx={{ minWidth: 76, height: 40, flexShrink: 0 }} disabled={controlsBlocked || !rawValid} onClick={() => void readRaw()}>{reading ? "读取中…" : "读取"}</Button>
         </Stack>

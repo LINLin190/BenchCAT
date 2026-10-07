@@ -264,8 +264,8 @@ class ProfileRegistry:
             regions = [item for item in catalog if item["record_kind"] == "memory_region"]
             catalog = [item for item in catalog if item["record_kind"] != "memory_region"]
             for region in regions:
-                # Process data uses four-byte reads; user RAM retains its existing windows.
-                window_size = 4 if region["address_space"] == "process_ram" else 256
+                # Both RAM categories expose four-byte windows for explicit reads.
+                window_size = 4
                 for offset in range(0, region["width"], window_size):
                     item = copy.deepcopy(region)
                     item["address"] = region["address"] + offset

@@ -118,14 +118,32 @@ def test_acknowledgement_register_can_be_read_only_by_explicit_request(runtime, 
 
 
 # Memory windows stay bounded and cannot alias local-only CSR offsets.
-def test_memory_window_reads_use_the_absolute_ethercat_range(runtime):
+def test_memory_window_reads_use_the_absolute_ethercat_range(runtime, monkeypatch):
     catalog = runtime.profiles.catalog("LAN9252")
     memory = [item for item in catalog if item["address_space"] == "process_ram"]
     assert [(item["address"], item["width"]) for item in memory] == [(address, 4) for address in range(0x1000, 0x2000, 4)]
-    definition = runtime.profiles.find("LAN9252", "user_ram", 0x0F80)
-    assert definition["width"] == 128 and definition["requires_manual_read"]
-    result = runtime.dispatch("register_read", {"position": 2, "profile": "LAN9252", "definition_id": definition["definition_id"], "address": 0x0F80, "size": 128})
-    assert result.address == 0x0F80 and len(result.data) == 128
+    user_ram = [item for item in catalog if item["address_space"] == "user_ram"]
+    assert [(item["address"], item["width"]) for item in user_ram] == [(address, 4) for address in range(0x0F80, 0x1000, 4)]
+    assert all(item["requires_manual_read"] and not item["automatic_read_allowed"] for item in user_ram)
+    calls = []
+    backend = runtime.worker._backend
+    original = backend.register_read_many
+
+    # Record actual datagram ranges so automatic snapshots cannot silently read RAM.
+    def read(position, requests, timeout):
+        calls.extend(requests)
+        return original(position, requests, timeout)
+
+    monkeypatch.setattr(backend, "register_read_many", read)
+    requests = [{"definition_id": item["definition_id"], "address": item["address"], "size": item["width"]} for item in user_ram]
+    automatic = runtime.dispatch("register_snapshot", {"request_id": "auto-user-ram", "position": 2, "profile": "LAN9252", "automatic": True, "requests": requests})
+    assert not calls and len(automatic["skipped"]) == len(user_ram)
+    manual = runtime.dispatch("register_snapshot", {"request_id": "manual-user-ram", "position": 2, "profile": "LAN9252", "requests": requests})
+    assert calls == [(address, 4) for address in range(0x0F80, 0x1000, 4)]
+    assert len(manual["values"]) == len(user_ram)
+    definition = user_ram[0]
+    with pytest.raises(ValueError, match="width"):
+        runtime.dispatch("register_read", {"position": 2, "profile": "LAN9252", "definition_id": definition["definition_id"], "address": 0x0F80, "size": 128})
 
 
 def test_one_register_failure_does_not_discard_successful_datagrams(runtime, monkeypatch):
