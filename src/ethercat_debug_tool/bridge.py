@@ -40,6 +40,7 @@ from .models import AccessSemantics, BackendMode, EtherCatState, OperationProgre
 from .services.eeprom_service import EepromService, compare_images
 from .services.register_service import RegisterService, RegisterWritePlan, ResetService
 from .sii.generator import SiiGenerationReport, SiiGenerator
+from .sii.layout import image_layout
 from .sii.parser import SiiParser, crc8, inspect_sii_header, validate_eeprom_range
 from .worker import EtherCatWorker
 from .worker.ethercat_worker import Priority
@@ -1365,6 +1366,7 @@ class BridgeRuntime:
                 "sha256": hashlib.sha256(raw).hexdigest(),
                 "read_at": datetime.now(UTC).isoformat(),
             }
+            response.update(image_layout(raw))
             try:
                 parsed = SiiParser().parse(raw)
             except Exception as exc:
@@ -1519,6 +1521,11 @@ class BridgeRuntime:
             )
             return {"target_id": target_id, "path": str(path), "size": len(raw),
                     "sha256": hashlib.sha256(raw).hexdigest()}
+        if method == "eeprom_target_data":
+            # Read the frozen target from memory without reopening its source or accessing hardware.
+            raw = self._get_asset(self.targets, str(params["target_id"]))[0]
+            return {"data": raw, "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                    **image_layout(raw)}
         if method == "sii_generate":
             document = self._get_asset(self.documents, str(params["document_id"]))
             ordinal = int(params["ordinal"])
