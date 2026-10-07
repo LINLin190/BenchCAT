@@ -157,6 +157,9 @@ class MockBackend:
             ]
         return list(self._slaves)
 
+    def probe_states(self) -> list[SlaveInfo]:
+        return self.read_states()
+
     def request_state(
         self, position: int | None, state: EtherCatState, timeout_us: int, *, process_data: bool = True
     ) -> list[SlaveInfo]:

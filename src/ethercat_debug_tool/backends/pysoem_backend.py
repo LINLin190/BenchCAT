@@ -773,6 +773,31 @@ class PysoemBackend:
             ]
         return list(self._slaves)
 
+    def probe_states(self) -> list[SlaveInfo]:
+        self._require_master()
+        if self._passive is None:
+            raise CommunicationError("被动状态探测通道不可用")
+        states = []
+        for info in self._slaves:
+            try:
+                # One read-only frame per slave; never initialize SOEM or retry a probe.
+                values = self._passive.read_many(
+                    0x01, 1 - info.position, [(0x0130, 2), (0x0134, 2)], 2000
+                )
+                if len(values) != 2 or any(wkc != 1 or len(data) != 2 for data, wkc in values):
+                    raise CommunicationError("状态探测无有效响应（WKC 或数据长度异常）")
+                raw = int.from_bytes(values[0][0], "little")
+                if (raw & 0x0F) not in {1, 2, 3, 4, 8}:
+                    raise CommunicationError(f"AL 状态无效：0x{raw:04X}")
+                states.append(replace(
+                    info, state=EtherCatState(raw & 0x0F), raw_state=raw,
+                    al_status=int.from_bytes(values[1][0], "little"), state_error=None,
+                ))
+            except (CommunicationError, PassiveDiscoveryError, OSError) as exc:
+                states.append(replace(info, state_error=f"从站 {info.position} 通信异常：{exc}"))
+        self._slaves = states
+        return list(states)
+
     def _read_passive_register(self, position: int, address: int, size: int) -> int:
         if self._passive is None:
             raise CommunicationError("被动状态控制通道不可用")

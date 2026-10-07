@@ -175,7 +175,11 @@ class MasterStateMachine:
             )
 
     def states_updated(
-        self, slaves: Iterable[SlaveInfo], *, expected_session: int | None = None
+        self,
+        slaves: Iterable[SlaveInfo],
+        *,
+        expected_session: int | None = None,
+        preserve_error: bool = False,
     ) -> bool:
         with self._lock:
             self._require_session(expected_session)
@@ -211,7 +215,7 @@ class MasterStateMachine:
                 phase=phase,
                 adapter=self._adapter,
                 slaves=values,
-                last_error=None,
+                last_error=self._last_error if preserve_error else None,
                 advance_session=topology_changed,
             )
             return topology_changed

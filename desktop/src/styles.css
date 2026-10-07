@@ -161,6 +161,7 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .ov-eeprom-pair > section { min-width: 0; }
 .ov-eeprom-pair > section + section { border-top: 1px solid #edf0f5; padding-top: 14px; }
 .ov-eeprom-details { display: grid; gap: 12px; padding-top: 10px; margin-top: 12px; border-top: 1px solid #edf0f5; }
+.ov-eeprom-details > section + section { border-top: 1px solid #edf0f5; padding-top: 14px; }
 
 .ov-runtime-actions .overview-clear-error { min-height: 28px; padding: 3px 7px; font-size: 11px; }
 .workbench-toolbar .MuiButton-root { height: 30px; min-width: 54px; padding: 3px 10px; font-size: 12px; }

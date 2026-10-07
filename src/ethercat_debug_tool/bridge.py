@@ -44,7 +44,7 @@ from .sii.generator import SiiGenerationReport, SiiGenerator
 from .sii.layout import image_layout
 from .sii.parser import SiiParser, crc8, inspect_sii_header, validate_eeprom_range
 from .worker import EtherCatWorker
-from .worker.ethercat_worker import Priority
+from .worker.ethercat_worker import Priority, WorkerState
 
 AUTO_SCAN_ADAPTER_TIMEOUT_S = 4.0
 MAX_STORED_ESI_DOCUMENTS = 64
@@ -374,6 +374,8 @@ class BridgeRuntime:
         self._stopped = threading.Event()
         self._events = threading.Thread(target=self._event_loop, name="Bridge events", daemon=True)
         self._events.start()
+        self._idle_monitor = threading.Thread(target=self._idle_monitor_loop, name="Idle bus monitor", daemon=True)
+        self._idle_monitor.start()
 
     @staticmethod
     def _new_worker(mode: BackendMode) -> EtherCatWorker:
@@ -487,6 +489,45 @@ class BridgeRuntime:
                     # A malformed event or a transient writer failure must not
                     # terminate the only thread forwarding Worker state changes.
                     continue
+
+    def _idle_monitor_loop(self) -> None:
+        while not self._stopped.wait(0.5):
+            try:
+                self._probe_idle_bus()
+            except Exception:
+                logger.exception("Idle bus monitor failed")
+
+    def _probe_idle_bus(self) -> None:
+        # Skip busy commands, including multi-frame EEPROM operations, rather than queue probes.
+        if not self._command_lock.acquire(blocking=False):
+            return
+        try:
+            before = self.master_state.snapshot()
+            if (self._stopped.is_set() or self._worker_stalled or self._eeprom_exclusive
+                    or self.worker.state is not WorkerState.READY or self.worker.queue_depth
+                    or not before.connected or before.cycle_running or not before.slaves):
+                return
+            try:
+                slaves = list(self._submit("probe_states", priority=Priority.WATCH))
+            except Exception as exc:
+                if self._stopped.is_set() or self._worker_stalled:
+                    return
+                self.master_state.state_read_failed(str(exc), expected_session=before.session_id)
+                slaves = list(self.master_state.snapshot().slaves)
+            if self._stopped.is_set() or tuple(slaves) == before.slaves:
+                return
+            self.master_state.states_updated(slaves, expected_session=before.session_id, preserve_error=True)
+            self._publish_snapshot()
+            previous_errors = {slave.position for slave in before.slaves if slave.state_error}
+            current_errors = {slave.position for slave in slaves if slave.state_error}
+            unavailable = sorted(current_errors - previous_errors)
+            restored = sorted(previous_errors - current_errors)
+            if unavailable or restored:
+                self.writer.event("slave_communication_changed", {
+                    "unavailable": unavailable, "restored": restored,
+                }, before.session_id)
+        finally:
+            self._command_lock.release()
 
     def _remember_asset(self, cache: dict[str, Any], key: str, value: Any, limit: int) -> None:
         with self._asset_lock:
@@ -1767,6 +1808,7 @@ class BridgeRuntime:
         self._stopped.set()
         with self._worker_lock:
             self.worker.shutdown()
+        self._idle_monitor.join(timeout=1)
 
 
 def _handle_request(

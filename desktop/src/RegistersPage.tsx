@@ -1010,9 +1010,9 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
           {readHint(selected) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.5 }}>{readHint(selected)}</Typography>}
         </Box>
         {errors[selectedKey] && <Alert severity="error" sx={{ fontSize: 12 }}>{errors[selectedKey]}</Alert>}
-        {writable && !rawOpen && renderEditor()}
-        {selected.address_space === "esc_core" && selected.address === 0x0040 && <Button size="small" color="error" variant="outlined" disabled={controlsBlocked} onClick={() => setResetConfirm(true)}>复位 EtherCAT 控制器</Button>}
         <Box>
+          {writable && !rawOpen && renderEditor()}
+          {selected.address_space === "esc_core" && selected.address === 0x0040 && <Button size="small" color="error" variant="outlined" disabled={controlsBlocked} onClick={() => setResetConfirm(true)}>复位 EtherCAT 控制器</Button>}
           <Disclosure key={`${selectedKey}-fields`} title="位字段解析" defaultExpanded={[0x0110, 0x0130, 0x0134, 0x0440].includes(selected.address)}><Stack spacing={1}>
             {Boolean(selected.field_variants?.length) && <TextField select size="small" label="字段适用条件" value={fieldVariant} onChange={(event) => setFieldVariant(event.target.value)}>
               <MenuItem value="">请选择实际 PDI 模式／操作</MenuItem>
