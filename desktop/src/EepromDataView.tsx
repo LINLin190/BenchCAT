@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Alert, Button, Card, Chip, CircularProgress, Stack, Typography } from "@mui/material";
+import { memo, useEffect, useState } from "react";
+import { Alert, Button, Card, CircularProgress, Stack, Typography } from "@mui/material";
 import { BridgeRequestError, bridgeRequest } from "./api";
 import { EepromHexView } from "./EepromHexView";
 import { type ImageSnapshot } from "./eepromViewModel";
@@ -7,7 +7,7 @@ import { type ImageSnapshot } from "./eepromViewModel";
 type ReadSnapshot = ImageSnapshot & { read_at: string; sii_valid: boolean; category_count?: number; sii_error?: string };
 
 // Keep target bytes attached to the frozen image without issuing another device read.
-export function EepromDataView({ read, targetId, fullRead }: { read?: ReadSnapshot; targetId?: string; fullRead: boolean }) {
+export const EepromDataView = memo(function EepromDataView({ read, targetId, fullRead }: { read?: ReadSnapshot; targetId?: string; fullRead: boolean }) {
   const [source, setSource] = useState<"read" | "target">("read");
   const [snapshot, setSnapshot] = useState<{ id: string; image?: ImageSnapshot; error?: string }>();
   useEffect(() => {
@@ -27,10 +27,11 @@ export function EepromDataView({ read, targetId, fullRead }: { read?: ReadSnapsh
 
   return <Card className={`eeprom-data${displayed?.data ? " eeprom-data-loaded" : ""}`} variant="outlined">
     <Stack direction="row" alignItems="center" gap={1} className="eeprom-data-heading">
-      <Typography fontWeight={750} sx={{ mr: 1 }}>Hex数据</Typography>
-      <Button size="small" variant={source === "read" ? "contained" : "text"} onClick={() => setSource("read")}>设备读取</Button>
-      <Button size="small" variant={source === "target" ? "contained" : "text"} disabled={!target} onClick={() => setSource("target")}>目标镜像</Button>
-      <Chip size="small" variant="outlined" label="只读" sx={{ ml: "auto" }} />
+      <Typography component="h2" fontSize={16} fontWeight={750} sx={{ flex: 1 }}>Hex 数据</Typography>
+      <Stack direction="row" className="eeprom-data-switch" role="group" aria-label="Hex 数据来源">
+        <Button size="small" color="inherit" aria-pressed={source === "read"} onClick={() => setSource("read")}>设备读取</Button>
+        <Button size="small" color="inherit" aria-pressed={source === "target"} disabled={!target} onClick={() => setSource("target")}>目标镜像</Button>
+      </Stack>
       {targetId && !target && !targetError && <CircularProgress size={14} />}
     </Stack>
     {displayed && <Stack className="eeprom-read-meta">
@@ -42,4 +43,4 @@ export function EepromDataView({ read, targetId, fullRead }: { read?: ReadSnapsh
     {/* Only target bytes receive difference colors; unread device bytes stay unclassified. */}
     <EepromHexView key={source} data={displayed?.data} comparisonData={source === "target" ? read?.data : undefined} />
   </Card>;
-}
+});

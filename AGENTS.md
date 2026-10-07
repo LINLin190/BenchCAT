@@ -15,6 +15,8 @@
 ## Verification Strategy
 
 - Avoid excessive review. Keep review focused on the requested changes and material risks; do not repeat or broaden it without a concrete reason.
+- Use Computer Use sparingly. Prefer source inspection and non-UI tools for routine checks; use UI automation only when a specific, material question requires it.
+- The user may complete some visual and interaction checks manually. Avoid exhaustive UI walkthroughs and repeated screenshots; leave suitable checks to the user.
 - Check UI layout and visual acceptance only at a window size of 1600×1200. Do not check other resolutions or responsive breakpoints.
 - The preferred startup window size is 1600×1200. If the available screen work area is smaller, automatically shrink the startup window and keep it within the visible area.
 - Do not run tests for ordinary changes.

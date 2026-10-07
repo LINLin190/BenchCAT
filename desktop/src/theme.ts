@@ -21,6 +21,8 @@ export const theme = createTheme({
     button: { textTransform: "none", fontWeight: 650, fontSize: "0.82rem" },
   },
   components: {
+    // Keep auxiliary controls quiet; main EEPROM actions and file selection opt into ripple.
+    MuiButtonBase: { defaultProps: { disableRipple: true }, styleOverrides: { root: { "&.Mui-focusVisible": { outline: "2px solid #365CCF", outlineOffset: 2 } } } },
     MuiButton: { defaultProps: { disableElevation: true }, styleOverrides: { root: { minHeight: 32, padding: "4px 10px", borderRadius: 6 } } },
     MuiCard: { styleOverrides: { root: { border: "1px solid #E2E6EF", boxShadow: "0 1px 5px rgba(23,32,51,.035)" } } },
     MuiCardContent: { styleOverrides: { root: { padding: 14, "&:last-child": { paddingBottom: 14 } } } },

@@ -169,10 +169,13 @@ export async function onBridgeExited(handler: (info: BridgeExitInfo) => void): P
   return () => { exited(); stalled(); };
 }
 
-export async function onFileDrop(handler: (paths: string[]) => void): Promise<UnlistenFn> {
+// Expose native drag presence without publishing high-frequency pointer movement.
+export async function onFileDrop(handler: (paths: string[]) => void, onHover?: (active: boolean) => void): Promise<UnlistenFn> {
   if (!isTauri) return () => undefined;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
   return getCurrentWindow().onDragDropEvent((event) => {
+    if (event.payload.type === "enter") onHover?.(event.payload.paths.some(path => /\.(xml|bin)$/i.test(path)));
+    if (event.payload.type === "leave" || event.payload.type === "drop") onHover?.(false);
     if (event.payload.type === "drop") handler(event.payload.paths);
   });
 }

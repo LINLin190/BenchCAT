@@ -496,10 +496,10 @@ function deviceConfigData(device?: EsiDevice): string {
 }
 
 /** Align current and target facts, and mark only known differing configuration bytes. */
-function EepromSummaryColumn({ title, tag, rows, config, compareConfig, placeholder, configInput, configAction }: {
+function EepromSummaryColumn({ title, tag, rows, config, compareConfig, placeholder, configInput, configAction, emptyState }: {
   title: string; tag?: string; rows: { label: string; value: ReactNode }[];
   config: string; compareConfig?: string; placeholder: string;
-  configInput?: ReactNode; configAction?: ReactNode;
+  configInput?: ReactNode; configAction?: ReactNode; emptyState?: ReactNode;
 }) {
   const parsed = normalizeConfigData(config);
   const comparison = normalizeConfigData(compareConfig ?? "");
@@ -508,7 +508,8 @@ function EepromSummaryColumn({ title, tag, rows, config, compareConfig, placehol
     <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.75, py: 1.25, bgcolor: "#F8F9FC", borderBottom: 1, borderColor: "divider" }}>
       <Typography fontWeight={750}>{title}</Typography>{tag && <Chip size="small" label={tag} variant="outlined" />}
     </Stack>
-    <Box sx={{ px: 1.75, py: 0.5 }}>{rows.map((row) => <Box key={row.label} className="eeprom-summary-row"><Typography variant="caption" color="text.secondary">{row.label}</Typography><Box className="eeprom-summary-value">{row.value}</Box></Box>)}</Box>
+    {/* An unloaded target replaces all placeholder facts and configuration bytes. */}
+    {emptyState ?? <><Box sx={{ px: 1.75, py: 0.5 }}>{rows.map((row) => <Box key={row.label} className="eeprom-summary-row"><Typography variant="caption" color="text.secondary">{row.label}</Typography><Box className="eeprom-summary-value">{row.value}</Box></Box>)}</Box>
     <Box className="eeprom-config-summary">
       <Typography variant="caption" color="text.secondary" fontWeight={550}>ConfigData · 前 14 字节</Typography>
       <Stack direction="row" gap={1} alignItems="flex-start" className="eeprom-config-row" sx={{ mt: 0.5 }}>
@@ -516,7 +517,7 @@ function EepromSummaryColumn({ title, tag, rows, config, compareConfig, placehol
         {configAction}
       </Stack>
       <Typography variant="caption" color="text.secondary" fontWeight={550} sx={{ display: "block", mt: 0.5, minHeight: 20 }}>{decoded ? `PDI ${hex(decoded.pdiCode, 2)} · ${decoded.pdiLabel}` : "PDI —"}</Typography>
-    </Box>
+    </Box></>}
   </Card>;
 }
 
@@ -551,6 +552,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaveError, setConfigSaveError] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [configurationChanged, setConfigurationChanged] = useState(false);
   // Resolve one explicit range for both reading and exporting; never silently fall back.
   const effectiveRange = readRange ?? (slave?.eeprom_capacity != null ? "device" : flashTarget ? "target" : "custom");
@@ -658,17 +660,23 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
     void loadFile(initialSelection.path, initialSelection.ordinal, initialSelection.configData);
   }, [initialSelection, loadFile, onInitialSelectionConsumed]);
   // XML and BIN use one picker and one programming button.
-  const selectFile = async () => {
+  const selectFile = useCallback(async () => {
     const path = await pickFile(["xml", "bin"]); if (path) await loadFile(path);
-  };
+  }, [loadFile]);
+  // Stable source actions keep the file list independent of progress updates.
+  const selectSource = useCallback((path: string, deviceOrdinal?: number) => { void loadFile(path, deviceOrdinal); }, [loadFile]);
+  const removeRecentSource = useCallback((path: string) => {
+    setRecentEsi(writeRecentEsi(loadRecentEsi().filter(item => !sameEepromSource({ path: item }, { path }))));
+  }, []);
   useEffect(() => {
+    setDragOver(false);
     if (!fileDropEnabled) return;
     let cancelled = false;
     let dispose: (() => void) | undefined;
     void onFileDrop((paths) => {
       const source = paths.find((path) => /\.(xml|bin)$/i.test(path));
       if (source && !operationInProgress && !configSaving && !deviceOperationsBlocked) void loadFile(source);
-    }).then((value) => { if (cancelled) value(); else dispose = value; });
+    }, hovering => setDragOver(hovering && !operationInProgress && !configSaving && !deviceOperationsBlocked)).then((value) => { if (cancelled) value(); else dispose = value; });
     return () => { cancelled = true; dispose?.(); };
   }, [fileDropEnabled, loadFile, operationInProgress, configSaving, deviceOperationsBlocked]);
   useEffect(() => {
@@ -778,21 +786,21 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
   };
 
   // Prefer a complete read snapshot; shorter reads cannot describe the configuration area.
-  const actualConfig = configurationChanged ? "" : readResult && readResult.size >= 14
-    ? readResult.data.trim().split(/\s+/).slice(0, 14).join(" ")
-    : slave?.eeprom_prefix?.trim().split(/\s+/).slice(0, 14).join(" ") ?? "";
+  const actualConfig = useMemo(() => configurationChanged ? "" : readResult && readResult.size >= 14
+    ? readResult.data.trim().split(/\s+/, 14).join(" ")
+    : slave?.eeprom_prefix?.trim().split(/\s+/, 14).join(" ") ?? "", [configurationChanged, readResult, slave?.eeprom_prefix]);
   const effectiveConfig = bin ? "" : configEditing ? configData : target?.effective_config_data ?? configData;
   const currentIdentity = readResult?.identity ?? slave?.identity;
   const identityKnown = Boolean(readResult?.identity || slave?.identity_valid !== false);
   const sourcePath = bin?.path ?? esi?.path;
   // Source shortcuts retain Device selection; the image still comes from the loaded XML/BIN.
-  const sourceEntry: FixedEsiEntry | undefined = sourcePath ? {
+  const sourceEntry = useMemo<FixedEsiEntry | undefined>(() => sourcePath ? {
     path: sourcePath, sha256: bin?.sha256 ?? esi?.sha256 ?? "", ordinal: bin ? -1 : ordinal,
     vendor_id: esi?.vendor_id ?? 0, vendor_name: esi?.vendor_name ?? "",
     device_name: currentDevice?.name ?? "", type_name: currentDevice ? esiDeviceDisplayName(currentDevice) : "",
     product_code: currentDevice?.product_code ?? 0, revision: currentDevice ? deviceRevision(currentDevice) : 0,
     byte_size: flashTarget?.size ?? currentDevice?.byte_size ?? 0, config_data: currentDevice ? deviceConfigData(currentDevice) : "",
-  } : undefined;
+  } : undefined, [sourcePath, bin, esi, ordinal, currentDevice, flashTarget?.size]);
   const readBlocker = deviceOperationsBlocked ? "软件正在更新" : operationInProgress ? "已有 EEPROM 操作正在执行"
     : status.cycle_running ? "请先停止周期通信" : !slave ? "请选择从站" : readLengthHint;
   const readDisabled = Boolean(readBlocker);
@@ -801,7 +809,7 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
   return <Box className="eeprom-workspace">
     {!slave && <PageTitle title="EEPROM" subtitle="" />}
     {!slave ? <Box sx={{ flex: 1 }}><EmptyState text="请先选择目标从站" /></Box> : <>
-      <EepromSources recent={recentEsi} current={sourceEntry} disabled={operationInProgress || configSaving || deviceOperationsBlocked} active={fileDropEnabled} onChoose={() => void selectFile()} onSelect={(path, deviceOrdinal) => void loadFile(path, deviceOrdinal)} onRemoveRecent={path => setRecentEsi(writeRecentEsi(loadRecentEsi().filter(item => !sameEepromSource({ path: item }, { path }))))} />
+      <EepromSources recent={recentEsi} current={sourceEntry} disabled={operationInProgress || configSaving || deviceOperationsBlocked} active={fileDropEnabled} dragOver={dragOver} onChoose={selectFile} onSelect={selectSource} onRemoveRecent={removeRecentSource} />
       <Box className="eeprom-content">
       <Box className="eeprom-top">
         <Box className="eeprom-comparison">
@@ -814,7 +822,8 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
               { label: "Revision", value: identityKnown && currentIdentity ? hex(currentIdentity.revision, 8) : "未知" },
               { label: "设备声明容量", value: slave.eeprom_capacity == null ? "未知" : `${slave.eeprom_capacity} B` },
             ]} />
-          <EepromSummaryColumn title="待写入目标" tag={bin ? "BIN" : esi ? "XML" : "未选择"}
+          <EepromSummaryColumn title="待写入目标" tag={bin ? "BIN" : esi ? "XML" : undefined}
+            emptyState={!esi && !bin ? <Stack spacing={0.75} alignItems="center" justifyContent="center" sx={{ flex: 1, minHeight: 100, p: 3, textAlign: "center" }}><Typography variant="body2" fontWeight={650} color="text.secondary">尚未选择 XML/BIN</Typography><Typography variant="body2" color="text.secondary">选择或拖入文件后，显示待写入信息。</Typography></Stack> : undefined}
             configInput={configEditing ? <TextField fullWidth size="small" value={configData} disabled={configSaving || operationInProgress || deviceOperationsBlocked} error={Boolean(configDataResult.error || configSaveError)} helperText={configSaveError || configDataResult.error || "保存会修改当前 XML Device 的 ConfigData"} onChange={(event) => { setConfigData(event.target.value.toUpperCase()); setConfigSaveError(""); }} onBlur={() => configDataResult.formatted && setConfigData(configDataResult.formatted)} inputProps={{ "aria-label": "XML ConfigData", className: "mono", spellCheck: false }} /> : undefined}
             configAction={esi && ordinal >= 0 ? <Button size="small" variant={configEditing ? "contained" : "text"} sx={{ flexShrink: 0 }} startIcon={configSaving ? <CircularProgress size={14} color="inherit" /> : configEditing ? undefined : <EditRounded />} disabled={configSaving || operationInProgress || deviceOperationsBlocked || (configEditing && Boolean(configDataResult.error))} onClick={() => { if (configEditing) void saveConfig(); else { generationRequestRef.current += 1; setConfigSaveError(""); setConfigEditing(true); } }}>{configEditing ? "保存" : "编辑"}</Button> : undefined}
             config={effectiveConfig} compareConfig={actualConfig} placeholder={bin ? "BIN 按原始字节写入，不编辑 ConfigData" : ordinal < 0 && esi ? "请选择 Device" : "选择 XML 后显示配置"}
@@ -834,13 +843,13 @@ function EepromPage({ slave, status, progress, setProgress, run, readResult, set
     {/* Reading actions precede the Hex panel; short workspaces scroll instead of clipping rows. */}
     <Box className="eeprom-action-bar">
       <Stack direction="row" alignItems="center" gap={1}>
-        <FormControl size="small" sx={{ width: 172, flexShrink: 0 }}><InputLabel>读取范围</InputLabel><Select label="读取范围" inputProps={{ "aria-label": "读取范围" }} value={effectiveRange} disabled={!slave || operationInProgress || deviceOperationsBlocked} onChange={(event) => setReadRange(event.target.value as "device" | "target" | "custom")}><MenuItem value="device">设备声明容量</MenuItem><MenuItem value="target">目标镜像长度</MenuItem><MenuItem value="custom">自定义长度</MenuItem></Select></FormControl>
+        <FormControl size="small" sx={{ width: 156, flexShrink: 0 }}><InputLabel>读取范围</InputLabel><Select label="读取范围" inputProps={{ "aria-label": "读取范围" }} MenuProps={{ slotProps: { paper: { sx: { "& .MuiMenuItem-root": { minHeight: 30, fontSize: 12 } } } } }} value={effectiveRange} disabled={!slave || operationInProgress || deviceOperationsBlocked} onChange={(event) => setReadRange(event.target.value as "device" | "target" | "custom")}><MenuItem value="device">设备声明容量</MenuItem><MenuItem value="target">目标镜像长度</MenuItem><MenuItem value="custom">自定义长度</MenuItem></Select></FormControl>
         {effectiveRange === "custom" ? <TextField label="字节数（偶数）" size="small" sx={{ width: 158, flexShrink: 0 }} value={readLength} disabled={!slave || operationInProgress || deviceOperationsBlocked} error={invalidReadLength} onChange={(event) => setReadLength(event.target.value)} inputProps={{ inputMode: "numeric" }} /> : <Typography variant="body2" className="mono" sx={{ minWidth: 78 }}>{capacity == null ? "长度未知" : `${capacity} B`}</Typography>}
-        <Tooltip title={readBlocker}><span><Button variant="outlined" size="small" disabled={readDisabled} onClick={() => void readFull()}>读取</Button></span></Tooltip>
-        <Tooltip title={readBlocker || "按所选范围重新读取并导出"}><span><Button variant="outlined" size="small" startIcon={<SaveAltRounded />} disabled={readDisabled} onClick={() => void exportBin()}>导出 BIN</Button></span></Tooltip>
+        <Tooltip title={readBlocker}><span><Button variant="outlined" size="small" disableRipple={false} disabled={readDisabled} onClick={() => void readFull()}>读取</Button></span></Tooltip>
+        <Tooltip title={readBlocker || "按所选范围重新读取并导出"}><span><Button variant="outlined" size="small" disableRipple={false} startIcon={<SaveAltRounded />} disabled={readDisabled} onClick={() => void exportBin()}>导出 BIN</Button></span></Tooltip>
         <Box sx={{ flex: 1 }} />
         <Stack component="label" direction="row" alignItems="center" sx={{ flexShrink: 0 }}><Switch size="small" checked={autoResetEsc} disabled={operationInProgress || deviceOperationsBlocked} onChange={(event) => onAutoResetChange(event.target.checked)} inputProps={{ "aria-label": "写入后复位 ESC" }} /><Typography variant="body2">写入后复位 ESC</Typography></Stack>
-        <Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" color="error" disabled={!canFlash} startIcon={<MemoryRounded />} onClick={() => void flash()}>烧录 EEPROM</Button></span></Tooltip>
+        <Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" disableRipple={false} disabled={!canFlash} startIcon={<MemoryRounded />} onClick={() => void flash()}>烧录 EEPROM</Button></span></Tooltip>
       </Stack>
       {activeProgress && <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 1 }}><Typography variant="caption" sx={{ minWidth: 120 }}>{progress.stage}</Typography><LinearProgress variant="determinate" value={progress.percent} sx={{ flex: 1, height: 5, borderRadius: 4 }} /><Typography variant="caption" className="mono">{progress.percent}%</Typography><Typography variant="caption" color="text.secondary" noWrap title={progress.detail} sx={{ maxWidth: "45%" }}>{progress.detail}</Typography>{progress.cancellable !== false && <Button size="small" onClick={() => void run(() => bridgeRequest("cancel"))}>取消</Button>}</Stack>}
       {!operationInProgress && backupPath && <Button size="small" sx={{ mt: 0.75 }} title={backupPath} onClick={() => void run(() => revealPath(backupPath))}>打开导出位置</Button>}

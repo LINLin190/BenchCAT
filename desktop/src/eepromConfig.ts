@@ -137,7 +137,22 @@ export function fixedEsiKey(entry: Pick<FixedEsiEntry, "path" | "ordinal">): str
 export interface EepromSourceRecord { path: string }
 
 // Windows paths identify list records; identical files at different paths stay separate.
-const sourcePathKey = (entry: EepromSourceRecord) => entry.path.replace(/\//g, "\\").toLowerCase();
+export const sourcePathKey = (entry: EepromSourceRecord) => entry.path.replace(/\//g, "\\").toLowerCase();
+
+// Index paths and duplicate filenames once instead of scanning every displayed row.
+export function eepromSourceIndex<T extends EepromSourceRecord>(entries: T[]) {
+  const byPath = new Map<string, T>();
+  const names = new Map<string, Set<string>>();
+  for (const entry of entries) {
+    const path = sourcePathKey(entry);
+    byPath.set(path, entry);
+    const name = path.split("\\").at(-1)!;
+    const paths = names.get(name) ?? new Set<string>();
+    paths.add(path);
+    names.set(name, paths);
+  }
+  return { byPath, duplicateNames: new Set([...names].filter(([, paths]) => paths.size > 1).map(([name]) => name)) };
+}
 
 // Device and configuration changes refresh the existing file record.
 export function sameEepromSource(a: EepromSourceRecord, b: EepromSourceRecord): boolean {
@@ -163,7 +178,8 @@ const sourceHiddenKeys = (entry: EepromSourceRecord & { ordinal?: number }) => [
 
 // Both XML lists use the same path deduplication and persistent hidden records.
 export function fixedEsiEntries(state: FixedEsiState, library: FixedEsiEntry[]): FixedEsiEntry[] {
-  return uniqueEepromSources([...state.favorites, ...library].filter(entry => !sourceHiddenKeys(entry).some(key => state.hidden.includes(key))));
+  const hidden = new Set(state.hidden);
+  return uniqueEepromSources([...state.favorites, ...library].filter(entry => !sourceHiddenKeys(entry).some(key => hidden.has(key))));
 }
 
 // Restore a shortcut explicitly without restoring other deleted records.

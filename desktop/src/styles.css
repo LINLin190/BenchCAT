@@ -11,6 +11,11 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .eeprom-content { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; overflow: auto; }
 .eeprom-source-bar { flex-shrink: 0; padding: 4px 12px; border: 1px solid #e2e6ef; border-radius: 8px; background: #fff; }
 .eeprom-source-bar .MuiChip-root { height: 23px; font-size: 11px; }
+/* Compact file actions preserve the filename as the primary content. */
+.eeprom-source-bar .MuiButton-root, .eeprom-source-panel .MuiButton-root { min-height: 28px; padding: 3px 8px; font-size: 11.5px; }
+.eeprom-source-bar .MuiButton-startIcon > *, .eeprom-source-panel .MuiButton-startIcon > * { font-size: 16px; }
+/* Drag feedback appears only while a supported file is over the native window. */
+.eeprom-source-drag-over { border-color: #9aaedb; background: #f6f8fd; }
 .eeprom-source-panel { width: 560px; height: 480px; max-width: calc(100vw - 32px); max-height: calc(100vh - 32px); display: flex; flex-direction: column; }
 .eeprom-source-panel > :not(.eeprom-source-list) { flex-shrink: 0; }
 .eeprom-source-list { flex: 1; min-height: 0; overflow: auto; padding: 6px; }
@@ -35,27 +40,45 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .eeprom-byte-changed { background: #fff0d5; color: #8a5005; font-weight: 700; }
 /* Reserve the scrollable byte viewport only after a read has returned data. */
 .eeprom-data { flex: 0 0 auto; display: flex; flex-direction: column; }
-.eeprom-data-loaded { flex: 1 0 520px; min-height: 520px; }
+.eeprom-data-loaded { flex: 1 0 600px; min-height: 600px; }
 .eeprom-data-heading { padding: 9px 14px; border-bottom: 1px solid #e2e6ef; flex-shrink: 0; }
+/* Source selection stays subordinate to the Hex heading. */
+.eeprom-data-switch { padding: 2px; gap: 2px; border: 1px solid #dce2eb; border-radius: 6px; background: #f1f3f7; }
+.eeprom-data-switch .MuiButton-root { min-height: 26px; padding: 2px 9px; font-size: 12px; font-weight: 550; color: #647087; background: #edf0f5; }
+.eeprom-data-switch .MuiButton-root:hover { background: #e5e9f0; }
+.eeprom-data-switch .MuiButton-root[aria-pressed="true"] { background: #dce2eb; color: #344258; font-weight: 650; }
 .eeprom-read-meta { padding: 7px 14px; background: #f8f9fc; flex-shrink: 0; }
 .eeprom-hex-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 16px; }
 .eeprom-hex-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .eeprom-hex-tools { padding: 12px 14px 8px; flex-shrink: 0; }
 /* Keep the Hex toolbar text compact without changing its controls or byte table. */
-.eeprom-hex-tools .MuiInputBase-root, .eeprom-hex-tools .MuiInputLabel-root { font-size: 12px; }
+.eeprom-hex-tools .MuiInputBase-root, .eeprom-hex-tools .MuiInputLabel-root { font-size: 11px; }
+.eeprom-hex-tools .MuiInputBase-root { height: 30px; }
+.eeprom-hex-tools .MuiInputBase-input { padding: 5px 10px; }
+.eeprom-hex-tools .MuiInputLabel-root:not(.MuiInputLabel-shrink) { transform: translate(10px, 7px) scale(1); }
 .eeprom-hex-tools .MuiButton-root { font-size: 11.5px; }
-.eeprom-hex-tools .eeprom-hex-jump { font-size: 10.5px; }
+.eeprom-hex-tools .eeprom-hex-jump { min-height: 28px; min-width: 44px; padding: 2px 7px; font-size: 10.5px; }
 .eeprom-hex-tools .MuiTypography-caption { font-size: 11px; }
-.eeprom-hex-table { flex: 1; min-height: 0; overflow: auto; }
-.eeprom-hex-table table { min-width: 780px; table-layout: fixed; }
-.eeprom-hex-table .MuiTableCell-root { padding: 5px 3px; text-align: center; font-size: 12px; font-family: Consolas, monospace; white-space: nowrap; }
-.eeprom-hex-table .MuiTableCell-root:first-child { width: 102px; text-align: left; padding-left: 14px; color: #647087; }
-.eeprom-hex-table .MuiTableCell-root:last-child { width: 150px; text-align: left; }
+/* Fit the header and sixteen 24px rows, including the 0x000F0 row, before scrolling. */
+.eeprom-hex-table { flex: 1; min-height: 408px; overflow: auto; }
+.eeprom-hex-table table { min-width: 928px; table-layout: fixed; }
+.eeprom-hex-table .MuiTableCell-root { height: 24px; padding: 2px 3px; line-height: 19px; text-align: center; font-size: 12px; font-family: Consolas, monospace; white-space: nowrap; }
+.eeprom-hex-table .MuiTableCell-root:first-child { text-align: left; padding-left: 12px; color: #647087; }
+.eeprom-hex-table .MuiTableCell-root:last-child { text-align: left; padding-left: 14px; }
+/* Slightly separate ASCII characters while retaining their alignment with each byte row. */
+.eeprom-hex-table tbody .MuiTableCell-root:last-child { letter-spacing: 2px; }
 /* Address navigation uses blue; orange remains reserved for target differences. */
 .eeprom-hex-table .eeprom-hex-highlight { background: #edf2ff; color: #244caa; font-weight: 700; box-shadow: inset 0 0 0 1px #365ccf; }
 .eeprom-hex-table .eeprom-hex-different { background: #fff0d5; color: #8a5005; font-weight: 700; }
 .eeprom-hex-pagination { padding: 6px 14px; border-top: 1px solid #e2e6ef; flex-shrink: 0; }
 .eeprom-action-bar { flex-shrink: 0; padding: 12px 14px; border: 1px solid #e2e6ef; border-radius: 8px; background: #fff; box-shadow: 0 -2px 8px rgba(23,32,51,.03); }
+/* Reading and programming controls stay compact beside the byte viewer. */
+.eeprom-action-bar .MuiButton-root { min-height: 28px; padding: 3px 8px; font-size: 11.5px; }
+.eeprom-action-bar .MuiButton-startIcon > * { font-size: 16px; }
+.eeprom-action-bar .MuiInputBase-root { height: 32px; font-size: 12px; }
+.eeprom-action-bar .MuiInputBase-input { padding-top: 6px; padding-bottom: 6px; }
+.eeprom-action-bar .MuiInputLabel-root { font-size: 12px; }
+.eeprom-action-bar .MuiInputLabel-root:not(.MuiInputLabel-shrink) { transform: translate(14px, 7px) scale(1); }
 .kv-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 18px; }
 .kv-item { min-width: 0; }
 .kv-value { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

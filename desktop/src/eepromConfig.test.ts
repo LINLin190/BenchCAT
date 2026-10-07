@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
-  addFixedEsiEntry, decodeConfigData, fixedEsiEntries, fixedEsiKey, loadEepromAutoReset, loadFixedEsiState, loadFlashHistory, loadQuickFlashTab, loadRecentEsi,
+  addFixedEsiEntry, decodeConfigData, eepromSourceIndex, fixedEsiEntries, fixedEsiKey, loadEepromAutoReset, loadFixedEsiState, loadFlashHistory, loadQuickFlashTab, loadRecentEsi,
   normalizeConfigData, pdiMeaning, removeFixedEsiEntry, removeFlashHistory, saveEepromAutoReset, saveFixedEsiState, saveFlashHistory, saveQuickFlashTab, writeRecentEsi,
   type FixedEsiEntry, type FlashHistoryEntry,
 } from "./eepromConfig";
 
 describe("EEPROM ConfigData helpers", () => {
+  // Repeated Device rows and slash variants do not invent duplicate filenames.
+  it("indexes Windows paths and flags only filenames at separate locations", () => {
+    const entries = [{ path: "C:\\XML\\Drive.xml", ordinal: 0 }, { path: "c:/xml/DRIVE.XML", ordinal: 1 }, { path: "D:\\XML\\Drive.xml", ordinal: 2 }, { path: "C:\\XML\\Unique.bin", ordinal: -1 }];
+    const index = eepromSourceIndex(entries);
+    expect(index.byPath.size).toBe(3);
+    expect(index.byPath.get("c:\\xml\\drive.xml")?.ordinal).toBe(1);
+    expect([...index.duplicateNames]).toEqual(["drive.xml"]);
+    expect(eepromSourceIndex(entries.slice(0, 2)).duplicateNames.size).toBe(0);
+  });
   it("decodes the ten-byte configuration area", () => {
     const decoded = decodeConfigData("05 0E 03 44 0A 00 00 00 00 00");
     expect(decoded).toMatchObject({

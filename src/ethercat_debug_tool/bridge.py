@@ -50,7 +50,9 @@ AUTO_SCAN_ADAPTER_TIMEOUT_S = 4.0
 MAX_STORED_ESI_DOCUMENTS = 64
 MAX_STORED_SII_TARGETS = 64
 MAX_STORED_WRITE_PLANS = 64
+MAX_STORED_LIBRARY_SOURCES = 256
 PROCESS_DATA_UI_INTERVAL_S = 0.1
+EEPROM_PROGRESS_UI_INTERVAL_S = 0.1
 MANUAL_STATE_REQUEST_TIMEOUT_US = 2_000_000
 logger = logging.getLogger(__name__)
 
@@ -354,6 +356,9 @@ class BridgeRuntime:
         self.targets: dict[str, tuple[bytes, Any, int, int | None, SlaveInfo | None]] = {}
         self.write_plans: dict[str, _StoredRegisterPlan] = {}
         self._asset_lock = threading.Lock()
+        self._library_lock = threading.Lock()
+        self._library_cache: dict[Path, tuple[tuple[int, int], list[dict[str, Any]], str | None]] = {}
+        self._last_progress: tuple[str, str, int | None, int, float] | None = None
         self.profiles = ProfileRegistry()
         self.audit = AuditLogger(audit_path)
         self.rediscovery_timeout_s = rediscovery_timeout_s
@@ -598,8 +603,61 @@ class BridgeRuntime:
             "attempts": attempts,
         }
 
+    # Coalesce telemetry without delaying device requests or hiding stage boundaries.
     def _progress(self, progress: OperationProgress) -> None:
+        now = time.monotonic()
+        key = (progress.operation, progress.stage, self._active_hardware_session)
+        previous = self._last_progress
+        if (
+            previous is not None and previous[:3] == key
+            and progress.completed > previous[3]
+            and progress.completed < progress.total
+            and now - previous[4] < EEPROM_PROGRESS_UI_INTERVAL_S
+        ):
+            return
+        self._last_progress = (*key, progress.completed, now)
         self.writer.event("progress", progress, self._active_hardware_session)
+
+    # Cache list metadata only; selecting a source still freezes freshly loaded bytes.
+    def _library_source(self, source: Path, *, refresh: bool) -> tuple[list[dict[str, Any]], str | None]:
+        stat = source.stat()
+        stamp = (stat.st_mtime_ns, stat.st_size)
+        cached = self._library_cache.get(source)
+        if not refresh and cached is not None and cached[0] == stamp:
+            return cached[1], cached[2]
+        entries: list[dict[str, Any]] = []
+        error = None
+        try:
+            if source.suffix.lower() == ".bin":
+                if not stat.st_size:
+                    raise ValueError("烧录文件不能为空")
+                validate_eeprom_range(0, stat.st_size + stat.st_size % 2)
+                raw = source.read_bytes()
+                entries.append({
+                    "path": str(source), "sha256": hashlib.sha256(raw).hexdigest(),
+                    "vendor_id": 0, "vendor_name": "", "ordinal": -1,
+                    "device_name": "原始 BIN", "type_name": "原始 BIN",
+                    "product_code": 0, "revision": 0, "byte_size": len(raw), "config_data": b"",
+                })
+            else:
+                document = EsiParser().parse(source)
+                entries = [{
+                    "path": str(document.path), "sha256": document.sha256,
+                    "vendor_id": document.vendor_id, "vendor_name": document.vendor_name,
+                    "ordinal": device.ordinal, "device_name": device.name, "type_name": device.type_name,
+                    "product_code": device.product_code, "revision": device.revision,
+                    "byte_size": device.byte_size, "config_data": device.config_data,
+                } for device in document.devices]
+        except Exception as exc:
+            error = str(exc)
+        # A source edited during parsing must be reloaded on the next listing.
+        after = source.stat()
+        if stamp == (after.st_mtime_ns, after.st_size):
+            self._library_cache.pop(source, None)
+            self._library_cache[source] = (stamp, entries, error)
+            if len(self._library_cache) > MAX_STORED_LIBRARY_SOURCES:
+                self._library_cache.pop(next(iter(self._library_cache)))
+        return entries, error
 
     def _audited(self, action: str, details: dict[str, Any], operation: Any) -> Any:
         try:
@@ -1439,43 +1497,20 @@ class BridgeRuntime:
                 return {"directory": str(library or ""), "entries": [], "errors": []}
             entries: list[dict[str, Any]] = []
             errors: list[dict[str, str]] = []
-            sources = (item for item in library.iterdir() if item.is_file() and item.suffix.lower() in {".xml", ".bin"})
-            for source in sorted(sources, key=lambda item: item.name.casefold()):
-                try:
-                    # Raw BIN entries do not depend on SII identity or header validity.
-                    if source.suffix.lower() == ".bin":
-                        size = source.stat().st_size
-                        if not size:
-                            raise ValueError("烧录文件不能为空")
-                        validate_eeprom_range(0, size + size % 2)
-                        raw = source.read_bytes()
-                        entries.append({
-                            "path": str(source), "sha256": hashlib.sha256(raw).hexdigest(),
-                            "vendor_id": 0, "vendor_name": "", "ordinal": -1,
-                            "device_name": "原始 BIN", "type_name": "原始 BIN",
-                            "product_code": 0, "revision": 0, "byte_size": len(raw), "config_data": b"",
-                        })
-                        continue
-                    document = EsiParser().parse(source)
-                except BaseException as exc:
-                    errors.append({"path": str(source), "error": str(exc)})
-                    continue
-                for device in document.devices:
-                    entries.append(
-                        {
-                            "path": str(document.path),
-                            "sha256": document.sha256,
-                            "vendor_id": document.vendor_id,
-                            "vendor_name": document.vendor_name,
-                            "ordinal": device.ordinal,
-                            "device_name": device.name,
-                            "type_name": device.type_name,
-                            "product_code": device.product_code,
-                            "revision": device.revision,
-                            "byte_size": device.byte_size,
-                            "config_data": device.config_data,
-                        }
-                    )
+            sources = {item for item in library.iterdir() if item.is_file() and item.suffix.lower() in {".xml", ".bin"}}
+            # Serialize concurrent listings and prune removed files from this directory.
+            with self._library_lock:
+                for cached_path in list(self._library_cache):
+                    if cached_path.parent == library and cached_path not in sources:
+                        self._library_cache.pop(cached_path)
+                for source in sorted(sources, key=lambda item: item.name.casefold()):
+                    try:
+                        source_entries, error = self._library_source(source, refresh=bool(params.get("refresh")))
+                        entries.extend(source_entries)
+                        if error:
+                            errors.append({"path": str(source), "error": error})
+                    except Exception as exc:
+                        errors.append({"path": str(source), "error": str(exc)})
             return {"directory": str(library), "entries": entries, "errors": errors}
         if method == "esi_load":
             document = EsiParser().parse(Path(params["path"]))
@@ -1495,6 +1530,9 @@ class BridgeRuntime:
             with self._asset_lock:
                 document = save_config_data(self.documents[document_id], int(params["ordinal"]), str(params["config_data"]))
                 self.documents[document_id] = document
+            # Explicit saves invalidate even when filesystem timestamps are preserved.
+            with self._library_lock:
+                self._library_cache.pop(Path(document.path).resolve(), None)
             return {
                 "document_id": document_id,
                 "path": document.path,

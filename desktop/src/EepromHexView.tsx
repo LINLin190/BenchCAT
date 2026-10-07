@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Typography } from "@mui/material";
 import { hex } from "./types";
 import { imageBytes } from "./eepromViewModel";
@@ -6,7 +6,7 @@ import { imageBytes } from "./eepromViewModel";
 const PAGE_BYTES = 512;
 
 /** Keep large EEPROM images readable without mounting thousands of table rows. */
-export function EepromHexView({ data, comparisonData }: { data?: string; comparisonData?: string }) {
+export const EepromHexView = memo(function EepromHexView({ data, comparisonData }: { data?: string; comparisonData?: string }) {
   const bytes = useMemo(() => imageBytes(data), [data]);
   const comparison = useMemo(() => imageBytes(comparisonData), [comparisonData]);
   const [page, setPage] = useState(0);
@@ -57,13 +57,15 @@ export function EepromHexView({ data, comparisonData }: { data?: string; compari
 
   return <Box className="eeprom-hex-view">
     <Stack direction="row" alignItems="center" gap={1} className="eeprom-hex-tools">
-      <TextField size="small" label="字节地址（Hex）" value={address} error={Boolean(addressError)} onChange={(event) => { setAddress(event.target.value); setAddressError(""); }} onKeyDown={(event) => { if (event.key === "Enter") jump(); }} inputProps={{ className: "mono" }} sx={{ width: 160 }} />
+      <TextField size="small" label="字节地址（Hex）" value={address} error={Boolean(addressError)} onChange={(event) => { setAddress(event.target.value); setAddressError(""); }} onKeyDown={(event) => { if (event.key === "Enter") jump(); }} inputProps={{ className: "mono" }} sx={{ width: 140 }} />
       <Button size="small" variant="outlined" className="eeprom-hex-jump" onClick={jump}>跳转</Button>
       <Typography variant="caption" color={addressError ? "error" : "text.secondary"} sx={{ flex: 1 }}>{addressError || copyMessage}</Typography>
       <Button size="small" onClick={() => void copyPage()}>复制当前页</Button>
     </Stack>
     <TableContainer ref={tableRef} className="eeprom-hex-table">
       <Table stickyHeader size="small" aria-label="EEPROM 原始字节">
+        {/* Fixed byte columns leave the remaining space to readable ASCII text. */}
+        <colgroup><col style={{ width: 88 }} />{Array.from({ length: 16 }, (_, index) => <col key={index} style={{ width: 40 }} />)}<col /></colgroup>
         <TableHead><TableRow><TableCell>字节地址</TableCell>{Array.from({ length: 16 }, (_, index) => <TableCell key={index}>{index.toString(16).toUpperCase().padStart(2, "0")}</TableCell>)}<TableCell>ASCII</TableCell></TableRow></TableHead>
         <TableBody>{rowOffsets.map(offset => {
           const row = bytes.slice(offset, Math.min(offset + 16, end));
@@ -79,4 +81,4 @@ export function EepromHexView({ data, comparisonData }: { data?: string; compari
       <Button size="small" disabled={currentPage === lastPage} onClick={() => setPage(currentPage + 1)}>下一页</Button>
     </Stack>
   </Box>;
-}
+});
