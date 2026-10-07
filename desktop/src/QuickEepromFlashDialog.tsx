@@ -5,13 +5,13 @@ import {
   MenuItem, TextField, Tooltip, Typography,
 } from "@mui/material";
 import {
-  FolderOpenRounded, HistoryRounded, Inventory2Rounded, MemoryRounded, RestartAltRounded,
+  DeleteOutlineRounded, FolderOpenRounded, HistoryRounded, Inventory2Rounded, MemoryRounded, SaveRounded,
   SearchRounded, StarOutlineRounded, StarRounded,
 } from "@mui/icons-material";
 import { BridgeRequestError, bridgeRequest, onFileDrop, pickFile, revealPath } from "./api";
 import {
-  decodeConfigData, fixedEsiKey, hexByte, hexWord, loadFixedEsiState, loadFlashHistory,
-  loadQuickFlashTab, normalizeConfigData, saveFixedEsiState, saveFlashHistory, saveQuickFlashTab,
+  addFixedEsiEntry, decodeConfigData, fixedEsiEntries, hexByte, hexWord, loadFixedEsiState, loadFlashHistory,
+  loadQuickFlashTab, loadRecentEsi, normalizeConfigData, removeFixedEsiEntry, removeFlashHistory, sameEepromSource, saveFixedEsiState, saveFlashHistory, saveQuickFlashTab, writeRecentEsi,
   FLASH_HISTORY_LIMIT, isBinFile,
   type EepromBinTarget, type FixedEsiEntry, type FixedEsiState, type FlashHistoryEntry,
 } from "./eepromConfig";
@@ -127,6 +127,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   const [configData, setConfigData] = useState("");
   const [originalConfigData, setOriginalConfigData] = useState("");
   const [loading, setLoading] = useState(false);
+  const [configSaving, setConfigSaving] = useState(false);
   const [generationError, setGenerationError] = useState("");
   const [result, setResult] = useState<{ severity: "success" | "warning" | "error" | "info"; text: string }>();
   const requestRef = useRef(0);
@@ -181,6 +182,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     try {
       const document = await bridgeRequest<EsiResult>("esi_load", { path });
       if (loadRequestRef.current !== loadId || contextRef.current !== context) return;
+      writeRecentEsi([document.path, ...loadRecentEsi()]);
       const matches = slave?.identity_valid !== false && slave ? document.devices.map((device, index) =>
         document.vendor_id === slave.identity.vendor_id
         && device.product_code === slave.identity.product_code
@@ -217,6 +219,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
       if (loadRequestRef.current === loadId && contextRef.current === context) {
         targetContextRef.current = context;
         setBin(value);
+        writeRecentEsi([value.path, ...loadRecentEsi()]);
       }
     } catch (error) {
       if (loadRequestRef.current === loadId && contextRef.current === context) {
@@ -240,6 +243,9 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     }
     if (!slave || openedContextRef.current === contextKey) return;
     openedContextRef.current = contextKey;
+    // Reload shared favorites when opening after a main-page source-list edit.
+    setFixedState(loadFixedEsiState());
+    setHistory(loadFlashHistory());
     setResult(undefined);
     setHeader(undefined);
     setHeaderError("");
@@ -252,6 +258,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     requestRef.current += 1;
     loadRequestRef.current += 1;
     setLoading(false);
+    setConfigSaving(false);
     generatedConfigRef.current = "";
     setEsi(undefined);
     setBin(undefined);
@@ -263,11 +270,39 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   }, [contextKey, open, slave]);
 
   useEffect(() => {
-    if (!open || !esi || ordinal < 0 || !parsedConfig.formatted || parsedConfig.formatted === generatedConfigRef.current) return;
+    if (!open || configSaving || !esi || ordinal < 0 || !parsedConfig.formatted || parsedConfig.formatted === generatedConfigRef.current) return;
     setTarget(undefined);
     const timer = window.setTimeout(() => void generate(esi, ordinal, parsedConfig.formatted!), 250);
     return () => window.clearTimeout(timer);
-  }, [configData, esi, generate, open, ordinal, parsedConfig.formatted]);
+  }, [configData, configSaving, esi, generate, open, ordinal, parsedConfig.formatted]);
+
+  // Save the selected Device's draft to XML and rebuild its target from the saved source.
+  const saveConfigToFile = async () => {
+    if (!esi || ordinal < 0 || !parsedConfig.formatted || loading || configSaving || operationInProgress) return;
+    const loadId = ++loadRequestRef.current;
+    const context = contextKey;
+    const selectedOrdinal = ordinal;
+    requestRef.current += 1;
+    generatedConfigRef.current = "";
+    setConfigSaving(true); setResult(undefined);
+    try {
+      const saved = await bridgeRequest<EsiResult>("esi_config_save", {
+        document_id: esi.document_id, ordinal: selectedOrdinal, config_data: parsedConfig.formatted,
+      });
+      if (loadRequestRef.current !== loadId || contextRef.current !== context || openedContextRef.current !== context) return;
+      const savedConfig = deviceConfigData(saved.devices[selectedOrdinal]);
+      writeRecentEsi([saved.path, ...loadRecentEsi()]);
+      setEsi(saved); setOriginalConfigData(savedConfig); setConfigData(savedConfig);
+      setResult({ severity: "success", text: "ConfigData 已修改至 XML 文件" });
+      await generate(saved, selectedOrdinal, savedConfig);
+    } catch (error) {
+      if (loadRequestRef.current === loadId && contextRef.current === context && openedContextRef.current === context) {
+        setResult({ severity: "error", text: error instanceof BridgeRequestError ? error.message : "无法保存 XML，请检查文件写入权限。" });
+      }
+    } finally {
+      if (loadRequestRef.current === loadId && contextRef.current === context && openedContextRef.current === context) setConfigSaving(false);
+    }
+  };
 
   const chooseFile = async () => {
     const path = await pickFile(["xml", "bin"]);
@@ -280,30 +315,23 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     let dispose: (() => void) | undefined;
     void onFileDrop((paths) => {
       const source = paths.find((path) => /\.(xml|bin)$/i.test(path));
-      if (source && !operationInProgress) void loadFile(source);
+      if (source && !operationInProgress && !configSaving) void loadFile(source);
     }).then((value) => { if (cancelled) value(); else dispose = value; });
     return () => { cancelled = true; dispose?.(); };
-  }, [loadFile, open, operationInProgress]);
+  }, [loadFile, open, operationInProgress, configSaving]);
 
   const filteredHistory = useMemo(() => history.filter((item) => {
     const haystack = `${item.path} ${item.deviceName} ${item.productCode.toString(16)} ${item.effectiveConfigData}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   }), [history, query]);
-  const fixedEntries = useMemo(() => {
-    const items = new Map<string, LibraryEntry>();
-    fixedState.favorites.forEach((item) => items.set(fixedEsiKey(item), item));
-    library.entries.forEach((item) => {
-      const key = fixedEsiKey(item);
-      if (!fixedState.hidden.includes(key) && !items.has(key)) items.set(key, item);
-    });
-    return [...items.values()];
-  }, [fixedState, library.entries]);
+  const fixedEntries = useMemo(() => fixedEsiEntries(fixedState, library.entries), [fixedState, library.entries]);
   const filteredLibrary = useMemo(() => fixedEntries.filter((item) => {
     const haystack = `${item.path} ${item.type_name} ${item.device_name} ${item.product_code.toString(16)} ${item.config_data}`.toLowerCase();
     return haystack.includes(query.trim().toLowerCase());
   }), [fixedEntries, query]);
 
   const blocker = operationInProgress ? "EEPROM 操作正在执行"
+    : configSaving ? "正在修改 XML 文件"
     : status.cycle_running ? "周期通信正在运行，请先停止周期通信"
       : !slave ? "请选择从站"
         : loading ? "正在加载 XML/BIN"
@@ -377,19 +405,12 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
       byte_size: item.byteSize,
       config_data: item.originalConfigData,
     };
-    const key = fixedEsiKey(favorite);
-    setFixedState((current) => saveFixedEsiState({
-      favorites: [favorite, ...current.favorites.filter((entry) => fixedEsiKey(entry) !== key)],
-      hidden: current.hidden.filter((entry) => entry !== key),
-    }));
+    setFixedState((current) => saveFixedEsiState(addFixedEsiEntry(current, favorite)));
   };
 
-  const removeFixed = (item: Pick<LibraryEntry, "path" | "ordinal">) => {
-    const key = fixedEsiKey(item);
-    setFixedState((current) => saveFixedEsiState({
-      favorites: current.favorites.filter((entry) => fixedEsiKey(entry) !== key),
-      hidden: current.hidden.includes(key) ? current.hidden : [...current.hidden, key],
-    }));
+  // List deletion and unfavoriting only remove shortcuts, never files.
+  const removeFixed = (item: { path: string }) => {
+    setFixedState((current) => saveFixedEsiState(removeFixedEsiEntry(current, item, library.entries)));
   };
 
   const openXmlLocation = async (path: string) => {
@@ -401,52 +422,57 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   };
 
   // Selecting a source reloads its XML original instead of replaying a saved override.
-  const renderSource = (item: LibraryEntry | FlashHistoryEntry, recent: boolean, historyIndex = 0) => {
+  const renderSource = (item: LibraryEntry | FlashHistoryEntry, recent: boolean) => {
     const path = item.path;
     const deviceName = recent ? (item as FlashHistoryEntry).deviceName : (item as LibraryEntry).type_name || (item as LibraryEntry).device_name;
     const productCode = recent ? (item as FlashHistoryEntry).productCode : (item as LibraryEntry).product_code;
     const sourceConfig = recent ? (item as FlashHistoryEntry).effectiveConfigData : (item as LibraryEntry).config_data;
     const itemOrdinal = recent ? (item as FlashHistoryEntry).ordinal : (item as LibraryEntry).ordinal;
+    const hasDevice = itemOrdinal >= 0;
     const binary = isBinFile(path);
     const byteSize = recent ? (item as FlashHistoryEntry).byteSize : (item as LibraryEntry).byte_size;
     const decoded = decodeConfigData(sourceConfig);
-    const selected = binary ? bin?.path === path : esi?.path === path && ordinal === itemOrdinal;
-    const inFixedList = fixedEntries.some((entry) => fixedEsiKey(entry) === fixedEsiKey({ path, ordinal: itemOrdinal }));
-    // Repeated flashes remain separate rows in the recent history.
-    const rowKey = recent ? `${(item as FlashHistoryEntry).flashedAt}-${historyIndex}` : `${path}-${itemOrdinal}-${sourceConfig}`;
+    const selected = Boolean((bin || esi) && sameEepromSource({ path: bin?.path ?? esi!.path }, item));
+    const inFixedList = fixedEntries.some((entry) => sameEepromSource(entry, item));
+    // Equal filenames at different locations remain distinct and display their paths.
+    const records = recent ? filteredHistory : filteredLibrary;
+    const showPath = records.some(entry => !sameEepromSource(entry, item) && fileName(entry.path).toLowerCase() === fileName(path).toLowerCase());
+    const rowKey = path.toLowerCase();
     return <Box key={rowKey} sx={{ position: "relative", mb: 0.4 }}>
       <ListItemButton
         selected={selected}
-        disabled={operationInProgress}
+        disabled={operationInProgress || configSaving}
         onClick={() => void loadFile(path, itemOrdinal)}
         onDoubleClick={() => void openXmlLocation(path)}
         title={`${path}\n双击打开文件位置`}
-        sx={{ alignItems: "flex-start", borderRadius: 1.15, border: 1, borderColor: selected ? "primary.main" : "transparent", px: 1, pr: 4.5, py: 0.7 }}
+        sx={{ alignItems: "flex-start", borderRadius: 1.15, border: 1, borderColor: selected ? "primary.main" : "transparent", px: 1, pr: 8, py: 0.7 }}
       >
         <ListItemText
           primary={<Typography fontWeight={700} fontSize={12.5} noWrap title={fileName(path)}>{fileName(path)}</Typography>}
           secondary={<Stack spacing={0.2} sx={{ mt: 0.25 }}>
-            <Typography variant="caption" fontSize={11} color="text.secondary" noWrap title={deviceName}>{binary ? `BIN · ${byteSize} B · 原始数据` : `Device：${deviceName}`}</Typography>
-            {!binary && <Typography variant="caption" fontSize={11} className="mono">Product：{hex(productCode, 8)}</Typography>}
-            {!binary && <Typography variant="caption" fontSize={11} color="primary.main" fontWeight={650}>{decoded ? `${hexByte(decoded.pdiCode)} · ${decoded.pdiLabel}` : "ConfigData 未解析"}</Typography>}
+            {showPath && <Typography variant="caption" fontSize={10.5} color="text.secondary" noWrap title={path}>{path}</Typography>}
+            <Typography variant="caption" fontSize={11} color="text.secondary" noWrap title={deviceName}>{binary ? `BIN · ${byteSize} B · 原始数据` : hasDevice ? `Device：${deviceName}` : "XML · 加载后选择 Device"}</Typography>
+            {!binary && hasDevice && <Typography variant="caption" fontSize={11} className="mono">Product：{hex(productCode, 8)}</Typography>}
+            {!binary && hasDevice && <Typography variant="caption" fontSize={11} color="primary.main" fontWeight={650}>{decoded ? `${hexByte(decoded.pdiCode)} · ${decoded.pdiLabel}` : "ConfigData 未解析"}</Typography>}
             {recent && <Typography variant="caption" fontSize={10.5} color="text.secondary">{new Date((item as FlashHistoryEntry).flashedAt).toLocaleString()}</Typography>}
           </Stack>}
         />
       </ListItemButton>
       <Stack direction="row" sx={{ position: "absolute", top: 4, right: 4 }}>
-        {recent ? <Tooltip title={inFixedList ? "取消收藏" : "收藏到固定列表"}><span><IconButton size="small" disabled={operationInProgress} aria-label={inFixedList ? "取消收藏" : "收藏到固定列表"} onClick={(event) => { event.stopPropagation(); inFixedList ? removeFixed({ path, ordinal: itemOrdinal }) : favoriteHistory(item as FlashHistoryEntry); }}>{inFixedList ? <StarRounded fontSize="small" color="warning" /> : <StarOutlineRounded fontSize="small" color="action" />}</IconButton></span></Tooltip> : <Tooltip title="取消收藏（不删除文件）"><span><IconButton size="small" disabled={operationInProgress} aria-label="取消收藏" onClick={(event) => { event.stopPropagation(); removeFixed(item as LibraryEntry); }}><StarRounded fontSize="small" color="warning" /></IconButton></span></Tooltip>}
+        <Tooltip title="删除记录（不删除文件）"><span><IconButton size="small" disabled={operationInProgress || configSaving} aria-label={`删除记录 ${fileName(path)}`} onClick={() => recent ? setHistory(current => removeFlashHistory(item, current)) : removeFixed(item)}><DeleteOutlineRounded fontSize="small" /></IconButton></span></Tooltip>
+        {recent ? <Tooltip title={inFixedList ? "取消收藏" : "收藏到固定列表"}><span><IconButton size="small" disabled={operationInProgress || configSaving} aria-label={inFixedList ? "取消收藏" : "收藏到固定列表"} onClick={() => inFixedList ? removeFixed(item) : favoriteHistory(item as FlashHistoryEntry)}>{inFixedList ? <StarRounded fontSize="small" color="warning" /> : <StarOutlineRounded fontSize="small" color="action" />}</IconButton></span></Tooltip> : <Tooltip title="取消收藏（不删除文件）"><span><IconButton size="small" disabled={operationInProgress || configSaving} aria-label="取消收藏" onClick={() => removeFixed(item)}><StarRounded fontSize="small" color="warning" /></IconButton></span></Tooltip>}
       </Stack>
     </Box>;
   };
 
   const handleClose = (_event?: object, reason?: "backdropClick" | "escapeKeyDown") => {
-    if (operationInProgress || reason === "backdropClick" && operationInProgress) return;
+    if (operationInProgress || configSaving || reason === "backdropClick" && operationInProgress) return;
     saveQuickFlashTab(tab);
     openedContextRef.current = "";
     onClose();
   };
 
-  return <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg" disableEscapeKeyDown={operationInProgress}
+  return <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg" disableEscapeKeyDown={operationInProgress || configSaving}
     PaperProps={{ sx: { width: "calc(100% - 96px)", maxWidth: 1080, height: { xs: "calc(100vh - 56px)", xl: 730 }, maxHeight: "calc(100vh - 56px)", borderRadius: 2, overflow: "hidden" } }}>
     <DialogTitle sx={{ py: 1.35, px: 2 }}>
       <Box><Typography variant="h6" fontWeight={780} fontSize={18}>快速烧录 EEPROM</Typography><Typography variant="body2" fontSize={12.5} color="text.secondary">{slave ? `从站 ${slave.position} · ${slaveDisplayName(slave)} · ${slave.chip_model}` : "未选择从站"}</Typography></Box>
@@ -461,12 +487,12 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
           </Tabs>
           <Box sx={{ p: 1 }}><TextField fullWidth size="small" placeholder="搜索 XML/BIN、Device、Product" value={query} onChange={(event) => setQuery(event.target.value)} InputProps={{ startAdornment: <InputAdornment position="start"><SearchRounded sx={{ fontSize: 18 }} /></InputAdornment> }} sx={{ "& .MuiInputBase-input": { py: 0.8, fontSize: 12.5 } }} /></Box>
           <List dense sx={{ px: 0.65, pb: 0.8, overflow: "auto", flex: 1 }}>
-            {tab === 0 ? filteredHistory.map((item, index) => renderSource(item, true, index)) : filteredLibrary.map((item) => renderSource(item, false))}
-            {tab === 0 && filteredHistory.length === 0 && <Box sx={{ py: 7, px: 2, textAlign: "center", color: "text.secondary" }}><HistoryRounded sx={{ opacity: 0.3, fontSize: 38 }} /><Typography fontWeight={700}>暂无最近烧录</Typography><Typography variant="caption">成功烧录后会自动保留最近 {FLASH_HISTORY_LIMIT} 次记录</Typography></Box>}
+            {tab === 0 ? filteredHistory.map((item) => renderSource(item, true)) : filteredLibrary.map((item) => renderSource(item, false))}
+            {tab === 0 && filteredHistory.length === 0 && <Box sx={{ py: 7, px: 2, textAlign: "center", color: "text.secondary" }}><HistoryRounded sx={{ opacity: 0.3, fontSize: 38 }} /><Typography fontWeight={700}>暂无最近烧录</Typography><Typography variant="caption">成功烧录后保留最近 {FLASH_HISTORY_LIMIT} 个文件，同一路径只显示最新记录</Typography></Box>}
             {tab === 1 && filteredLibrary.length === 0 && <Box sx={{ py: 7, px: 2, textAlign: "center", color: "text.secondary" }}><Inventory2Rounded sx={{ opacity: 0.3, fontSize: 38 }} /><Typography fontWeight={700}>固定列表为空</Typography><Typography variant="caption">{library.directory || "未找到 xml列表 目录"}</Typography></Box>}
           </List>
           {library.errors.length > 0 && tab === 1 && <Alert severity="warning" sx={{ m: 1, mt: 0 }}>{library.errors.length} 个文件无法加载</Alert>}
-          <Box sx={{ p: 1, borderTop: 1, borderColor: "divider", bgcolor: "background.paper" }}><Button fullWidth size="small" variant="outlined" startIcon={<FolderOpenRounded />} disabled={operationInProgress} onClick={chooseFile}>选择或拖入 XML/BIN</Button></Box>
+          <Box sx={{ p: 1, borderTop: 1, borderColor: "divider", bgcolor: "background.paper" }}><Button fullWidth size="small" variant="outlined" startIcon={<FolderOpenRounded />} disabled={operationInProgress || configSaving} onClick={chooseFile}>选择或拖入 XML/BIN</Button></Box>
         </Box>
 
         <Box sx={{ p: 2, overflow: "auto", minWidth: 0 }}>
@@ -505,7 +531,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
                 <Typography color="primary.main" fontWeight={780} fontSize={15}>选中 XML · 待烧录目标</Typography>
                 {target && <Chip size="small" label={`XML · ${target.size} B`} color="primary" variant="outlined" />}
               </Stack>
-              {esi.devices.length > 1 && <TextField select fullWidth size="small" label="Device" value={ordinal} disabled={operationInProgress || loading} sx={{ mb: 1.25 }} onChange={(event) => {
+              {esi.devices.length > 1 && <TextField select fullWidth size="small" label="Device" value={ordinal} disabled={operationInProgress || loading || configSaving} sx={{ mb: 1.25 }} onChange={(event) => {
                 const selected = Number(event.target.value);
                 const config = deviceConfigData(esi.devices[selected]);
                 setOrdinal(selected); setOriginalConfigData(config); setConfigData(config);
@@ -518,8 +544,12 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
                 <ConfigSummary title="XML ConfigData" configData={configData} />
               </Box>
               <Divider sx={{ my: 1.35, borderColor: "primary.light" }} />
-              <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 0.9 }}><Box><Typography fontWeight={750} fontSize={14}>XML ConfigData解析</Typography><Typography variant="caption" color="text.secondary" fontSize={12}>1–14 byte；只修改内存目标，原 XML 文件保持不变</Typography></Box><Button size="small" startIcon={<RestartAltRounded />} disabled={operationInProgress || configData === originalConfigData} onClick={() => { requestRef.current += 1; generatedConfigRef.current = ""; setTarget(undefined); setConfigData(originalConfigData); }}>恢复 XML 原值</Button></Stack>
-              <TextField size="small" fullWidth value={configData} disabled={operationInProgress || ordinal < 0} error={Boolean(parsedConfig.error)} helperText={parsedConfig.error} onChange={(event) => { requestRef.current += 1; generatedConfigRef.current = ""; setConfigData(event.target.value.toUpperCase()); setTarget(undefined); }} onBlur={() => parsedConfig.formatted && setConfigData(parsedConfig.formatted)} inputProps={{ className: "mono", spellCheck: false, style: { fontSize: 13.5 } }} FormHelperTextProps={{ sx: { fontSize: 12, mt: 0.45 } }} />
+              <Box sx={{ mb: 0.9 }}><Typography fontWeight={750} fontSize={14}>XML ConfigData解析</Typography><Typography variant="caption" color="text.secondary" fontSize={12}>1–14 byte；点击“修改至文件”保存到当前 XML Device</Typography></Box>
+              {/* Keep the explicit XML save action beside its editable value. */}
+              <Stack direction="row" gap={1} alignItems="flex-start">
+                <TextField size="small" fullWidth value={configData} disabled={operationInProgress || configSaving || loading || ordinal < 0} error={Boolean(parsedConfig.error)} helperText={parsedConfig.error} onChange={(event) => { requestRef.current += 1; generatedConfigRef.current = ""; setConfigData(event.target.value.toUpperCase()); setTarget(undefined); }} onBlur={() => parsedConfig.formatted && setConfigData(parsedConfig.formatted)} inputProps={{ "aria-label": "快速烧录 ConfigData", className: "mono", spellCheck: false, style: { fontSize: 13.5 } }} FormHelperTextProps={{ sx: { fontSize: 12, mt: 0.45 } }} />
+                <Button size="small" sx={{ flexShrink: 0, mt: 0.25 }} startIcon={configSaving ? <CircularProgress size={14} color="inherit" /> : <SaveRounded />} disabled={operationInProgress || configSaving || loading || ordinal < 0 || Boolean(parsedConfig.error) || parsedConfig.formatted === originalConfigData} onClick={() => void saveConfigToFile()}>修改至文件</Button>
+              </Stack>
               {targetDecoded && <><Divider sx={{ my: 1.35, borderColor: "primary.light" }} /><Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 1 }}>{[
                 ["0x0140 · PDI Control", `${hexByte(targetDecoded.pdiCode)} · ${targetDecoded.pdiLabel}`],
                 ["0x0141 · ESC Configuration", hexByte(targetDecoded.escConfiguration)],
@@ -530,18 +560,14 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
                 ["0x0012 · Station Alias", hexWord(targetDecoded.stationAlias)],
               ].map(([label, value]) => <Box key={label} sx={{ minWidth: 0, minHeight: 55, p: 0.9, border: 1, borderColor: "primary.light", borderRadius: 1.1, bgcolor: "background.paper" }}><Typography variant="caption" color="text.secondary" fontSize={11.5}>{label}</Typography><Typography variant="body2" className="mono" fontWeight={650} fontSize={13} sx={{ mt: 0.2 }} noWrap title={value}>{value}</Typography></Box>)}</Box></>}
             </Box>
-            {target && <Box>
-              <Typography variant="body2" fontWeight={700}>待写入 {target.size} B · 保留 XML 声明长度</Typography>
-              <Typography className="mono" variant="caption" sx={{ display: "block", overflowWrap: "anywhere", mt: 0.5 }}>SHA-256：{target.sha256}</Typography>
-            </Box>}
           </Stack> : null}
         </Box>
       </Box>
     </DialogContent>
     <Divider />
     <DialogActions sx={{ px: 2, py: 1, justifyContent: "space-between" }}>
-      <Button disabled={(!bin && (!esi || ordinal < 0)) || operationInProgress || loading} onClick={() => onOpenDetails({ path: bin?.path ?? esi!.path, ordinal: bin ? -1 : ordinal, configData: bin ? "" : originalConfigData })}>进入 EEPROM 详情</Button>
-      <Stack direction="row" gap={1} alignItems="center"><Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420, textAlign: "right" }}>{blocker || (autoResetEsc ? "有写入时自动复位 ESC" : "烧录后不复位 ESC")}</Typography><Button disabled={operationInProgress} onClick={() => handleClose()}>取消</Button><Button variant="contained" color="error" startIcon={operationInProgress ? <CircularProgress size={16} color="inherit" /> : <MemoryRounded />} disabled={Boolean(blocker)} onClick={flash}>烧录</Button></Stack>
+      <Button disabled={(!bin && (!esi || ordinal < 0)) || operationInProgress || loading || configSaving} onClick={() => onOpenDetails({ path: bin?.path ?? esi!.path, ordinal: bin ? -1 : ordinal, configData: bin ? "" : originalConfigData })}>进入 EEPROM 详情</Button>
+      <Stack direction="row" gap={1} alignItems="center"><Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420, textAlign: "right" }}>{blocker || (autoResetEsc ? "有写入时自动复位 ESC" : "烧录后不复位 ESC")}</Typography><Button disabled={operationInProgress || configSaving} onClick={() => handleClose()}>取消</Button><Button variant="contained" color="error" startIcon={operationInProgress ? <CircularProgress size={16} color="inherit" /> : <MemoryRounded />} disabled={Boolean(blocker)} onClick={flash}>烧录</Button></Stack>
     </DialogActions>
   </Dialog>;
 }
