@@ -1,8 +1,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Box, Button, Chip, Collapse, IconButton, InputAdornment, List, ListItemButton, Popover, Stack, Tab, Tabs, TextField, Tooltip, Typography } from "@mui/material";
-import { CloseRounded, DeleteOutlineRounded, ExpandMoreRounded, FolderOpenRounded, RefreshRounded, SearchRounded } from "@mui/icons-material";
+import { CloseRounded, DeleteOutlineRounded, ExpandMoreRounded, FolderOpenRounded, RefreshRounded, SearchRounded, StarOutlineRounded, StarRounded } from "@mui/icons-material";
 import { BridgeRequestError, bridgeRequest, revealPath } from "./api";
-import { eepromSourceIndex, fixedEsiEntries, isBinFile, loadFixedEsiState, removeFixedEsiEntry, sameEepromSource, saveFixedEsiState, sourcePathKey, type FixedEsiEntry } from "./eepromConfig";
+import { addFixedEsiEntry, eepromSourceIndex, fixedEsiEntries, isBinFile, loadFixedEsiState, removeFixedEsiEntry, sameEepromSource, saveFixedEsiState, sourcePathKey, type FixedEsiEntry } from "./eepromConfig";
 import { hex } from "./types";
 
 interface LibraryResult { directory: string; entries: FixedEsiEntry[]; errors: { path: string; error: string }[] }
@@ -53,17 +53,19 @@ export const EepromSources = memo(function EepromSources({ recent, current, disa
     product_code: 0, revision: 0, byte_size: 0, config_data: "",
   };
 
-  // Keep source selection separate from record deletion.
+  // Keep source selection separate from deletion and shared favorite updates.
   const renderEntry = (entry: FixedEsiEntry, recentRow: boolean) => {
+    const inFixedList = fixedIndex.byPath.has(sourcePathKey(entry));
     // Reveal paths when equal filenames belong to separate records.
     const showPath = (recentRow ? recentIndex : filteredIndex).duplicateNames.has(fileName(entry.path).toLowerCase());
     return <Box key={entry.path.toLowerCase()} className="eeprom-file-row" sx={{ position: "relative" }}>
-    <ListItemButton disableRipple={false} disabled={disabled} selected={Boolean(current && sameEepromSource(current, entry))} onClick={() => select(entry.path, recentRow ? undefined : entry.ordinal)} title={entry.path} sx={{ pr: 4, flexDirection: "column", alignItems: "stretch" }}>
+    <ListItemButton disableRipple={false} disabled={disabled} selected={Boolean(current && sameEepromSource(current, entry))} onClick={() => select(entry.path, recentRow ? undefined : entry.ordinal)} title={entry.path} sx={{ pr: 8, flexDirection: "column", alignItems: "stretch" }}>
       <Box minWidth={0}><Typography variant="body2" fontWeight={650} noWrap>{fileName(entry.path)}</Typography><Typography variant="caption" color="text.secondary" noWrap display="block">{isBinFile(entry.path) ? `BIN${entry.byte_size ? ` · ${entry.byte_size} B` : " · 原始数据"}` : entry.type_name || entry.device_name || "XML · Device 配置"}</Typography>{!recentRow && !isBinFile(entry.path) && entry.ordinal >= 0 && <Typography variant="caption" className="mono">Product {hex(entry.product_code, 8)}</Typography>}</Box>
       {showPath && <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", width: "100%", fontSize: 11 }}>{entry.path}</Typography>}
     </ListItemButton>
     <Stack direction="row" sx={{ position: "absolute", right: 2, top: 6 }}>
       <Tooltip title="删除记录（不删除文件）"><span className="eeprom-hover-action"><IconButton size="small" disabled={disabled} aria-label={`删除记录 ${fileName(entry.path)}`} onClick={() => recentRow ? onRemoveRecent(entry.path) : setFixed(state => saveFixedEsiState(removeFixedEsiEntry(state, entry, library.entries)))}><DeleteOutlineRounded fontSize="small" /></IconButton></span></Tooltip>
+      <Tooltip title={inFixedList ? "取消收藏（不删除文件）" : "收藏到固定列表"}><span className={inFixedList ? undefined : "eeprom-hover-action"}><IconButton size="small" disabled={disabled} aria-label={`${inFixedList ? "取消收藏" : "收藏到固定列表"} ${fileName(entry.path)}`} onClick={() => setFixed(state => saveFixedEsiState(inFixedList ? removeFixedEsiEntry(state, entry, library.entries) : addFixedEsiEntry(state, entry)))}>{inFixedList ? <StarRounded fontSize="small" color="warning" /> : <StarOutlineRounded fontSize="small" color="action" />}</IconButton></span></Tooltip>
     </Stack>
   </Box>;
   };
@@ -96,7 +98,7 @@ export const EepromSources = memo(function EepromSources({ recent, current, disa
     <List dense className="eeprom-source-list">
       {tab === 0 ? filteredRecent.map(path => renderEntry(recentEntry(path), true)) : filteredFixed.slice(0, visibleCount).map(entry => renderEntry(entry, false))}
       {tab === 1 && filteredFixed.length > visibleCount && <Button fullWidth size="small" onClick={() => setVisibleCount(count => count + 50)}>显示更多（{visibleCount} / {filteredFixed.length}）</Button>}
-      {!(tab === 0 ? filteredRecent.length : filteredFixed.length) && <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: "center" }}>{search ? "没有匹配的文件" : tab === 0 ? "打开 XML/BIN 后显示最近文件" : "固定列表为空，可在快速烧录窗口添加收藏"}</Typography>}
+      {!(tab === 0 ? filteredRecent.length : filteredFixed.length) && <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: "center" }}>{search ? "没有匹配的文件" : tab === 0 ? "打开 XML/BIN 后显示最近文件" : "固定列表为空，可在最近文件中点击星标添加收藏"}</Typography>}
     </List>
     {error && <Alert severity="warning" sx={{ m: 1 }}>{error}</Alert>}
     {tab === 1 && library.errors.length > 0 && <Typography variant="caption" color="warning.main" sx={{ px: 1.5 }}>{library.errors.length} 个文件无法加载</Typography>}

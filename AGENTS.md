@@ -25,7 +25,7 @@
 
 ## Code Comments
 
-- When modifying or adding code, add brief English comments above functions and at important logic sections.
+- When modifying or adding code, add brief English comments only where needed to explain non-obvious intent or logic. Avoid excessive comments. For functions or sections with existing comments, reuse or update those comments as appropriate rather than adding more.
 
 ## Source References
 

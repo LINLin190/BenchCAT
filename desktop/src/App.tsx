@@ -209,6 +209,12 @@ const UPDATE_ERROR_LABELS: Record<UpdateStage, string> = {
   downloading: "下载更新失败",
   installing: "安装启动失败",
 };
+const UPDATE_NETWORK_ERROR_MESSAGE = "软件更新未完成，可稍后重试。检查与GitHub网络连接。";
+
+// Replace updater request errors with actionable network guidance in both views.
+function isUpdateNetworkFailure(error: UpdateFailure): boolean {
+  return (error.stage === "checking" || error.stage === "downloading") && /error sending request/i.test(error.message);
+}
 
 function isUpdateInProgress(state: UpdateState): state is "preparing" | "downloading" | "installing" {
   return state === "preparing" || state === "downloading" || state === "installing";
@@ -272,7 +278,7 @@ function UpdateDialog({
             </Stack>
           </>}
           {blockedReason && !updating && <Alert severity="info">{blockedReason}</Alert>}
-          {state === "error" && error && <Alert severity="warning" sx={{ overflowWrap: "anywhere" }}>{UPDATE_ERROR_LABELS[error.stage]}：{error.message}</Alert>}
+          {state === "error" && error && <Alert severity="warning" sx={{ overflowWrap: "anywhere" }}>{isUpdateNetworkFailure(error) ? UPDATE_NETWORK_ERROR_MESSAGE : `${UPDATE_ERROR_LABELS[error.stage]}：${error.message}`}</Alert>}
         </Stack>
       </DialogContent>
       <Box sx={{ px: 3, pt: 1.5 }}>
@@ -1443,7 +1449,7 @@ export default function App() {
             <Button variant="outlined" startIcon={updateState === "checking" ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={updateState === "checking" || updating} onClick={() => void checkUpdate()}>{updateState === "checking" ? "正在检查…" : "检查更新"}</Button>
           </Stack>
           {updateState === "latest" && <Alert severity="success">当前已是最新版本。</Alert>}
-          {updateState === "error" && updateError && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button>} sx={{ overflowWrap: "anywhere" }}>软件更新未完成，可查看详情或稍后重试。</Alert>}
+          {updateState === "error" && updateError && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button>} sx={{ overflowWrap: "anywhere" }}>{isUpdateNetworkFailure(updateError) ? UPDATE_NETWORK_ERROR_MESSAGE : "软件更新未完成，可查看详情或稍后重试。"}</Alert>}
           {availableUpdate && updateState === "available" && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }}>查看更新</Button>}>{ignoredUpdateVersion === availableUpdate.version ? `已忽略 v${availableUpdate.version} 的自动提醒，仍可手动更新。` : `发现 v${availableUpdate.version} 更新。${pendingUpdateReminder ? "设备操作结束后将显示更新弹窗。" : ""}`}</Alert>}
           {updating && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>}>{UPDATE_STAGE_LABELS[updateState]}，请保持软件运行。</Alert>}
           <Typography variant="caption" color="text.secondary">Copyright © BenchCAT contributors</Typography>
