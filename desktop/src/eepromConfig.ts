@@ -125,6 +125,7 @@ export interface FixedEsiState {
 export const FLASH_HISTORY_KEY = "benchcat.eeprom-flash-history-v1";
 export const FIXED_ESI_STATE_KEY = "benchcat.eeprom-fixed-list-v1";
 export const QUICK_FLASH_TAB_KEY = "benchcat.eeprom-quick-tab-v1";
+export const RECENT_ESI_KEY = "benchcat.recent-esi";
 // Start with reset disabled after upgrading; later explicit choices use this key.
 export const EEPROM_AUTO_RESET_KEY = "benchcat.eeprom-auto-reset-v2";
 export const FLASH_HISTORY_LIMIT = 25;
@@ -133,13 +134,61 @@ export function fixedEsiKey(entry: Pick<FixedEsiEntry, "path" | "ordinal">): str
   return `${entry.path.toLowerCase()}|${entry.ordinal}`;
 }
 
+export interface EepromSourceRecord { path: string }
+
+// Windows paths identify list records; identical files at different paths stay separate.
+const sourcePathKey = (entry: EepromSourceRecord) => entry.path.replace(/\//g, "\\").toLowerCase();
+
+// Device and configuration changes refresh the existing file record.
+export function sameEepromSource(a: EepromSourceRecord, b: EepromSourceRecord): boolean {
+  return sourcePathKey(a) === sourcePathKey(b);
+}
+
+// Preserve the first, most recent record for each path.
+export function uniqueEepromSources<T extends EepromSourceRecord>(entries: T[]): T[] {
+  const paths = new Set<string>();
+  return entries.filter(entry => {
+    const path = sourcePathKey(entry);
+    const duplicate = paths.has(path);
+    paths.add(path);
+    return !duplicate;
+  });
+}
+
+// Include legacy Device keys when reading shortcuts saved by older versions.
+const sourceHiddenKeys = (entry: EepromSourceRecord & { ordinal?: number }) => [
+  `path:${sourcePathKey(entry)}`,
+  ...(entry.ordinal !== undefined ? [fixedEsiKey({ path: entry.path, ordinal: entry.ordinal })] : []),
+];
+
+// Both XML lists use the same path deduplication and persistent hidden records.
+export function fixedEsiEntries(state: FixedEsiState, library: FixedEsiEntry[]): FixedEsiEntry[] {
+  return uniqueEepromSources([...state.favorites, ...library].filter(entry => !sourceHiddenKeys(entry).some(key => state.hidden.includes(key))));
+}
+
+// Restore a shortcut explicitly without restoring other deleted records.
+export function addFixedEsiEntry(state: FixedEsiState, entry: FixedEsiEntry): FixedEsiState {
+  const keys = sourceHiddenKeys(entry);
+  return { favorites: uniqueEepromSources([entry, ...state.favorites]), hidden: state.hidden.filter(key => !keys.includes(key)) };
+}
+
+// Hide this path's shortcuts, leaving the XML/BIN file and loaded target untouched.
+export function removeFixedEsiEntry(state: FixedEsiState, entry: EepromSourceRecord, library: FixedEsiEntry[] = []): FixedEsiState {
+  const matches = [...state.favorites, ...library].filter(item => sameEepromSource(item, entry));
+  return {
+    favorites: state.favorites.filter(item => !sameEepromSource(item, entry)),
+    hidden: [...new Set([...state.hidden, ...[entry, ...matches].flatMap(sourceHiddenKeys)])],
+  };
+}
+
+// Collapse legacy duplicate favorites while retaining persistent hidden shortcuts.
 export function loadFixedEsiState(storage: Pick<Storage, "getItem"> = window.localStorage): FixedEsiState {
   try {
     const value = JSON.parse(storage.getItem(FIXED_ESI_STATE_KEY) ?? "{}");
     return {
-      favorites: Array.isArray(value.favorites) ? value.favorites.filter((item: unknown) =>
+      favorites: Array.isArray(value.favorites) ? uniqueEepromSources(value.favorites.filter((item: unknown) =>
         Boolean(item && typeof item === "object" && typeof (item as FixedEsiEntry).path === "string")
-      ) : [],
+      )) : [],
       hidden: Array.isArray(value.hidden) ? value.hidden.filter((item: unknown): item is string => typeof item === "string") : [],
     };
   } catch {
@@ -147,12 +196,29 @@ export function loadFixedEsiState(storage: Pick<Storage, "getItem"> = window.loc
   }
 }
 
+// Store the same unique favorites used by both XML list views.
 export function saveFixedEsiState(
   state: FixedEsiState,
   storage: Pick<Storage, "setItem"> = window.localStorage,
 ): FixedEsiState {
-  storage.setItem(FIXED_ESI_STATE_KEY, JSON.stringify(state));
-  return state;
+  const next = { ...state, favorites: uniqueEepromSources(state.favorites) };
+  storage.setItem(FIXED_ESI_STATE_KEY, JSON.stringify(next));
+  return next;
+}
+
+// Normalize old recent-file lists without dropping different-path copies.
+export function loadRecentEsi(storage: Pick<Storage, "getItem"> = window.localStorage): string[] {
+  try {
+    const value = JSON.parse(storage.getItem(RECENT_ESI_KEY) ?? "[]");
+    return Array.isArray(value) ? uniqueEepromSources(value.filter((path): path is string => typeof path === "string").map(path => ({ path }))).map(entry => entry.path).slice(0, 20) : [];
+  } catch { return []; }
+}
+
+// Persist recent files after loading, editing, or removing a list record.
+export function writeRecentEsi(entries: string[], storage: Pick<Storage, "setItem"> = window.localStorage): string[] {
+  const next = uniqueEepromSources(entries.map(path => ({ path }))).map(entry => entry.path).slice(0, 20);
+  storage.setItem(RECENT_ESI_KEY, JSON.stringify(next));
+  return next;
 }
 
 export function loadQuickFlashTab(storage: Pick<Storage, "getItem"> = window.localStorage): 0 | 1 {
@@ -175,22 +241,31 @@ export function saveEepromAutoReset(enabled: boolean, storage: Pick<Storage, "se
   return enabled;
 }
 
+// Keep the latest saved operation for each path, including older duplicate histories.
 export function loadFlashHistory(storage: Pick<Storage, "getItem"> = window.localStorage): FlashHistoryEntry[] {
   try {
     const value = JSON.parse(storage.getItem(FLASH_HISTORY_KEY) ?? "[]");
-    return Array.isArray(value) ? value.filter((item) => item && typeof item.path === "string").slice(0, FLASH_HISTORY_LIMIT) : [];
+    return Array.isArray(value) ? uniqueEepromSources(value.filter((item) => item && typeof item.path === "string")
+      .sort((a, b) => (Date.parse(b.flashedAt) || 0) - (Date.parse(a.flashedAt) || 0))).slice(0, FLASH_HISTORY_LIMIT) : [];
   } catch {
     return [];
   }
 }
 
-// Record each successful flash, including repeated use of the same source.
+// Reusing a source refreshes its last flash time and saved configuration.
 export function saveFlashHistory(
   entry: FlashHistoryEntry,
   storage: Pick<Storage, "setItem"> = window.localStorage,
   current = loadFlashHistory(),
 ): FlashHistoryEntry[] {
-  const next = [entry, ...current].slice(0, FLASH_HISTORY_LIMIT);
+  const next = uniqueEepromSources([entry, ...current]).slice(0, FLASH_HISTORY_LIMIT);
+  storage.setItem(FLASH_HISTORY_KEY, JSON.stringify(next));
+  return next;
+}
+
+// Deleting recent programming records never touches the source file.
+export function removeFlashHistory(entry: EepromSourceRecord, current: FlashHistoryEntry[], storage: Pick<Storage, "setItem"> = window.localStorage): FlashHistoryEntry[] {
+  const next = current.filter(item => !sameEepromSource(item, entry));
   storage.setItem(FLASH_HISTORY_KEY, JSON.stringify(next));
   return next;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  decodeConfigData, fixedEsiKey, loadEepromAutoReset, loadFixedEsiState, loadFlashHistory, loadQuickFlashTab,
-  normalizeConfigData, pdiMeaning, saveEepromAutoReset, saveFixedEsiState, saveFlashHistory, saveQuickFlashTab,
+  addFixedEsiEntry, decodeConfigData, fixedEsiEntries, fixedEsiKey, loadEepromAutoReset, loadFixedEsiState, loadFlashHistory, loadQuickFlashTab, loadRecentEsi,
+  normalizeConfigData, pdiMeaning, removeFixedEsiEntry, removeFlashHistory, saveEepromAutoReset, saveFixedEsiState, saveFlashHistory, saveQuickFlashTab, writeRecentEsi,
   type FixedEsiEntry, type FlashHistoryEntry,
 } from "./eepromConfig";
 
@@ -96,5 +96,52 @@ describe("EEPROM ConfigData helpers", () => {
     expect(loadEepromAutoReset(storage)).toBe(false);
     expect(saveEepromAutoReset(true, storage)).toBe(true);
     expect(loadEepromAutoReset(storage)).toBe(true);
+  });
+
+  // Old duplicate rows collapse to their latest operation without combining file copies.
+  it("updates repeated flashes by path and preserves identical XML at another path", () => {
+    const old: FlashHistoryEntry = {
+      path: "C:\\XML\\CIA402.xml", documentSha256: "same-content", ordinal: 0, deviceName: "Device",
+      vendorId: 1, productCode: 2, revision: 3, byteSize: 2048, originalConfigData: "05",
+      effectiveConfigData: "05", flashedAt: "2026-10-07T01:00:00Z", slaveKey: "first",
+    };
+    const latest = { ...old, path: "c:/xml/CIA402.XML", ordinal: 1, effectiveConfigData: "80", flashedAt: "2026-10-07T02:00:00Z", slaveKey: "second" };
+    const copy = { ...old, path: "D:\\XML\\CIA402.xml" };
+    const values = new Map<string, string>();
+    const storage = { getItem: (key: string) => values.get(key) ?? JSON.stringify([old, latest, copy]), setItem: (key: string, value: string) => { values.set(key, value); } };
+    expect(loadFlashHistory(storage)).toEqual([latest, copy]);
+    expect(saveFlashHistory(latest, storage, [old, copy])).toEqual([latest, copy]);
+    expect(removeFlashHistory(latest, [latest, old, copy], storage)).toEqual([copy]);
+    expect(loadFlashHistory(storage)).toEqual([copy]);
+  });
+
+  // Recent file removal remains persisted while the copy at another location survives.
+  it("normalizes recent file paths and stores deletions", () => {
+    let value = JSON.stringify(["C:\\XML\\CIA402.xml", "c:/xml/CIA402.XML", "D:\\XML\\CIA402.xml"]);
+    const storage = { getItem: () => value, setItem: (_key: string, next: string) => { value = next; } };
+    expect(loadRecentEsi(storage)).toEqual(["C:\\XML\\CIA402.xml", "D:\\XML\\CIA402.xml"]);
+    writeRecentEsi(["D:\\XML\\CIA402.xml"], storage);
+    expect(loadRecentEsi(storage)).toEqual(["D:\\XML\\CIA402.xml"]);
+  });
+
+  // Device shortcuts share one XML row, and deletion suppresses every row at that path.
+  it("shares fixed-list deletion and restoration without hiding different-path copies", () => {
+    const entry: FixedEsiEntry = {
+      path: "C:\\XML\\CIA402.xml", sha256: "same-content", vendor_id: 1, vendor_name: "Vendor", ordinal: 0,
+      device_name: "Device", type_name: "Device", product_code: 2, revision: 3, byte_size: 2048, config_data: "05",
+    };
+    const otherDevice = { ...entry, ordinal: 1, device_name: "Device 2" };
+    const copy = { ...entry, path: "D:\\XML\\CIA402.xml" };
+    const library = [entry, otherDevice, copy];
+    const state = { favorites: [otherDevice], hidden: [] };
+    expect(fixedEsiEntries(state, library)).toEqual([otherDevice, copy]);
+    const removed = removeFixedEsiEntry(state, entry, library);
+    expect(removed.favorites).toEqual([]);
+    expect(fixedEsiEntries(removed, library)).toEqual([copy]);
+    const values = new Map<string, string>();
+    const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+    saveFixedEsiState(removed, storage);
+    expect(fixedEsiEntries(loadFixedEsiState(storage), library)).toEqual([copy]);
+    expect(fixedEsiEntries(addFixedEsiEntry(removed, otherDevice), library)).toEqual([otherDevice, copy]);
   });
 });
