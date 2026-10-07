@@ -1,5 +1,5 @@
 import { alStatusInfo } from "./alStatus";
-import { hex, stateLabel, type RegisterDefinition } from "./types";
+import { hex, stateLabel, type RegisterDefinition, type RegisterManualReference } from "./types";
 
 export type ValueFormat = "hex" | "decimal" | "bytes";
 export interface RegisterValue { position: number; address: number; data: string; wkc: number; duration_ms: number; timestamp: number }
@@ -193,7 +193,9 @@ export function registerAccessDescription(access?: string): string {
 }
 
 /** Names identify the actual bundled document language and revision. */
-export function registerManuals(definition: RegisterDefinition): { filename: string; title: string }[] {
+export function registerManuals(definition: RegisterDefinition): RegisterManualReference[] {
+  // Resolved references carry physical pages for each bundled document revision.
+  if (definition.manuals) return definition.manuals;
   const chip = definition.source_chip;
   if (chip === "LAN9252") return [
     { filename: "microchip_lan9252_register_zh.pdf", title: "LAN9252 官方中文手册（DS00001909A_CN）" },
@@ -202,7 +204,7 @@ export function registerManuals(definition: RegisterDefinition): { filename: str
   if (chip === "LAN9253") return [{ filename: "microchip_lan9253_register_en.pdf", title: "LAN9253 官方英文手册（DS00003421B）" }];
   return [
     { filename: "beckhoff_esc_register_en.pdf", title: "Beckhoff ESC 寄存器说明（英文，3.3）" },
-    { filename: "beckhoff_et1100_datasheet_en.pdf", title: "ET1100 器件手册（英文，2.1）" },
+    { filename: "beckhoff_et1100_datasheet_en.pdf", title: "ET1100 器件手册（英文，2.1，寄存器概览）" },
   ];
 }
 

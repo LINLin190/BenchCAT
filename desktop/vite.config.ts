@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import { spawn, type ChildProcess } from "node:child_process";
 import { delimiter, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pdfjsAssets } from "./pdfjsAssets";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
 const bridgePort = 1421;
@@ -40,7 +41,7 @@ function browserBridgePlugin() {
 }
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), ...(mode === "browser" ? [browserBridgePlugin()] : [])],
+  plugins: [react(), pdfjsAssets(), ...(mode === "browser" ? [browserBridgePlugin()] : [])],
   clearScreen: false,
   server: {
     port: 1420,
@@ -65,6 +66,7 @@ export default defineConfig(({ mode }) => ({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes("pdfjs-dist")) return "pdfjs";
           if (id.includes("@mui/icons-material")) return "mui-icons";
           if (id.includes("node_modules")) return "vendor";
         },

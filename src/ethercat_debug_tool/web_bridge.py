@@ -16,6 +16,7 @@ from typing import Any
 from .bridge import BridgeRuntime, _json_value, _structured_error
 from .infrastructure import default_audit_path
 from .models import BackendMode
+from .services.manual_service import read_manual
 
 HOST_GENERATION = 1
 
@@ -146,6 +147,19 @@ class WebBridgeHandler(BaseHTTPRequestHandler):
         return value
 
     def do_GET(self) -> None:  # noqa: N802
+        # Load offline PDFs directly, without acquiring a device worker or making copies.
+        if self.path.startswith("/api/register-manual/"):
+            try:
+                payload = read_manual(self.path.removeprefix("/api/register-manual/"))
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/pdf")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(payload)
+            except (ValueError, OSError) as exc:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"message": str(exc)})
+            return
         if self.path == "/api/health":
             self._send_json(
                 HTTPStatus.OK,
@@ -199,9 +213,6 @@ class WebBridgeHandler(BaseHTTPRequestHandler):
             elif self.path == "/api/reveal":
                 _reveal_path(Path(str(body.get("path", ""))))
                 self._send_json(HTTPStatus.OK, {"revealed": True})
-            elif self.path == "/api/register-manual":
-                _open_register_manual(str(body.get("filename", "")))
-                self._send_json(HTTPStatus.OK, {"opened": True})
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"message": "Not found"})
         except BaseException as exc:
@@ -267,21 +278,6 @@ def _pick_directory() -> str | None:
         return selected or None
     finally:
         root.destroy()
-
-
-def _open_register_manual(filename: str) -> None:
-    """Open only the bundled manuals in the browser development host."""
-    manuals = {
-        "microchip_lan9252_register_zh.pdf", "microchip_lan9252_register_en.pdf",
-        "microchip_lan9253_register_en.pdf", "beckhoff_esc_register_en.pdf",
-        "beckhoff_et1100_datasheet_en.pdf",
-    }
-    if filename not in manuals:
-        raise ValueError("未知的寄存器手册")
-    path = Path(__file__).resolve().parents[2] / "desktop/src-tauri/resources/manuals" / filename
-    if not path.is_file():
-        raise FileNotFoundError(f"缺少离线手册：{filename}")
-    os.startfile(path)
 
 
 # Explorer requires the switch outside the quoted filename, including spaces and commas.

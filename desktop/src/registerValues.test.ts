@@ -65,6 +65,14 @@ describe("register interpretation", () => {
     ]);
     expect(registerManuals({ ...status, source_chip: "LAN9253" })[0].filename).toBe("microchip_lan9253_register_en.pdf");
   });
+  // The resolved document revision, not a generic source page, controls the displayed destination.
+  it("retains revision-specific physical pages from register details", () => {
+    const manuals = [
+      { filename: "microchip_lan9252_register_zh.pdf", title: "Chinese A", section: "12.14.21", pdf_page: 240 },
+      { filename: "microchip_lan9252_register_en.pdf", title: "English C", section: "12.14.21", pdf_page: 240 },
+    ];
+    expect(registerManuals({ ...status, source_chip: "LAN9252", manuals })).toEqual(manuals);
+  });
   it("shows the state name and error flag beside one decoded value", () => {
     expect(registerMeaning(status, "12 00")).toBe("PRE-OP · ERROR");
     const fields = decodeRegisterFields(status, "12 00");

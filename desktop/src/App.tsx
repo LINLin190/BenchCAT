@@ -1378,12 +1378,13 @@ export default function App() {
                     <DeveloperBoardRounded className="slave-state-icon" data-state={item.state_error ? 0 : item.state} sx={{ fontSize: 22 }} />
                     {!item.state_error && Boolean((item.raw_state ?? item.state) & 0x10) && <WarningAmberRounded titleAccess="状态错误" color="error" sx={{ position: "absolute", right: -4, top: -5, fontSize: 13, bgcolor: "background.paper", borderRadius: "50%" }} />}
                   </Box>
-                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${item.state_error ? "状态暂不可用" : item.state === 0 ? "—" : stateLabel(item.state)}${!item.state_error && (item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} · SM Size IN ${item.input_size ?? "—"} B OUT ${item.output_size ?? "—"} B · ${item.chip_model}`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
+                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${item.state_error ? "状态暂不可用" : item.state === 0 ? "—" : stateLabel(item.state)}${!item.state_error && (item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} IN ${item.input_size ?? "—"}B | OUT ${item.output_size ?? "—"}B`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5 }} /></ListItemButton>)}</List></Box>}
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, py: page === "overview" ? 1.5 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
-            {/* Match the overview title placement before the slave-list toggle. */}
+            {/* Match page titles to the overview placement before the slave-list toggle. */}
             {page === "eeprom" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>EEPROM</Typography>}
+            {page === "registers" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>寄存器</Typography>}
             {status.slaves.length > 0 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
             <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slaveDisplayName(slave)}>从站 {slave.position} · {slaveDisplayName(slave)}</Typography>
             {page !== "overview" && (slave.state_error ? <Chip size="small" label="—" /> : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />)}

@@ -38,6 +38,7 @@ from .infrastructure import AuditLogger, default_audit_path
 from .master_state import MasterStateMachine, StaleMasterSession
 from .models import AccessSemantics, BackendMode, EtherCatState, OperationProgress, PdoDirection, SlaveInfo
 from .services.eeprom_service import EepromService, compare_images
+from .services.manual_service import manual_references
 from .services.register_service import RegisterService, RegisterWritePlan, ResetService
 from .sii.generator import SiiGenerationReport, SiiGenerator
 from .sii.layout import image_layout
@@ -1202,7 +1203,7 @@ class BridgeRuntime:
             definition = self._register_definition(params)
             if definition is None:
                 raise ValueError("Register definition requires position and definition_id")
-            return definition
+            return {**definition, "manuals": manual_references(definition)}
         if method == "register_raw_read":
             # Raw access retains the actual read counter without catalog policy.
             return self._submit(lambda backend: RegisterService(backend).read_raw(

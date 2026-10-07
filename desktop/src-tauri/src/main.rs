@@ -304,6 +304,45 @@ fn show_startup_error(message: &str) {
     eprintln!("{message}");
 }
 
+// Resolve the original manuals in both development and installed applications.
+fn bundled_manual_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app;
+        Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/manuals"))
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        app.path()
+            .resolve("manuals", tauri::path::BaseDirectory::Resource)
+            .map_err(|error| format!("无法定位离线手册：{error}"))
+    }
+}
+
+// Return allowlisted PDF bytes without serializing large files into JSON or using the bridge.
+#[tauri::command]
+async fn read_register_manual(
+    app: tauri::AppHandle,
+    filename: String,
+) -> Result<tauri::ipc::Response, String> {
+    if !matches!(
+        filename.as_str(),
+        "beckhoff_esc_register_en.pdf"
+            | "beckhoff_et1100_datasheet_en.pdf"
+            | "microchip_lan9252_register_zh.pdf"
+            | "microchip_lan9252_register_en.pdf"
+            | "microchip_lan9253_register_en.pdf"
+    ) {
+        return Err("未知的寄存器手册".into());
+    }
+    let path = bundled_manual_directory(&app)?.join(filename);
+    let bytes = tauri::async_runtime::spawn_blocking(move || fs::read(path))
+        .await
+        .map_err(|error| format!("无法读取离线手册：{error}"))?
+        .map_err(|error| format!("无法读取离线手册，请重新安装完整应用：{error}"))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 fn bridge_process_command(_app: &tauri::AppHandle) -> Result<Command, String> {
     if let Some(executable) = std::env::var_os("BENCHCAT_BRIDGE_EXECUTABLE") {
         let executable = PathBuf::from(executable);
@@ -1451,46 +1490,6 @@ fn reveal_path(path: String) -> Result<(), String> {
     Ok(())
 }
 
-// Open only bundled reference manuals, without accepting arbitrary paths or URLs.
-#[tauri::command]
-fn open_register_manual(app: tauri::AppHandle, filename: String) -> Result<(), String> {
-    const MANUALS: [&str; 5] = [
-        "microchip_lan9252_register_zh.pdf",
-        "microchip_lan9252_register_en.pdf",
-        "microchip_lan9253_register_en.pdf",
-        "beckhoff_esc_register_en.pdf",
-        "beckhoff_et1100_datasheet_en.pdf",
-    ];
-    if !MANUALS.contains(&filename.as_str()) {
-        return Err("未知的寄存器手册".into());
-    }
-    #[cfg(debug_assertions)]
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("resources/manuals")
-        .join(&filename);
-    #[cfg(not(debug_assertions))]
-    let path = app
-        .path()
-        .resolve(format!("manuals/{filename}"), tauri::path::BaseDirectory::Resource)
-        .map_err(|error| format!("无法定位离线手册：{error}"))?;
-    #[cfg(debug_assertions)]
-    let _ = app;
-    if !path.is_file() {
-        return Err(format!("缺少离线手册：{filename}，请重新安装完整应用"));
-    }
-    let mut command = Command::new("rundll32.exe");
-    command.arg("url.dll,FileProtocolHandler").arg(&path);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
-    }
-    command
-        .spawn()
-        .map_err(|error| format!("无法打开 PDF，请检查默认 PDF 阅读器：{error}"))?;
-    Ok(())
-}
-
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
     const ALLOWED: [&str; 3] = [
@@ -1615,7 +1614,7 @@ fn main() {
             bridge_request,
             reveal_path,
             open_external,
-            open_register_manual
+            read_register_manual,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build BenchCAT")

@@ -1,0 +1,4721 @@
+{
+  "beckhoff_esc_register_en.pdf": {
+    "source_id": "beckhoff_sec2_v3.3",
+    "version": "3.3",
+    "sha256": "a1e139b32312ca1703eb662796fe0f18d9de1c2882199de8861511fef891eb4a",
+    "page_count": 151,
+    "sections": {
+      "2.1.1": 20,
+      "2.1.2": 21,
+      "2.1.3": 21,
+      "2.1.4": 21,
+      "2.1.5": 21,
+      "2.1.6": 22,
+      "2.1.7": 22,
+      "2.1.8": 22,
+      "2.2.1": 24,
+      "2.2.2": 24,
+      "2.3.1": 25,
+      "2.3.2": 25,
+      "2.3.3": 26,
+      "2.3.4": 26,
+      "2.3.5": 27,
+      "2.4.1": 28,
+      "2.4.2": 31,
+      "2.4.3": 32,
+      "2.5.1": 34,
+      "2.5.2": 35,
+      "2.5.3": 35,
+      "2.6.1": 38,
+      "2.6.2": 39,
+      "2.6.6.4": 51,
+      "2.6.6": 43,
+      "2.6.6.9": 60,
+      "2.8.1": 69,
+      "2.8.2": 69,
+      "2.8.4": 70,
+      "2.8.5": 71,
+      "2.9.1": 73,
+      "2.9.2": 73,
+      "2.9.3": 73,
+      "2.9.4": 73,
+      "2.9.5.1": 74,
+      "2.9.5.3": 76,
+      "2.9.6": 79,
+      "2.10.1": 83,
+      "2.10.2": 83,
+      "2.10.4": 83,
+      "2.10.5": 84,
+      "2.10.6": 84,
+      "2.10.7": 84,
+      "2.11.1": 86,
+      "2.11.2": 86,
+      "2.11.3": 87,
+      "2.11.4": 89,
+      "2.11.5": 89,
+      "2.12.1": 93,
+      "2.12.2": 95,
+      "2.12.3": 95,
+      "2.12.4": 95,
+      "2.13.1": 98,
+      "2.13.2": 98,
+      "2.13.3": 98,
+      "2.13.4": 98,
+      "2.13.5": 99,
+      "2.13.6": 99,
+      "2.13.7": 99,
+      "2.13.8": 99,
+      "2.13.9": 99,
+      "2.14.1": 100,
+      "2.14.2": 100,
+      "2.14.3": 101,
+      "2.14.4": 102,
+      "2.14.5": 103,
+      "2.14.6": 104,
+      "2.15.1.1": 105,
+      "2.15.1.2": 105,
+      "2.15.1.3": 105,
+      "2.15.1.4": 106,
+      "2.15.2.1": 107,
+      "2.15.1.5": 106,
+      "2.15.2.2": 108,
+      "2.15.2.3": 108,
+      "2.15.2.4": 108,
+      "2.15.2.5": 108,
+      "2.15.2.6": 109,
+      "2.15.2.7": 109,
+      "2.15.2.8": 109,
+      "2.15.3.5": 112,
+      "2.15.4.1": 113,
+      "2.15.4.2": 114,
+      "2.15.4.7": 116,
+      "2.15.4.8": 117,
+      "2.15.4.9": 118,
+      "2.15.4.10": 118,
+      "2.15.4.11": 119,
+      "2.15.4.12": 119,
+      "2.15.5.1": 120,
+      "2.15.5.2": 120,
+      "2.15.5.7": 122,
+      "2.15.5.8": 122,
+      "2.15.5.9": 123,
+      "2.15.5.10": 123,
+      "2.15.5.11": 123,
+      "2.15.5.12": 123,
+      "2.15.6.1": 126,
+      "2.15.6.2": 126,
+      "2.15.6.3": 126,
+      "2.16.1.2": 128,
+      "2.17.1.1": 140,
+      "2.17.1.3": 140,
+      "2.17.1.4": 140,
+      "2.19.2": 150,
+      "2.18.1": 141,
+      "2.6.6.1": 44
+    },
+    "registers": {
+      "esc_core|0x0000": {
+        "section": "2.1.1",
+        "pdf_page": 20
+      },
+      "esc_core|0x0001": {
+        "section": "2.1.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0002-0x0003": {
+        "section": "2.1.3",
+        "pdf_page": 21
+      },
+      "esc_core|0x0004": {
+        "section": "2.1.4",
+        "pdf_page": 21
+      },
+      "esc_core|0x0005": {
+        "section": "2.1.5",
+        "pdf_page": 21
+      },
+      "esc_core|0x0006": {
+        "section": "2.1.6",
+        "pdf_page": 22
+      },
+      "esc_core|0x0007": {
+        "section": "2.1.7",
+        "pdf_page": 22
+      },
+      "esc_core|0x0008-0x0009": {
+        "section": "2.1.8",
+        "pdf_page": 22
+      },
+      "esc_core|0x0010-0x0011": {
+        "section": "2.2.1",
+        "pdf_page": 24
+      },
+      "esc_core|0x0012-0x0013": {
+        "section": "2.2.2",
+        "pdf_page": 24
+      },
+      "esc_core|0x0020": {
+        "section": "2.3.1",
+        "pdf_page": 25
+      },
+      "esc_core|0x0021": {
+        "section": "2.3.2",
+        "pdf_page": 25
+      },
+      "esc_core|0x0030": {
+        "section": "2.3.3",
+        "pdf_page": 26
+      },
+      "esc_core|0x0031": {
+        "section": "2.3.4",
+        "pdf_page": 26
+      },
+      "esc_core|0x0040": {
+        "section": "2.3.5",
+        "pdf_page": 27
+      },
+      "esc_core|0x0100-0x0103": {
+        "section": "2.4.1",
+        "pdf_page": 28
+      },
+      "esc_core|0x0108-0x0109": {
+        "section": "2.4.2",
+        "pdf_page": 31
+      },
+      "esc_core|0x0110-0x0111": {
+        "section": "2.4.3",
+        "pdf_page": 32
+      },
+      "esc_core|0x0120-0x0121": {
+        "section": "2.5.1",
+        "pdf_page": 34
+      },
+      "esc_core|0x0130-0x0131": {
+        "section": "2.5.2",
+        "pdf_page": 35
+      },
+      "esc_core|0x0134-0x0135": {
+        "section": "2.5.3",
+        "pdf_page": 35
+      },
+      "esc_core|0x0140": {
+        "section": "2.6.1",
+        "pdf_page": 38
+      },
+      "esc_core|0x0141": {
+        "section": "2.6.2",
+        "pdf_page": 39
+      },
+      "esc_core|0x0150": {
+        "section": "2.6.6.4",
+        "pdf_page": 51
+      },
+      "esc_core|0x0150-0x0153": {
+        "section": "2.6.6",
+        "pdf_page": 43
+      },
+      "esc_core|0x0151": {
+        "section": "2.6.6.9",
+        "pdf_page": 60
+      },
+      "esc_core|0x0200-0x0201": {
+        "section": "2.8.1",
+        "pdf_page": 69
+      },
+      "esc_core|0x0204-0x0207": {
+        "section": "2.8.2",
+        "pdf_page": 69
+      },
+      "esc_core|0x0210-0x0211": {
+        "section": "2.8.4",
+        "pdf_page": 70
+      },
+      "esc_core|0x0220-0x0223": {
+        "section": "2.8.5",
+        "pdf_page": 71
+      },
+      "esc_core|0x0300-0x0301": {
+        "section": "2.9.1",
+        "pdf_page": 73
+      },
+      "esc_core|0x0302-0x0303": {
+        "section": "2.9.1",
+        "pdf_page": 73
+      },
+      "esc_core|0x0304-0x0305": {
+        "section": "2.9.1",
+        "pdf_page": 73
+      },
+      "esc_core|0x0306-0x0307": {
+        "section": "2.9.1",
+        "pdf_page": 73
+      },
+      "esc_core|0x0308": {
+        "section": "2.9.2",
+        "pdf_page": 73
+      },
+      "esc_core|0x0309": {
+        "section": "2.9.2",
+        "pdf_page": 73
+      },
+      "esc_core|0x030A": {
+        "section": "2.9.2",
+        "pdf_page": 73
+      },
+      "esc_core|0x030B": {
+        "section": "2.9.2",
+        "pdf_page": 73
+      },
+      "esc_core|0x030C": {
+        "section": "2.9.3",
+        "pdf_page": 73
+      },
+      "esc_core|0x030D": {
+        "section": "2.9.4",
+        "pdf_page": 73
+      },
+      "esc_core|0x030E-0x030F": {
+        "section": "2.9.5.1",
+        "pdf_page": 74
+      },
+      "esc_core|0x0310": {
+        "section": "2.9.6",
+        "pdf_page": 79
+      },
+      "esc_core|0x0311": {
+        "section": "2.9.6",
+        "pdf_page": 79
+      },
+      "esc_core|0x0312": {
+        "section": "2.9.6",
+        "pdf_page": 79
+      },
+      "esc_core|0x0313": {
+        "section": "2.9.6",
+        "pdf_page": 79
+      },
+      "esc_core|0x0400-0x0401": {
+        "section": "2.10.1",
+        "pdf_page": 83
+      },
+      "esc_core|0x0410-0x0411": {
+        "section": "2.10.2",
+        "pdf_page": 83
+      },
+      "esc_core|0x0420-0x0421": {
+        "section": "2.10.4",
+        "pdf_page": 83
+      },
+      "esc_core|0x0440-0x0441": {
+        "section": "2.10.5",
+        "pdf_page": 84
+      },
+      "esc_core|0x0442": {
+        "section": "2.10.6",
+        "pdf_page": 84
+      },
+      "esc_core|0x0443": {
+        "section": "2.10.7",
+        "pdf_page": 84
+      },
+      "esc_core|0x0500": {
+        "section": "2.11.1",
+        "pdf_page": 86
+      },
+      "esc_core|0x0501": {
+        "section": "2.11.2",
+        "pdf_page": 86
+      },
+      "esc_core|0x0502-0x0503": {
+        "section": "2.11.3",
+        "pdf_page": 87
+      },
+      "esc_core|0x0504-0x0507": {
+        "section": "2.11.4",
+        "pdf_page": 89
+      },
+      "esc_core|0x0508-0x050F": {
+        "section": "2.11.5",
+        "pdf_page": 89
+      },
+      "esc_core|0x0510-0x0511": {
+        "section": "2.12.1",
+        "pdf_page": 93
+      },
+      "esc_core|0x0512": {
+        "section": "2.12.2",
+        "pdf_page": 95
+      },
+      "esc_core|0x0513": {
+        "section": "2.12.3",
+        "pdf_page": 95
+      },
+      "esc_core|0x0514-0x0515": {
+        "section": "2.12.4",
+        "pdf_page": 95
+      },
+      "esc_core|0x0600-0x0603": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0604-0x0605": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0606": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0607": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0608-0x0609": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x060A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x060B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x060C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x060D-0x060F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0610-0x0613": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0614-0x0615": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0616": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0617": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0618-0x0619": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x061A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x061B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x061C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x061D-0x061F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0620-0x0623": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0624-0x0625": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0626": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0627": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0628-0x0629": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x062A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x062B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x062C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x062D-0x062F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0630-0x0633": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0634-0x0635": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0636": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0637": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0638-0x0639": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x063A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x063B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x063C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x063D-0x063F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0640-0x0643": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0644-0x0645": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0646": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0647": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0648-0x0649": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x064A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x064B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x064C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x064D-0x064F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0650-0x0653": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0654-0x0655": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0656": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0657": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0658-0x0659": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x065A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x065B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x065C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x065D-0x065F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0660-0x0663": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0664-0x0665": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0666": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0667": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0668-0x0669": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x066A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x066B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x066C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x066D-0x066F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0670-0x0673": {
+        "section": "2.13.1",
+        "pdf_page": 98
+      },
+      "esc_core|0x0674-0x0675": {
+        "section": "2.13.2",
+        "pdf_page": 98
+      },
+      "esc_core|0x0676": {
+        "section": "2.13.3",
+        "pdf_page": 98
+      },
+      "esc_core|0x0677": {
+        "section": "2.13.4",
+        "pdf_page": 98
+      },
+      "esc_core|0x0678-0x0679": {
+        "section": "2.13.5",
+        "pdf_page": 99
+      },
+      "esc_core|0x067A": {
+        "section": "2.13.6",
+        "pdf_page": 99
+      },
+      "esc_core|0x067B": {
+        "section": "2.13.7",
+        "pdf_page": 99
+      },
+      "esc_core|0x067C": {
+        "section": "2.13.8",
+        "pdf_page": 99
+      },
+      "esc_core|0x067D-0x067F": {
+        "section": "2.13.9",
+        "pdf_page": 99
+      },
+      "esc_core|0x0800-0x0801": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x0802-0x0803": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x0804": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x0805": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x0806": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x0807": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0808-0x0809": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x080A-0x080B": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x080C": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x080D": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x080E": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x080F": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0810-0x0811": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x0812-0x0813": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x0814": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x0815": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x0816": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x0817": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0818-0x0819": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x081A-0x081B": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x081C": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x081D": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x081E": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x081F": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0820-0x0821": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x0822-0x0823": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x0824": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x0825": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x0826": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x0827": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0828-0x0829": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x082A-0x082B": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x082C": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x082D": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x082E": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x082F": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0830-0x0831": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x0832-0x0833": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x0834": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x0835": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x0836": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x0837": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0838-0x0839": {
+        "section": "2.14.1",
+        "pdf_page": 100
+      },
+      "esc_core|0x083A-0x083B": {
+        "section": "2.14.2",
+        "pdf_page": 100
+      },
+      "esc_core|0x083C": {
+        "section": "2.14.3",
+        "pdf_page": 101
+      },
+      "esc_core|0x083D": {
+        "section": "2.14.4",
+        "pdf_page": 102
+      },
+      "esc_core|0x083E": {
+        "section": "2.14.5",
+        "pdf_page": 103
+      },
+      "esc_core|0x083F": {
+        "section": "2.14.6",
+        "pdf_page": 104
+      },
+      "esc_core|0x0900-0x0903": {
+        "section": "2.15.1.1",
+        "pdf_page": 105
+      },
+      "esc_core|0x0904-0x0907": {
+        "section": "2.15.1.2",
+        "pdf_page": 105
+      },
+      "esc_core|0x0908-0x090B": {
+        "section": "2.15.1.3",
+        "pdf_page": 105
+      },
+      "esc_core|0x090C-0x090F": {
+        "section": "2.15.1.4",
+        "pdf_page": 106
+      },
+      "esc_core|0x0910-0x0917": {
+        "section": "2.15.2.1",
+        "pdf_page": 107
+      },
+      "esc_core|0x0918-0x091F": {
+        "section": "2.15.1.5",
+        "pdf_page": 106
+      },
+      "esc_core|0x0920-0x0927": {
+        "section": "2.15.2.2",
+        "pdf_page": 108
+      },
+      "esc_core|0x0928-0x092B": {
+        "section": "2.15.2.3",
+        "pdf_page": 108
+      },
+      "esc_core|0x092C-0x092F": {
+        "section": "2.15.2.4",
+        "pdf_page": 108
+      },
+      "esc_core|0x0930-0x0931": {
+        "section": "2.15.2.5",
+        "pdf_page": 108
+      },
+      "esc_core|0x0932-0x0933": {
+        "section": "2.15.2.6",
+        "pdf_page": 109
+      },
+      "esc_core|0x0934": {
+        "section": "2.15.2.7",
+        "pdf_page": 109
+      },
+      "esc_core|0x0935": {
+        "section": "2.15.2.8",
+        "pdf_page": 109
+      },
+      "esc_core|0x0980": {
+        "section": "2.15.3.5",
+        "pdf_page": 112
+      },
+      "esc_core|0x0981": {
+        "section": "2.15.4.1",
+        "pdf_page": 113
+      },
+      "esc_core|0x0982-0x0983": {
+        "section": "2.15.4.2",
+        "pdf_page": 114
+      },
+      "esc_core|0x098E": {
+        "section": "2.15.4.7",
+        "pdf_page": 116
+      },
+      "esc_core|0x098F": {
+        "section": "2.15.4.8",
+        "pdf_page": 117
+      },
+      "esc_core|0x0990-0x0997": {
+        "section": "2.15.4.9",
+        "pdf_page": 118
+      },
+      "esc_core|0x0998-0x099F": {
+        "section": "2.15.4.10",
+        "pdf_page": 118
+      },
+      "esc_core|0x09A0-0x09A3": {
+        "section": "2.15.4.11",
+        "pdf_page": 119
+      },
+      "esc_core|0x09A4-0x09A7": {
+        "section": "2.15.4.12",
+        "pdf_page": 119
+      },
+      "esc_core|0x09A8": {
+        "section": "2.15.5.1",
+        "pdf_page": 120
+      },
+      "esc_core|0x09A9": {
+        "section": "2.15.5.2",
+        "pdf_page": 120
+      },
+      "esc_core|0x09AE": {
+        "section": "2.15.5.7",
+        "pdf_page": 122
+      },
+      "esc_core|0x09AF": {
+        "section": "2.15.5.8",
+        "pdf_page": 122
+      },
+      "esc_core|0x09B0-0x09B7": {
+        "section": "2.15.5.9",
+        "pdf_page": 123
+      },
+      "esc_core|0x09B8-0x09BF": {
+        "section": "2.15.5.10",
+        "pdf_page": 123
+      },
+      "esc_core|0x09C0-0x09C7": {
+        "section": "2.15.5.11",
+        "pdf_page": 123
+      },
+      "esc_core|0x09C8-0x09CF": {
+        "section": "2.15.5.12",
+        "pdf_page": 123
+      },
+      "esc_core|0x09F0-0x09F3": {
+        "section": "2.15.6.1",
+        "pdf_page": 126
+      },
+      "esc_core|0x09F8-0x09FB": {
+        "section": "2.15.6.2",
+        "pdf_page": 126
+      },
+      "esc_core|0x09FC-0x09FF": {
+        "section": "2.15.6.3",
+        "pdf_page": 126
+      },
+      "esc_core|0x0E00-0x0E01": {
+        "section": "2.16.1.2",
+        "pdf_page": 128
+      },
+      "esc_core|0x0F00-0x0F03": {
+        "section": "2.17.1.1",
+        "pdf_page": 140
+      },
+      "esc_core|0x0F10-0x0F11": {
+        "section": "2.17.1.3",
+        "pdf_page": 140
+      },
+      "esc_core|0x0F18-0x0F19": {
+        "section": "2.17.1.4",
+        "pdf_page": 140
+      },
+      "esc_core|0x1000-0x1003": {
+        "section": "2.19.2",
+        "pdf_page": 150
+      },
+      "user_ram|0x0F80-0x0FFF": {
+        "section": "2.18.1",
+        "pdf_page": 141
+      },
+      "esc_core|0x0152-0x0153": {
+        "section": "2.6.6.1",
+        "pdf_page": 44
+      }
+    }
+  },
+  "beckhoff_et1100_datasheet_en.pdf": {
+    "source_id": "beckhoff_et1100_v2.1",
+    "version": "2.1",
+    "sha256": "fe30b9c040f31bef01131cd3c7801a07df853eabb5a198f172b101db18f53dbe",
+    "page_count": 124,
+    "sections": {
+      "2.1": 18,
+      "2.2": 21
+    },
+    "registers": {
+      "esc_core|0x0000": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0001": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0002-0x0003": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0004": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0005": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0006": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0007": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0008-0x0009": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0010-0x0011": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0012-0x0013": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0020": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0021": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0030": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0031": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0040": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0100-0x0103": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0108-0x0109": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0110-0x0111": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0120-0x0121": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0130-0x0131": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0134-0x0135": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0140": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0141": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0150": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0150-0x0153": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0151": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0200-0x0201": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0204-0x0207": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0210-0x0211": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0220-0x0223": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0300-0x0301": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0302-0x0303": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0304-0x0305": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0306-0x0307": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0308": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0309": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x030A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x030B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x030C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x030D": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x030E-0x030F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0310": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0311": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0312": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0313": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0400-0x0401": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0410-0x0411": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0420-0x0421": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0440-0x0441": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0442": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0443": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0500": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0501": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0502-0x0503": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0504-0x0507": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0508-0x050F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0510-0x0511": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0512": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0513": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0514-0x0515": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0600-0x0603": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0604-0x0605": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0606": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0607": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0608-0x0609": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x060A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x060B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x060C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x060D-0x060F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0610-0x0613": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0614-0x0615": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0616": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0617": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0618-0x0619": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x061A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x061B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x061C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x061D-0x061F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0620-0x0623": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0624-0x0625": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0626": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0627": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0628-0x0629": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x062A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x062B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x062C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x062D-0x062F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0630-0x0633": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0634-0x0635": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0636": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0637": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0638-0x0639": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x063A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x063B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x063C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x063D-0x063F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0640-0x0643": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0644-0x0645": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0646": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0647": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0648-0x0649": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x064A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x064B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x064C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x064D-0x064F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0650-0x0653": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0654-0x0655": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0656": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0657": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0658-0x0659": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x065A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x065B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x065C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x065D-0x065F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0660-0x0663": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0664-0x0665": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0666": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0667": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0668-0x0669": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x066A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x066B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x066C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x066D-0x066F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0670-0x0673": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0674-0x0675": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0676": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0677": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0678-0x0679": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x067A": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x067B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x067C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x067D-0x067F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0800-0x0801": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0802-0x0803": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0804": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0805": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0806": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0807": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0808-0x0809": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x080A-0x080B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x080C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x080D": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x080E": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x080F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0810-0x0811": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0812-0x0813": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0814": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0815": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0816": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0817": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0818-0x0819": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x081A-0x081B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x081C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x081D": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x081E": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x081F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0820-0x0821": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0822-0x0823": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0824": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0825": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0826": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0827": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0828-0x0829": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x082A-0x082B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x082C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x082D": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x082E": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x082F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0830-0x0831": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0832-0x0833": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0834": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0835": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0836": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0837": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0838-0x0839": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x083A-0x083B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x083C": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x083D": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x083E": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x083F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0900-0x0903": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0904-0x0907": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0908-0x090B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x090C-0x090F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0910-0x0917": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0918-0x091F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0920-0x0927": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0928-0x092B": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x092C-0x092F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0930-0x0931": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0932-0x0933": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0934": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0935": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0980": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0981": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0982-0x0983": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x098E": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x098F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0990-0x0997": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0998-0x099F": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09A0-0x09A3": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09A4-0x09A7": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09A8": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09A9": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09AE": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09AF": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09B0-0x09B7": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09B8-0x09BF": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09C0-0x09C7": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09C8-0x09CF": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09F0-0x09F3": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09F8-0x09FB": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x09FC-0x09FF": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0E00-0x0E01": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0F00-0x0F03": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0F10-0x0F11": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0F18-0x0F19": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x1000-0x1003": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "process_ram|0x1000-0x2FFF": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "user_ram|0x0F80-0x0FFF": {
+        "section": "2.2",
+        "pdf_page": 21
+      },
+      "esc_core|0x0152-0x0153": {
+        "section": "2.2",
+        "pdf_page": 21
+      }
+    }
+  },
+  "microchip_lan9252_register_zh.pdf": {
+    "source_id": "microchip_lan9252_ds00001909c",
+    "version": "DS00001909A_CN",
+    "sha256": "ae8d9e701fa69194284f2fae43e2bee64d86d7faebe2db3a0396cfc57749a99f",
+    "page_count": 329,
+    "sections": {
+      "12.14.1": 227,
+      "12.14.2": 227,
+      "12.14.3": 227,
+      "12.14.4": 228,
+      "12.14.5": 228,
+      "12.14.6": 228,
+      "12.14.7": 229,
+      "12.14.8": 230,
+      "12.14.9": 231,
+      "12.14.10": 231,
+      "12.14.11": 231,
+      "12.14.12": 233,
+      "12.14.13": 233,
+      "12.14.14": 234,
+      "12.14.15": 234,
+      "12.14.16": 235,
+      "12.14.17": 236,
+      "12.14.18": 237,
+      "12.14.19": 238,
+      "12.14.20": 239,
+      "12.14.21": 240,
+      "12.14.22": 240,
+      "12.14.23": 241,
+      "12.14.24": 242,
+      "12.14.25": 243,
+      "12.14.26": 244,
+      "12.14.27": 244,
+      "12.14.28": 245,
+      "12.14.29": 247,
+      "12.14.30": 248,
+      "12.14.31": 250,
+      "12.14.32": 250,
+      "12.14.33": 251,
+      "12.14.34": 252,
+      "12.14.35": 254,
+      "12.14.36": 255,
+      "12.14.37": 255,
+      "12.14.38": 255,
+      "12.14.39": 256,
+      "12.14.40": 257,
+      "12.14.41": 257,
+      "12.14.42": 258,
+      "12.14.43": 258,
+      "12.14.44": 259,
+      "12.14.45": 259,
+      "12.14.46": 259,
+      "12.14.47": 260,
+      "12.14.48": 261,
+      "12.14.49": 261,
+      "12.14.50": 263,
+      "12.14.51": 263,
+      "12.14.52": 264,
+      "12.14.53": 265,
+      "12.14.54": 265,
+      "12.14.55": 266,
+      "12.14.56": 266,
+      "12.14.57": 267,
+      "12.14.58": 267,
+      "12.14.61": 276,
+      "12.14.62": 277,
+      "12.14.63": 277,
+      "12.14.64": 278,
+      "12.14.65": 278,
+      "12.14.66": 279,
+      "12.14.67": 279,
+      "12.14.68": 279,
+      "12.14.69": 280,
+      "12.14.70": 280,
+      "12.14.71": 281,
+      "12.14.72": 281,
+      "12.14.73": 282,
+      "12.14.74": 283,
+      "12.14.75": 284,
+      "12.14.76": 284,
+      "12.14.77": 285,
+      "12.14.78": 285,
+      "12.14.79": 285,
+      "12.14.80": 286,
+      "12.14.81": 286,
+      "12.14.82": 286,
+      "12.14.83": 287,
+      "12.14.84": 287,
+      "12.14.85": 288,
+      "12.14.86": 288,
+      "12.14.87": 289,
+      "12.14.88": 289,
+      "12.14.89": 290,
+      "12.14.90": 290,
+      "12.14.91": 291,
+      "12.14.92": 291,
+      "12.14.93": 291,
+      "12.14.94": 292,
+      "12.14.95": 292,
+      "12.14.96": 292,
+      "12.14.97": 293,
+      "12.14.98": 293,
+      "12.14.100": 294,
+      "12.14.101": 294,
+      "12.13.1": 215,
+      "16.1": 301,
+      "8.3.1": 57,
+      "8.3.2": 59,
+      "8.3.3": 61,
+      "16.1.2": 303,
+      "16.1.3": 304,
+      "6.3.5.1": 47,
+      "15.3.1": 298,
+      "15.3.2": 299,
+      "15.3.3": 300,
+      "6.2.3.1": 42,
+      "12.13.3": 217,
+      "12.13.4": 218,
+      "12.13.5": 219,
+      "12.13.6": 220,
+      "12.13.7": 221,
+      "12.13.8": 222,
+      "9.5.1": 83,
+      "9.5": 82,
+      "Table 9-3": 82,
+      "9.5.2": 83,
+      "11.2.16.10": 157,
+      "11.2.16.11": 158,
+      "11.2.16.15": 164,
+      "11.2.16.16": 165,
+      "11.2.16.17": 166,
+      "11.2.16.19": 169,
+      "11.2.16.25": 179,
+      "11.2.16.26": 180,
+      "11.2.16.27": 181,
+      "11.2.16.29": 184,
+      "11.2.16.30": 185,
+      "11.2.16.31": 186,
+      "11.2.16.23": 177,
+      "11.2.16.24": 178,
+      "11.2.16.39": 194,
+      "11.2.16.40": 195,
+      "11.2.16.34": 189,
+      "11.2.16.35": 190,
+      "11.2.16.36": 191,
+      "11.2.16.37": 192,
+      "11.2.16.38": 193,
+      "11.2.16.8": 155,
+      "11.2.16.32": 187,
+      "11.2.16.33": 188,
+      "11.2.16.9": 156,
+      "12.14.59.1": 268,
+      "12.14.59.2": 269,
+      "12.14.59.3": 269,
+      "12.14.59.4": 269,
+      "12.14.59.5": 270,
+      "12.14.59.6": 270,
+      "12.14.59.7": 270,
+      "12.14.59.8": 271,
+      "12.14.59.9": 271,
+      "12.14.60.1": 272,
+      "12.14.60.2": 272,
+      "12.14.60.3": 273,
+      "12.14.60.4": 274,
+      "12.14.60.5": 275,
+      "12.14.60.6": 276,
+      "12.14.99": 293,
+      "12.13.2": 216,
+      "11.2.16.28": 182
+    },
+    "registers": {
+      "esc_core|0x0000": {
+        "section": "12.14.1",
+        "pdf_page": 227
+      },
+      "esc_core|0x0001": {
+        "section": "12.14.2",
+        "pdf_page": 227
+      },
+      "esc_core|0x0002-0x0003": {
+        "section": "12.14.3",
+        "pdf_page": 227
+      },
+      "esc_core|0x0004": {
+        "section": "12.14.4",
+        "pdf_page": 228
+      },
+      "esc_core|0x0005": {
+        "section": "12.14.5",
+        "pdf_page": 228
+      },
+      "esc_core|0x0006": {
+        "section": "12.14.6",
+        "pdf_page": 228
+      },
+      "esc_core|0x0007": {
+        "section": "12.14.7",
+        "pdf_page": 229
+      },
+      "esc_core|0x0008-0x0009": {
+        "section": "12.14.8",
+        "pdf_page": 230
+      },
+      "esc_core|0x0010-0x0011": {
+        "section": "12.14.9",
+        "pdf_page": 231
+      },
+      "esc_core|0x0012-0x0013": {
+        "section": "12.14.10",
+        "pdf_page": 231
+      },
+      "esc_core|0x0020": {
+        "section": "12.14.11",
+        "pdf_page": 231
+      },
+      "esc_core|0x0021": {
+        "section": "12.14.12",
+        "pdf_page": 233
+      },
+      "esc_core|0x0030": {
+        "section": "12.14.13",
+        "pdf_page": 233
+      },
+      "esc_core|0x0031": {
+        "section": "12.14.14",
+        "pdf_page": 234
+      },
+      "esc_core|0x0040": {
+        "section": "12.14.15",
+        "pdf_page": 234
+      },
+      "esc_core|0x0041": {
+        "section": "12.14.16",
+        "pdf_page": 235
+      },
+      "esc_core|0x0100-0x0103": {
+        "section": "12.14.17",
+        "pdf_page": 236
+      },
+      "esc_core|0x0108-0x0109": {
+        "section": "12.14.18",
+        "pdf_page": 237
+      },
+      "esc_core|0x0110-0x0111": {
+        "section": "12.14.19",
+        "pdf_page": 238
+      },
+      "esc_core|0x0120-0x0121": {
+        "section": "12.14.20",
+        "pdf_page": 239
+      },
+      "esc_core|0x0130-0x0131": {
+        "section": "12.14.21",
+        "pdf_page": 240
+      },
+      "esc_core|0x0134-0x0135": {
+        "section": "12.14.22",
+        "pdf_page": 240
+      },
+      "esc_core|0x0138": {
+        "section": "12.14.23",
+        "pdf_page": 241
+      },
+      "esc_core|0x0140": {
+        "section": "12.14.24",
+        "pdf_page": 242
+      },
+      "esc_core|0x0141": {
+        "section": "12.14.25",
+        "pdf_page": 243
+      },
+      "esc_core|0x0142-0x0143": {
+        "section": "12.14.26",
+        "pdf_page": 244
+      },
+      "esc_core|0x0144-0x0145": {
+        "section": "12.14.27",
+        "pdf_page": 244
+      },
+      "esc_core|0x0150": {
+        "section": "12.14.28",
+        "pdf_page": 245
+      },
+      "esc_core|0x0151": {
+        "section": "12.14.29",
+        "pdf_page": 247
+      },
+      "esc_core|0x0152-0x0153": {
+        "section": "12.14.30",
+        "pdf_page": 248
+      },
+      "esc_core|0x0200-0x0201": {
+        "section": "12.14.31",
+        "pdf_page": 250
+      },
+      "esc_core|0x0204-0x0207": {
+        "section": "12.14.32",
+        "pdf_page": 250
+      },
+      "esc_core|0x0210-0x0211": {
+        "section": "12.14.33",
+        "pdf_page": 251
+      },
+      "esc_core|0x0220-0x0223": {
+        "section": "12.14.34",
+        "pdf_page": 252
+      },
+      "esc_core|0x0300-0x0301": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0302-0x0303": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0304-0x0305": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0306-0x0307": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0308": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x0309": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x030A": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x030B": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x030C": {
+        "section": "12.14.37",
+        "pdf_page": 255
+      },
+      "esc_core|0x030D": {
+        "section": "12.14.38",
+        "pdf_page": 255
+      },
+      "esc_core|0x030E": {
+        "section": "12.14.39",
+        "pdf_page": 256
+      },
+      "esc_core|0x0310": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0311": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0312": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0313": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0400-0x0401": {
+        "section": "12.14.41",
+        "pdf_page": 257
+      },
+      "esc_core|0x0410-0x0411": {
+        "section": "12.14.42",
+        "pdf_page": 258
+      },
+      "esc_core|0x0420-0x0421": {
+        "section": "12.14.43",
+        "pdf_page": 258
+      },
+      "esc_core|0x0440-0x0441": {
+        "section": "12.14.44",
+        "pdf_page": 259
+      },
+      "esc_core|0x0442": {
+        "section": "12.14.45",
+        "pdf_page": 259
+      },
+      "esc_core|0x0443": {
+        "section": "12.14.46",
+        "pdf_page": 259
+      },
+      "esc_core|0x0500": {
+        "section": "12.14.47",
+        "pdf_page": 260
+      },
+      "esc_core|0x0501": {
+        "section": "12.14.48",
+        "pdf_page": 261
+      },
+      "esc_core|0x0502-0x0503": {
+        "section": "12.14.49",
+        "pdf_page": 261
+      },
+      "esc_core|0x0504-0x0507": {
+        "section": "12.14.50",
+        "pdf_page": 263
+      },
+      "esc_core|0x0508-0x050B": {
+        "section": "12.14.51",
+        "pdf_page": 263
+      },
+      "esc_core|0x0510-0x0511": {
+        "section": "12.14.52",
+        "pdf_page": 264
+      },
+      "esc_core|0x0512": {
+        "section": "12.14.53",
+        "pdf_page": 265
+      },
+      "esc_core|0x0513": {
+        "section": "12.14.54",
+        "pdf_page": 265
+      },
+      "esc_core|0x0514-0x0515": {
+        "section": "12.14.55",
+        "pdf_page": 266
+      },
+      "esc_core|0x0516": {
+        "section": "12.14.56",
+        "pdf_page": 266
+      },
+      "esc_core|0x0517": {
+        "section": "12.14.57",
+        "pdf_page": 267
+      },
+      "esc_core|0x0518": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x0519": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x051A": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x051B": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x0900-0x0903": {
+        "section": "12.14.61",
+        "pdf_page": 276
+      },
+      "esc_core|0x0904-0x0907": {
+        "section": "12.14.62",
+        "pdf_page": 277
+      },
+      "esc_core|0x0908-0x090B": {
+        "section": "12.14.63",
+        "pdf_page": 277
+      },
+      "esc_core|0x0910-0x0917": {
+        "section": "12.14.64",
+        "pdf_page": 278
+      },
+      "esc_core|0x0918-0x091F": {
+        "section": "12.14.65",
+        "pdf_page": 278
+      },
+      "esc_core|0x0920-0x0927": {
+        "section": "12.14.66",
+        "pdf_page": 279
+      },
+      "esc_core|0x0928-0x092B": {
+        "section": "12.14.67",
+        "pdf_page": 279
+      },
+      "esc_core|0x092C-0x092F": {
+        "section": "12.14.68",
+        "pdf_page": 279
+      },
+      "esc_core|0x0930-0x0931": {
+        "section": "12.14.69",
+        "pdf_page": 280
+      },
+      "esc_core|0x0932-0x0933": {
+        "section": "12.14.70",
+        "pdf_page": 280
+      },
+      "esc_core|0x0934": {
+        "section": "12.14.71",
+        "pdf_page": 281
+      },
+      "esc_core|0x0935": {
+        "section": "12.14.72",
+        "pdf_page": 281
+      },
+      "esc_core|0x0980": {
+        "section": "12.14.73",
+        "pdf_page": 282
+      },
+      "esc_core|0x0981": {
+        "section": "12.14.74",
+        "pdf_page": 283
+      },
+      "esc_core|0x0982-0x0983": {
+        "section": "12.14.75",
+        "pdf_page": 284
+      },
+      "esc_core|0x0984": {
+        "section": "12.14.76",
+        "pdf_page": 284
+      },
+      "esc_core|0x098E": {
+        "section": "12.14.77",
+        "pdf_page": 285
+      },
+      "esc_core|0x098F": {
+        "section": "12.14.78",
+        "pdf_page": 285
+      },
+      "esc_core|0x0990-0x0997": {
+        "section": "12.14.79",
+        "pdf_page": 285
+      },
+      "esc_core|0x0998-0x099F": {
+        "section": "12.14.80",
+        "pdf_page": 286
+      },
+      "esc_core|0x09A0-0x09A3": {
+        "section": "12.14.81",
+        "pdf_page": 286
+      },
+      "esc_core|0x09A4-0x09A7": {
+        "section": "12.14.82",
+        "pdf_page": 286
+      },
+      "esc_core|0x09A8": {
+        "section": "12.14.83",
+        "pdf_page": 287
+      },
+      "esc_core|0x09A9": {
+        "section": "12.14.84",
+        "pdf_page": 287
+      },
+      "esc_core|0x09AE": {
+        "section": "12.14.85",
+        "pdf_page": 288
+      },
+      "esc_core|0x09AF": {
+        "section": "12.14.86",
+        "pdf_page": 288
+      },
+      "esc_core|0x09B0-0x09B7": {
+        "section": "12.14.87",
+        "pdf_page": 289
+      },
+      "esc_core|0x09B8-0x09BF": {
+        "section": "12.14.88",
+        "pdf_page": 289
+      },
+      "esc_core|0x09C0-0x09C7": {
+        "section": "12.14.89",
+        "pdf_page": 290
+      },
+      "esc_core|0x09C8-0x09CF": {
+        "section": "12.14.90",
+        "pdf_page": 290
+      },
+      "esc_core|0x09F0-0x09F3": {
+        "section": "12.14.91",
+        "pdf_page": 291
+      },
+      "esc_core|0x09F8-0x09FB": {
+        "section": "12.14.92",
+        "pdf_page": 291
+      },
+      "esc_core|0x09FC-0x09FF": {
+        "section": "12.14.93",
+        "pdf_page": 291
+      },
+      "esc_core|0x0E00-0x0E07": {
+        "section": "12.14.94",
+        "pdf_page": 292
+      },
+      "esc_core|0x0E08-0x0E0F": {
+        "section": "12.14.95",
+        "pdf_page": 292
+      },
+      "esc_core|0x0F00-0x0F01": {
+        "section": "12.14.96",
+        "pdf_page": 292
+      },
+      "esc_core|0x0F10-0x0F11": {
+        "section": "12.14.97",
+        "pdf_page": 293
+      },
+      "esc_core|0x0F18-0x0F19": {
+        "section": "12.14.98",
+        "pdf_page": 293
+      },
+      "esc_core|0x1000-0x1001": {
+        "section": "12.14.100",
+        "pdf_page": 294
+      },
+      "process_ram|0x1000-0x1FFF": {
+        "section": "12.14.101",
+        "pdf_page": 294
+      },
+      "lan925x_system_csr|0x0000-0x001C": {
+        "section": "12.13.1",
+        "pdf_page": 215
+      },
+      "lan925x_system_csr|0x0050": {
+        "section": "16.1",
+        "pdf_page": 301
+      },
+      "lan925x_system_csr|0x0054": {
+        "section": "8.3.1",
+        "pdf_page": 57
+      },
+      "lan925x_system_csr|0x0058": {
+        "section": "8.3.2",
+        "pdf_page": 59
+      },
+      "lan925x_system_csr|0x005C": {
+        "section": "8.3.3",
+        "pdf_page": 61
+      },
+      "lan925x_system_csr|0x0064": {
+        "section": "16.1.2",
+        "pdf_page": 303
+      },
+      "lan925x_system_csr|0x0074": {
+        "section": "16.1.3",
+        "pdf_page": 304
+      },
+      "lan925x_system_csr|0x0084": {
+        "section": "6.3.5.1",
+        "pdf_page": 47
+      },
+      "lan925x_system_csr|0x008C": {
+        "section": "15.3.1",
+        "pdf_page": 298
+      },
+      "lan925x_system_csr|0x0090": {
+        "section": "15.3.2",
+        "pdf_page": 299
+      },
+      "lan925x_system_csr|0x009C": {
+        "section": "15.3.3",
+        "pdf_page": 300
+      },
+      "lan925x_system_csr|0x01F8": {
+        "section": "6.2.3.1",
+        "pdf_page": 42
+      },
+      "lan925x_system_csr|0x0300": {
+        "section": "12.13.3",
+        "pdf_page": 217
+      },
+      "lan925x_system_csr|0x0304": {
+        "section": "12.13.4",
+        "pdf_page": 218
+      },
+      "lan925x_system_csr|0x0308": {
+        "section": "12.13.5",
+        "pdf_page": 219
+      },
+      "lan925x_system_csr|0x030C": {
+        "section": "12.13.6",
+        "pdf_page": 220
+      },
+      "lan925x_system_csr|0x0310": {
+        "section": "12.13.7",
+        "pdf_page": 221
+      },
+      "lan925x_system_csr|0x0314": {
+        "section": "12.13.8",
+        "pdf_page": 222
+      },
+      "hbi_local|0x0000-0x0003": {
+        "section": "9.5.1",
+        "pdf_page": 83
+      },
+      "hbi_local|0x0004-0x0007": {
+        "section": "9.5",
+        "pdf_page": 82
+      },
+      "hbi_local|0x0008-0x000B": {
+        "section": "9.5.1",
+        "pdf_page": 83
+      },
+      "hbi_local|0x000C-0x000F": {
+        "section": "9.5",
+        "pdf_page": 82
+      },
+      "hbi_local|0x0010-0x0013": {
+        "section": "9.5.1",
+        "pdf_page": 83
+      },
+      "hbi_local|0x0014-0x0017": {
+        "section": "9.5",
+        "pdf_page": 82
+      },
+      "hbi_local|0x0018-0x001B": {
+        "section": "Table 9-3",
+        "pdf_page": 82
+      },
+      "hbi_local|0x001C-0x001F": {
+        "section": "9.5.2",
+        "pdf_page": 83
+      },
+      "phy|13": {
+        "section": "11.2.16.10",
+        "pdf_page": 157
+      },
+      "phy|14": {
+        "section": "11.2.16.11",
+        "pdf_page": 158
+      },
+      "phy|24": {
+        "section": "11.2.16.15",
+        "pdf_page": 164
+      },
+      "phy|25": {
+        "section": "11.2.16.16",
+        "pdf_page": 165
+      },
+      "phy|26": {
+        "section": "11.2.16.17",
+        "pdf_page": 166
+      },
+      "phy|28": {
+        "section": "11.2.16.19",
+        "pdf_page": 169
+      },
+      "phy|3.32784": {
+        "section": "11.2.16.25",
+        "pdf_page": 179
+      },
+      "phy|3.32785": {
+        "section": "11.2.16.26",
+        "pdf_page": 180
+      },
+      "phy|3.32786": {
+        "section": "11.2.16.27",
+        "pdf_page": 181
+      },
+      "phy|3.32865": {
+        "section": "11.2.16.29",
+        "pdf_page": 184
+      },
+      "phy|3.32866": {
+        "section": "11.2.16.30",
+        "pdf_page": 185
+      },
+      "phy|3.32867": {
+        "section": "11.2.16.31",
+        "pdf_page": 186
+      },
+      "phy|3.5": {
+        "section": "11.2.16.23",
+        "pdf_page": 177
+      },
+      "phy|3.6": {
+        "section": "11.2.16.24",
+        "pdf_page": 178
+      },
+      "phy|30.14": {
+        "section": "11.2.16.39",
+        "pdf_page": 194
+      },
+      "phy|30.15": {
+        "section": "11.2.16.40",
+        "pdf_page": 195
+      },
+      "phy|30.2": {
+        "section": "11.2.16.34",
+        "pdf_page": 189
+      },
+      "phy|30.3": {
+        "section": "11.2.16.35",
+        "pdf_page": 190
+      },
+      "phy|30.5": {
+        "section": "11.2.16.36",
+        "pdf_page": 191
+      },
+      "phy|30.6": {
+        "section": "11.2.16.37",
+        "pdf_page": 192
+      },
+      "phy|30.8": {
+        "section": "11.2.16.38",
+        "pdf_page": 193
+      },
+      "phy|7": {
+        "section": "11.2.16.8",
+        "pdf_page": 155
+      },
+      "phy|7.5": {
+        "section": "11.2.16.32",
+        "pdf_page": 187
+      },
+      "phy|7.6": {
+        "section": "11.2.16.33",
+        "pdf_page": 188
+      },
+      "phy|8": {
+        "section": "11.2.16.9",
+        "pdf_page": 156
+      },
+      "esc_core|0x0600-0x0603": {
+        "section": "12.14.59.1",
+        "pdf_page": 268
+      },
+      "esc_core|0x0604-0x0605": {
+        "section": "12.14.59.2",
+        "pdf_page": 269
+      },
+      "esc_core|0x0606": {
+        "section": "12.14.59.3",
+        "pdf_page": 269
+      },
+      "esc_core|0x0607": {
+        "section": "12.14.59.4",
+        "pdf_page": 269
+      },
+      "esc_core|0x0608-0x0609": {
+        "section": "12.14.59.5",
+        "pdf_page": 270
+      },
+      "esc_core|0x060A": {
+        "section": "12.14.59.6",
+        "pdf_page": 270
+      },
+      "esc_core|0x060B": {
+        "section": "12.14.59.7",
+        "pdf_page": 270
+      },
+      "esc_core|0x060C": {
+        "section": "12.14.59.8",
+        "pdf_page": 271
+      },
+      "esc_core|0x060D-0x060F": {
+        "section": "12.14.59.9",
+        "pdf_page": 271
+      },
+      "esc_core|0x0800-0x0801": {
+        "section": "12.14.60.1",
+        "pdf_page": 272
+      },
+      "esc_core|0x0802-0x0803": {
+        "section": "12.14.60.2",
+        "pdf_page": 272
+      },
+      "esc_core|0x0804": {
+        "section": "12.14.60.3",
+        "pdf_page": 273
+      },
+      "esc_core|0x0805": {
+        "section": "12.14.60.4",
+        "pdf_page": 274
+      },
+      "esc_core|0x0806": {
+        "section": "12.14.60.5",
+        "pdf_page": 275
+      },
+      "esc_core|0x0807": {
+        "section": "12.14.60.6",
+        "pdf_page": 276
+      },
+      "user_ram|0x0F80-0x0FFF": {
+        "section": "12.14.99",
+        "pdf_page": 293
+      },
+      "lan925x_system_csr|0x0020-0x003C": {
+        "section": "12.13.2",
+        "pdf_page": 216
+      },
+      "phy|3.32801": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32802": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32803": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32804": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32805": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32806": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32807": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32808": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      }
+    }
+  },
+  "microchip_lan9252_register_en.pdf": {
+    "source_id": "microchip_lan9252_ds00001909c",
+    "version": "DS00001909C",
+    "sha256": "e1a7c0c1a023a5947e117ba5ec740451daee6b27e136740714e83cc92b80e05b",
+    "page_count": 332,
+    "sections": {
+      "12.14.1": 227,
+      "12.14.2": 227,
+      "12.14.3": 227,
+      "12.14.4": 228,
+      "12.14.5": 228,
+      "12.14.6": 228,
+      "12.14.7": 229,
+      "12.14.8": 230,
+      "12.14.9": 231,
+      "12.14.10": 231,
+      "12.14.11": 231,
+      "12.14.12": 233,
+      "12.14.13": 233,
+      "12.14.14": 234,
+      "12.14.15": 234,
+      "12.14.16": 235,
+      "12.14.17": 236,
+      "12.14.18": 237,
+      "12.14.19": 238,
+      "12.14.20": 239,
+      "12.14.21": 240,
+      "12.14.22": 240,
+      "12.14.23": 241,
+      "12.14.24": 242,
+      "12.14.25": 243,
+      "12.14.26": 244,
+      "12.14.27": 244,
+      "12.14.28": 245,
+      "12.14.29": 247,
+      "12.14.30": 248,
+      "12.14.31": 250,
+      "12.14.32": 250,
+      "12.14.33": 251,
+      "12.14.34": 252,
+      "12.14.35": 254,
+      "12.14.36": 255,
+      "12.14.37": 255,
+      "12.14.38": 255,
+      "12.14.39": 256,
+      "12.14.40": 257,
+      "12.14.41": 257,
+      "12.14.42": 258,
+      "12.14.43": 258,
+      "12.14.44": 259,
+      "12.14.45": 259,
+      "12.14.46": 259,
+      "12.14.47": 260,
+      "12.14.48": 261,
+      "12.14.49": 261,
+      "12.14.50": 263,
+      "12.14.51": 263,
+      "12.14.52": 264,
+      "12.14.53": 265,
+      "12.14.54": 265,
+      "12.14.55": 266,
+      "12.14.56": 266,
+      "12.14.57": 267,
+      "12.14.58": 267,
+      "12.14.61": 276,
+      "12.14.62": 277,
+      "12.14.63": 277,
+      "12.14.64": 278,
+      "12.14.65": 278,
+      "12.14.66": 279,
+      "12.14.67": 279,
+      "12.14.68": 279,
+      "12.14.69": 280,
+      "12.14.70": 280,
+      "12.14.71": 281,
+      "12.14.72": 281,
+      "12.14.73": 282,
+      "12.14.74": 283,
+      "12.14.75": 284,
+      "12.14.76": 284,
+      "12.14.77": 285,
+      "12.14.78": 285,
+      "12.14.79": 285,
+      "12.14.80": 286,
+      "12.14.81": 286,
+      "12.14.82": 286,
+      "12.14.83": 287,
+      "12.14.84": 287,
+      "12.14.85": 288,
+      "12.14.86": 288,
+      "12.14.87": 289,
+      "12.14.88": 289,
+      "12.14.89": 290,
+      "12.14.90": 290,
+      "12.14.91": 291,
+      "12.14.92": 291,
+      "12.14.93": 291,
+      "12.14.94": 292,
+      "12.14.95": 292,
+      "12.14.96": 292,
+      "12.14.97": 293,
+      "12.14.98": 293,
+      "12.14.100": 294,
+      "12.14.101": 294,
+      "12.13.1": 215,
+      "16.1": 301,
+      "8.3.1": 57,
+      "8.3.2": 59,
+      "8.3.3": 61,
+      "16.1.2": 303,
+      "16.1.3": 304,
+      "6.3.5.1": 47,
+      "15.3.1": 298,
+      "15.3.2": 299,
+      "15.3.3": 300,
+      "6.2.3.1": 42,
+      "12.13.3": 217,
+      "12.13.4": 218,
+      "12.13.5": 219,
+      "12.13.6": 220,
+      "12.13.7": 221,
+      "12.13.8": 222,
+      "9.5.1": 83,
+      "9.5": 82,
+      "Table 9-3": 82,
+      "9.5.2": 83,
+      "11.2.16.10": 157,
+      "11.2.16.11": 158,
+      "11.2.16.15": 164,
+      "11.2.16.16": 165,
+      "11.2.16.17": 166,
+      "11.2.16.19": 169,
+      "11.2.16.25": 179,
+      "11.2.16.26": 180,
+      "11.2.16.27": 181,
+      "11.2.16.29": 184,
+      "11.2.16.30": 185,
+      "11.2.16.31": 186,
+      "11.2.16.23": 177,
+      "11.2.16.24": 178,
+      "11.2.16.39": 194,
+      "11.2.16.40": 195,
+      "11.2.16.34": 189,
+      "11.2.16.35": 190,
+      "11.2.16.36": 191,
+      "11.2.16.37": 192,
+      "11.2.16.38": 193,
+      "11.2.16.8": 155,
+      "11.2.16.32": 187,
+      "11.2.16.33": 188,
+      "11.2.16.9": 156,
+      "12.14.59.1": 268,
+      "12.14.59.2": 269,
+      "12.14.59.3": 269,
+      "12.14.59.4": 269,
+      "12.14.59.5": 270,
+      "12.14.59.6": 270,
+      "12.14.59.7": 270,
+      "12.14.59.8": 271,
+      "12.14.59.9": 271,
+      "12.14.60.1": 272,
+      "12.14.60.2": 272,
+      "12.14.60.3": 273,
+      "12.14.60.4": 274,
+      "12.14.60.5": 275,
+      "12.14.60.6": 276,
+      "12.14.99": 293,
+      "12.13.2": 216,
+      "11.2.16.28": 182
+    },
+    "registers": {
+      "esc_core|0x0000": {
+        "section": "12.14.1",
+        "pdf_page": 227
+      },
+      "esc_core|0x0001": {
+        "section": "12.14.2",
+        "pdf_page": 227
+      },
+      "esc_core|0x0002-0x0003": {
+        "section": "12.14.3",
+        "pdf_page": 227
+      },
+      "esc_core|0x0004": {
+        "section": "12.14.4",
+        "pdf_page": 228
+      },
+      "esc_core|0x0005": {
+        "section": "12.14.5",
+        "pdf_page": 228
+      },
+      "esc_core|0x0006": {
+        "section": "12.14.6",
+        "pdf_page": 228
+      },
+      "esc_core|0x0007": {
+        "section": "12.14.7",
+        "pdf_page": 229
+      },
+      "esc_core|0x0008-0x0009": {
+        "section": "12.14.8",
+        "pdf_page": 230
+      },
+      "esc_core|0x0010-0x0011": {
+        "section": "12.14.9",
+        "pdf_page": 231
+      },
+      "esc_core|0x0012-0x0013": {
+        "section": "12.14.10",
+        "pdf_page": 231
+      },
+      "esc_core|0x0020": {
+        "section": "12.14.11",
+        "pdf_page": 231
+      },
+      "esc_core|0x0021": {
+        "section": "12.14.12",
+        "pdf_page": 233
+      },
+      "esc_core|0x0030": {
+        "section": "12.14.13",
+        "pdf_page": 233
+      },
+      "esc_core|0x0031": {
+        "section": "12.14.14",
+        "pdf_page": 234
+      },
+      "esc_core|0x0040": {
+        "section": "12.14.15",
+        "pdf_page": 234
+      },
+      "esc_core|0x0041": {
+        "section": "12.14.16",
+        "pdf_page": 235
+      },
+      "esc_core|0x0100-0x0103": {
+        "section": "12.14.17",
+        "pdf_page": 236
+      },
+      "esc_core|0x0108-0x0109": {
+        "section": "12.14.18",
+        "pdf_page": 237
+      },
+      "esc_core|0x0110-0x0111": {
+        "section": "12.14.19",
+        "pdf_page": 238
+      },
+      "esc_core|0x0120-0x0121": {
+        "section": "12.14.20",
+        "pdf_page": 239
+      },
+      "esc_core|0x0130-0x0131": {
+        "section": "12.14.21",
+        "pdf_page": 240
+      },
+      "esc_core|0x0134-0x0135": {
+        "section": "12.14.22",
+        "pdf_page": 240
+      },
+      "esc_core|0x0138": {
+        "section": "12.14.23",
+        "pdf_page": 241
+      },
+      "esc_core|0x0140": {
+        "section": "12.14.24",
+        "pdf_page": 242
+      },
+      "esc_core|0x0141": {
+        "section": "12.14.25",
+        "pdf_page": 243
+      },
+      "esc_core|0x0142-0x0143": {
+        "section": "12.14.26",
+        "pdf_page": 244
+      },
+      "esc_core|0x0144-0x0145": {
+        "section": "12.14.27",
+        "pdf_page": 244
+      },
+      "esc_core|0x0150": {
+        "section": "12.14.28",
+        "pdf_page": 245
+      },
+      "esc_core|0x0151": {
+        "section": "12.14.29",
+        "pdf_page": 247
+      },
+      "esc_core|0x0152-0x0153": {
+        "section": "12.14.30",
+        "pdf_page": 248
+      },
+      "esc_core|0x0200-0x0201": {
+        "section": "12.14.31",
+        "pdf_page": 250
+      },
+      "esc_core|0x0204-0x0207": {
+        "section": "12.14.32",
+        "pdf_page": 250
+      },
+      "esc_core|0x0210-0x0211": {
+        "section": "12.14.33",
+        "pdf_page": 251
+      },
+      "esc_core|0x0220-0x0223": {
+        "section": "12.14.34",
+        "pdf_page": 252
+      },
+      "esc_core|0x0300-0x0301": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0302-0x0303": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0304-0x0305": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0306-0x0307": {
+        "section": "12.14.35",
+        "pdf_page": 254
+      },
+      "esc_core|0x0308": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x0309": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x030A": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x030B": {
+        "section": "12.14.36",
+        "pdf_page": 255
+      },
+      "esc_core|0x030C": {
+        "section": "12.14.37",
+        "pdf_page": 255
+      },
+      "esc_core|0x030D": {
+        "section": "12.14.38",
+        "pdf_page": 255
+      },
+      "esc_core|0x030E": {
+        "section": "12.14.39",
+        "pdf_page": 256
+      },
+      "esc_core|0x0310": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0311": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0312": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0313": {
+        "section": "12.14.40",
+        "pdf_page": 257
+      },
+      "esc_core|0x0400-0x0401": {
+        "section": "12.14.41",
+        "pdf_page": 257
+      },
+      "esc_core|0x0410-0x0411": {
+        "section": "12.14.42",
+        "pdf_page": 258
+      },
+      "esc_core|0x0420-0x0421": {
+        "section": "12.14.43",
+        "pdf_page": 258
+      },
+      "esc_core|0x0440-0x0441": {
+        "section": "12.14.44",
+        "pdf_page": 259
+      },
+      "esc_core|0x0442": {
+        "section": "12.14.45",
+        "pdf_page": 259
+      },
+      "esc_core|0x0443": {
+        "section": "12.14.46",
+        "pdf_page": 259
+      },
+      "esc_core|0x0500": {
+        "section": "12.14.47",
+        "pdf_page": 260
+      },
+      "esc_core|0x0501": {
+        "section": "12.14.48",
+        "pdf_page": 261
+      },
+      "esc_core|0x0502-0x0503": {
+        "section": "12.14.49",
+        "pdf_page": 261
+      },
+      "esc_core|0x0504-0x0507": {
+        "section": "12.14.50",
+        "pdf_page": 263
+      },
+      "esc_core|0x0508-0x050B": {
+        "section": "12.14.51",
+        "pdf_page": 263
+      },
+      "esc_core|0x0510-0x0511": {
+        "section": "12.14.52",
+        "pdf_page": 264
+      },
+      "esc_core|0x0512": {
+        "section": "12.14.53",
+        "pdf_page": 265
+      },
+      "esc_core|0x0513": {
+        "section": "12.14.54",
+        "pdf_page": 265
+      },
+      "esc_core|0x0514-0x0515": {
+        "section": "12.14.55",
+        "pdf_page": 266
+      },
+      "esc_core|0x0516": {
+        "section": "12.14.56",
+        "pdf_page": 266
+      },
+      "esc_core|0x0517": {
+        "section": "12.14.57",
+        "pdf_page": 267
+      },
+      "esc_core|0x0518": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x0519": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x051A": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x051B": {
+        "section": "12.14.58",
+        "pdf_page": 267
+      },
+      "esc_core|0x0900-0x0903": {
+        "section": "12.14.61",
+        "pdf_page": 276
+      },
+      "esc_core|0x0904-0x0907": {
+        "section": "12.14.62",
+        "pdf_page": 277
+      },
+      "esc_core|0x0908-0x090B": {
+        "section": "12.14.63",
+        "pdf_page": 277
+      },
+      "esc_core|0x0910-0x0917": {
+        "section": "12.14.64",
+        "pdf_page": 278
+      },
+      "esc_core|0x0918-0x091F": {
+        "section": "12.14.65",
+        "pdf_page": 278
+      },
+      "esc_core|0x0920-0x0927": {
+        "section": "12.14.66",
+        "pdf_page": 279
+      },
+      "esc_core|0x0928-0x092B": {
+        "section": "12.14.67",
+        "pdf_page": 279
+      },
+      "esc_core|0x092C-0x092F": {
+        "section": "12.14.68",
+        "pdf_page": 279
+      },
+      "esc_core|0x0930-0x0931": {
+        "section": "12.14.69",
+        "pdf_page": 280
+      },
+      "esc_core|0x0932-0x0933": {
+        "section": "12.14.70",
+        "pdf_page": 280
+      },
+      "esc_core|0x0934": {
+        "section": "12.14.71",
+        "pdf_page": 281
+      },
+      "esc_core|0x0935": {
+        "section": "12.14.72",
+        "pdf_page": 281
+      },
+      "esc_core|0x0980": {
+        "section": "12.14.73",
+        "pdf_page": 282
+      },
+      "esc_core|0x0981": {
+        "section": "12.14.74",
+        "pdf_page": 283
+      },
+      "esc_core|0x0982-0x0983": {
+        "section": "12.14.75",
+        "pdf_page": 284
+      },
+      "esc_core|0x0984": {
+        "section": "12.14.76",
+        "pdf_page": 284
+      },
+      "esc_core|0x098E": {
+        "section": "12.14.77",
+        "pdf_page": 285
+      },
+      "esc_core|0x098F": {
+        "section": "12.14.78",
+        "pdf_page": 285
+      },
+      "esc_core|0x0990-0x0997": {
+        "section": "12.14.79",
+        "pdf_page": 285
+      },
+      "esc_core|0x0998-0x099F": {
+        "section": "12.14.80",
+        "pdf_page": 286
+      },
+      "esc_core|0x09A0-0x09A3": {
+        "section": "12.14.81",
+        "pdf_page": 286
+      },
+      "esc_core|0x09A4-0x09A7": {
+        "section": "12.14.82",
+        "pdf_page": 286
+      },
+      "esc_core|0x09A8": {
+        "section": "12.14.83",
+        "pdf_page": 287
+      },
+      "esc_core|0x09A9": {
+        "section": "12.14.84",
+        "pdf_page": 287
+      },
+      "esc_core|0x09AE": {
+        "section": "12.14.85",
+        "pdf_page": 288
+      },
+      "esc_core|0x09AF": {
+        "section": "12.14.86",
+        "pdf_page": 288
+      },
+      "esc_core|0x09B0-0x09B7": {
+        "section": "12.14.87",
+        "pdf_page": 289
+      },
+      "esc_core|0x09B8-0x09BF": {
+        "section": "12.14.88",
+        "pdf_page": 289
+      },
+      "esc_core|0x09C0-0x09C7": {
+        "section": "12.14.89",
+        "pdf_page": 290
+      },
+      "esc_core|0x09C8-0x09CF": {
+        "section": "12.14.90",
+        "pdf_page": 290
+      },
+      "esc_core|0x09F0-0x09F3": {
+        "section": "12.14.91",
+        "pdf_page": 291
+      },
+      "esc_core|0x09F8-0x09FB": {
+        "section": "12.14.92",
+        "pdf_page": 291
+      },
+      "esc_core|0x09FC-0x09FF": {
+        "section": "12.14.93",
+        "pdf_page": 291
+      },
+      "esc_core|0x0E00-0x0E07": {
+        "section": "12.14.94",
+        "pdf_page": 292
+      },
+      "esc_core|0x0E08-0x0E0F": {
+        "section": "12.14.95",
+        "pdf_page": 292
+      },
+      "esc_core|0x0F00-0x0F01": {
+        "section": "12.14.96",
+        "pdf_page": 292
+      },
+      "esc_core|0x0F10-0x0F11": {
+        "section": "12.14.97",
+        "pdf_page": 293
+      },
+      "esc_core|0x0F18-0x0F19": {
+        "section": "12.14.98",
+        "pdf_page": 293
+      },
+      "esc_core|0x1000-0x1001": {
+        "section": "12.14.100",
+        "pdf_page": 294
+      },
+      "process_ram|0x1000-0x1FFF": {
+        "section": "12.14.101",
+        "pdf_page": 294
+      },
+      "lan925x_system_csr|0x0000-0x001C": {
+        "section": "12.13.1",
+        "pdf_page": 215
+      },
+      "lan925x_system_csr|0x0050": {
+        "section": "16.1",
+        "pdf_page": 301
+      },
+      "lan925x_system_csr|0x0054": {
+        "section": "8.3.1",
+        "pdf_page": 57
+      },
+      "lan925x_system_csr|0x0058": {
+        "section": "8.3.2",
+        "pdf_page": 59
+      },
+      "lan925x_system_csr|0x005C": {
+        "section": "8.3.3",
+        "pdf_page": 61
+      },
+      "lan925x_system_csr|0x0064": {
+        "section": "16.1.2",
+        "pdf_page": 303
+      },
+      "lan925x_system_csr|0x0074": {
+        "section": "16.1.3",
+        "pdf_page": 304
+      },
+      "lan925x_system_csr|0x0084": {
+        "section": "6.3.5.1",
+        "pdf_page": 47
+      },
+      "lan925x_system_csr|0x008C": {
+        "section": "15.3.1",
+        "pdf_page": 298
+      },
+      "lan925x_system_csr|0x0090": {
+        "section": "15.3.2",
+        "pdf_page": 299
+      },
+      "lan925x_system_csr|0x009C": {
+        "section": "15.3.3",
+        "pdf_page": 300
+      },
+      "lan925x_system_csr|0x01F8": {
+        "section": "6.2.3.1",
+        "pdf_page": 42
+      },
+      "lan925x_system_csr|0x0300": {
+        "section": "12.13.3",
+        "pdf_page": 217
+      },
+      "lan925x_system_csr|0x0304": {
+        "section": "12.13.4",
+        "pdf_page": 218
+      },
+      "lan925x_system_csr|0x0308": {
+        "section": "12.13.5",
+        "pdf_page": 219
+      },
+      "lan925x_system_csr|0x030C": {
+        "section": "12.13.6",
+        "pdf_page": 220
+      },
+      "lan925x_system_csr|0x0310": {
+        "section": "12.13.7",
+        "pdf_page": 221
+      },
+      "lan925x_system_csr|0x0314": {
+        "section": "12.13.8",
+        "pdf_page": 222
+      },
+      "hbi_local|0x0000-0x0003": {
+        "section": "9.5.1",
+        "pdf_page": 83
+      },
+      "hbi_local|0x0004-0x0007": {
+        "section": "9.5",
+        "pdf_page": 82
+      },
+      "hbi_local|0x0008-0x000B": {
+        "section": "9.5.1",
+        "pdf_page": 83
+      },
+      "hbi_local|0x000C-0x000F": {
+        "section": "9.5",
+        "pdf_page": 82
+      },
+      "hbi_local|0x0010-0x0013": {
+        "section": "9.5.1",
+        "pdf_page": 83
+      },
+      "hbi_local|0x0014-0x0017": {
+        "section": "9.5",
+        "pdf_page": 82
+      },
+      "hbi_local|0x0018-0x001B": {
+        "section": "Table 9-3",
+        "pdf_page": 82
+      },
+      "hbi_local|0x001C-0x001F": {
+        "section": "9.5.2",
+        "pdf_page": 83
+      },
+      "phy|13": {
+        "section": "11.2.16.10",
+        "pdf_page": 157
+      },
+      "phy|14": {
+        "section": "11.2.16.11",
+        "pdf_page": 158
+      },
+      "phy|24": {
+        "section": "11.2.16.15",
+        "pdf_page": 164
+      },
+      "phy|25": {
+        "section": "11.2.16.16",
+        "pdf_page": 165
+      },
+      "phy|26": {
+        "section": "11.2.16.17",
+        "pdf_page": 166
+      },
+      "phy|28": {
+        "section": "11.2.16.19",
+        "pdf_page": 169
+      },
+      "phy|3.32784": {
+        "section": "11.2.16.25",
+        "pdf_page": 179
+      },
+      "phy|3.32785": {
+        "section": "11.2.16.26",
+        "pdf_page": 180
+      },
+      "phy|3.32786": {
+        "section": "11.2.16.27",
+        "pdf_page": 181
+      },
+      "phy|3.32865": {
+        "section": "11.2.16.29",
+        "pdf_page": 184
+      },
+      "phy|3.32866": {
+        "section": "11.2.16.30",
+        "pdf_page": 185
+      },
+      "phy|3.32867": {
+        "section": "11.2.16.31",
+        "pdf_page": 186
+      },
+      "phy|3.5": {
+        "section": "11.2.16.23",
+        "pdf_page": 177
+      },
+      "phy|3.6": {
+        "section": "11.2.16.24",
+        "pdf_page": 178
+      },
+      "phy|30.14": {
+        "section": "11.2.16.39",
+        "pdf_page": 194
+      },
+      "phy|30.15": {
+        "section": "11.2.16.40",
+        "pdf_page": 195
+      },
+      "phy|30.2": {
+        "section": "11.2.16.34",
+        "pdf_page": 189
+      },
+      "phy|30.3": {
+        "section": "11.2.16.35",
+        "pdf_page": 190
+      },
+      "phy|30.5": {
+        "section": "11.2.16.36",
+        "pdf_page": 191
+      },
+      "phy|30.6": {
+        "section": "11.2.16.37",
+        "pdf_page": 192
+      },
+      "phy|30.8": {
+        "section": "11.2.16.38",
+        "pdf_page": 193
+      },
+      "phy|7": {
+        "section": "11.2.16.8",
+        "pdf_page": 155
+      },
+      "phy|7.5": {
+        "section": "11.2.16.32",
+        "pdf_page": 187
+      },
+      "phy|7.6": {
+        "section": "11.2.16.33",
+        "pdf_page": 188
+      },
+      "phy|8": {
+        "section": "11.2.16.9",
+        "pdf_page": 156
+      },
+      "esc_core|0x0600-0x0603": {
+        "section": "12.14.59.1",
+        "pdf_page": 268
+      },
+      "esc_core|0x0604-0x0605": {
+        "section": "12.14.59.2",
+        "pdf_page": 269
+      },
+      "esc_core|0x0606": {
+        "section": "12.14.59.3",
+        "pdf_page": 269
+      },
+      "esc_core|0x0607": {
+        "section": "12.14.59.4",
+        "pdf_page": 269
+      },
+      "esc_core|0x0608-0x0609": {
+        "section": "12.14.59.5",
+        "pdf_page": 270
+      },
+      "esc_core|0x060A": {
+        "section": "12.14.59.6",
+        "pdf_page": 270
+      },
+      "esc_core|0x060B": {
+        "section": "12.14.59.7",
+        "pdf_page": 270
+      },
+      "esc_core|0x060C": {
+        "section": "12.14.59.8",
+        "pdf_page": 271
+      },
+      "esc_core|0x060D-0x060F": {
+        "section": "12.14.59.9",
+        "pdf_page": 271
+      },
+      "esc_core|0x0800-0x0801": {
+        "section": "12.14.60.1",
+        "pdf_page": 272
+      },
+      "esc_core|0x0802-0x0803": {
+        "section": "12.14.60.2",
+        "pdf_page": 272
+      },
+      "esc_core|0x0804": {
+        "section": "12.14.60.3",
+        "pdf_page": 273
+      },
+      "esc_core|0x0805": {
+        "section": "12.14.60.4",
+        "pdf_page": 274
+      },
+      "esc_core|0x0806": {
+        "section": "12.14.60.5",
+        "pdf_page": 275
+      },
+      "esc_core|0x0807": {
+        "section": "12.14.60.6",
+        "pdf_page": 276
+      },
+      "user_ram|0x0F80-0x0FFF": {
+        "section": "12.14.99",
+        "pdf_page": 293
+      },
+      "lan925x_system_csr|0x0020-0x003C": {
+        "section": "12.13.2",
+        "pdf_page": 216
+      },
+      "phy|3.32801": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32802": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32803": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32804": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32805": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32806": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32807": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      },
+      "phy|3.32808": {
+        "section": "11.2.16.28",
+        "pdf_page": 182
+      }
+    }
+  },
+  "microchip_lan9253_register_en.pdf": {
+    "source_id": "microchip_lan9253_ds00003421b",
+    "version": "DS00003421B",
+    "sha256": "45410c2675e5e050dd5d0152151cf9edb2832ab1c589ddd29e1813bc5a05ac01",
+    "page_count": 402,
+    "sections": {
+      "11.16.1": 297,
+      "11.16.2": 297,
+      "11.16.3": 297,
+      "11.16.4": 298,
+      "11.16.5": 298,
+      "11.16.6": 298,
+      "11.16.7": 299,
+      "11.16.8": 300,
+      "11.16.9": 301,
+      "11.16.10": 301,
+      "11.16.11": 302,
+      "11.16.12": 302,
+      "11.16.13": 302,
+      "11.16.14": 303,
+      "11.16.15": 303,
+      "11.16.16": 304,
+      "11.16.17": 305,
+      "11.16.18": 306,
+      "11.16.19": 307,
+      "11.16.20": 308,
+      "11.16.21": 309,
+      "11.16.22": 309,
+      "11.16.23": 310,
+      "11.16.24": 310,
+      "11.16.25": 311,
+      "11.16.26": 312,
+      "11.16.27": 313,
+      "11.16.28": 313,
+      "11.16.29": 314,
+      "11.16.30": 317,
+      "11.16.31": 318,
+      "11.16.32": 321,
+      "11.16.33": 321,
+      "11.16.34": 322,
+      "11.16.35": 323,
+      "11.16.36": 325,
+      "11.16.37": 326,
+      "11.16.38": 326,
+      "11.16.39": 326,
+      "11.16.40": 327,
+      "11.16.41": 328,
+      "11.16.42": 329,
+      "11.16.43": 329,
+      "11.16.44": 329,
+      "11.16.45": 330,
+      "11.16.46": 330,
+      "11.16.47": 330,
+      "11.16.48": 331,
+      "11.16.49": 331,
+      "11.16.50": 332,
+      "11.16.51": 334,
+      "11.16.52": 334,
+      "11.16.53": 335,
+      "11.16.54": 336,
+      "11.16.55": 336,
+      "11.16.56": 337,
+      "11.16.57": 337,
+      "11.16.58": 338,
+      "11.16.59": 338,
+      "11.16.62": 347,
+      "11.16.63": 348,
+      "11.16.64": 348,
+      "11.16.65": 349,
+      "11.16.66": 349,
+      "11.16.67": 350,
+      "11.16.68": 350,
+      "11.16.69": 350,
+      "11.16.70": 351,
+      "11.16.71": 351,
+      "11.16.72": 352,
+      "11.16.73": 352,
+      "11.16.74": 353,
+      "11.16.75": 354,
+      "11.16.76": 355,
+      "11.16.77": 355,
+      "11.16.78": 356,
+      "11.16.79": 356,
+      "11.16.80": 356,
+      "11.16.81": 357,
+      "11.16.82": 357,
+      "11.16.83": 357,
+      "11.16.84": 358,
+      "11.16.85": 358,
+      "11.16.86": 359,
+      "11.16.87": 359,
+      "11.16.88": 360,
+      "11.16.89": 360,
+      "11.16.90": 361,
+      "11.16.91": 361,
+      "11.16.92": 362,
+      "11.16.93": 362,
+      "11.16.94": 362,
+      "11.16.95": 363,
+      "11.16.96": 363,
+      "11.16.97": 363,
+      "11.16.98": 364,
+      "11.16.99": 364,
+      "11.16.101": 365,
+      "11.16.102": 365,
+      "11.15.1": 285,
+      "15.1": 375,
+      "7.3.1": 64,
+      "7.3.2": 66,
+      "7.3.3": 67,
+      "15.1.2": 376,
+      "15.1.3": 377,
+      "6.3.5.1": 56,
+      "14.3.1": 373,
+      "14.3.2": 373,
+      "14.3.3": 374,
+      "6.2.3.1": 50,
+      "11.15.3": 287,
+      "11.15.4": 288,
+      "11.15.5": 289,
+      "11.15.6": 290,
+      "11.15.7": 291,
+      "11.15.8": 292,
+      "8.3.2.1": 71,
+      "8.3.2.2": 71,
+      "Table 8-3": 71,
+      "8.3.2.3": 73,
+      "10.2.18.10": 219,
+      "10.2.18.11": 220,
+      "10.2.18.15": 225,
+      "10.2.18.16": 226,
+      "10.2.18.17": 227,
+      "10.2.18.19": 229,
+      "10.2.18.23": 237,
+      "10.2.18.24": 237,
+      "10.2.18.27": 240,
+      "10.2.18.28": 241,
+      "10.2.18.29": 242,
+      "10.2.18.30": 243,
+      "10.2.18.31": 244,
+      "10.2.18.33": 247,
+      "10.2.18.34": 247,
+      "10.2.18.35": 247,
+      "10.2.18.25": 238,
+      "10.2.18.26": 239,
+      "10.2.18.45": 255,
+      "10.2.18.46": 255,
+      "10.2.18.47": 255,
+      "10.2.18.48": 256,
+      "10.2.18.49": 256,
+      "10.2.18.50": 257,
+      "10.2.18.40": 252,
+      "10.2.18.51": 257,
+      "10.2.18.52": 258,
+      "10.2.18.53": 259,
+      "10.2.18.54": 260,
+      "10.2.18.41": 252,
+      "10.2.18.42": 253,
+      "10.2.18.43": 254,
+      "10.2.18.44": 254,
+      "10.2.18.8": 217,
+      "10.2.18.36": 248,
+      "10.2.18.37": 249,
+      "10.2.18.38": 250,
+      "10.2.18.39": 251,
+      "10.2.18.9": 218,
+      "11.16.60.1": 339,
+      "11.16.60.2": 340,
+      "11.16.60.3": 340,
+      "11.16.60.4": 340,
+      "11.16.60.5": 341,
+      "11.16.60.6": 341,
+      "11.16.60.7": 341,
+      "11.16.60.8": 342,
+      "11.16.60.9": 342,
+      "11.16.61.1": 343,
+      "11.16.61.2": 343,
+      "11.16.61.3": 344,
+      "11.16.61.4": 345,
+      "11.16.61.5": 346,
+      "11.16.61.6": 347,
+      "11.16.100": 364,
+      "11.15.2": 286,
+      "10.2.18.32": 245
+    },
+    "registers": {
+      "esc_core|0x0000": {
+        "section": "11.16.1",
+        "pdf_page": 297
+      },
+      "esc_core|0x0001": {
+        "section": "11.16.2",
+        "pdf_page": 297
+      },
+      "esc_core|0x0002-0x0003": {
+        "section": "11.16.3",
+        "pdf_page": 297
+      },
+      "esc_core|0x0004": {
+        "section": "11.16.4",
+        "pdf_page": 298
+      },
+      "esc_core|0x0005": {
+        "section": "11.16.5",
+        "pdf_page": 298
+      },
+      "esc_core|0x0006": {
+        "section": "11.16.6",
+        "pdf_page": 298
+      },
+      "esc_core|0x0007": {
+        "section": "11.16.7",
+        "pdf_page": 299
+      },
+      "esc_core|0x0008-0x0009": {
+        "section": "11.16.8",
+        "pdf_page": 300
+      },
+      "esc_core|0x0010-0x0011": {
+        "section": "11.16.9",
+        "pdf_page": 301
+      },
+      "esc_core|0x0012-0x0013": {
+        "section": "11.16.10",
+        "pdf_page": 301
+      },
+      "esc_core|0x0020": {
+        "section": "11.16.11",
+        "pdf_page": 302
+      },
+      "esc_core|0x0021": {
+        "section": "11.16.12",
+        "pdf_page": 302
+      },
+      "esc_core|0x0030": {
+        "section": "11.16.13",
+        "pdf_page": 302
+      },
+      "esc_core|0x0031": {
+        "section": "11.16.14",
+        "pdf_page": 303
+      },
+      "esc_core|0x0040": {
+        "section": "11.16.15",
+        "pdf_page": 303
+      },
+      "esc_core|0x0041": {
+        "section": "11.16.16",
+        "pdf_page": 304
+      },
+      "esc_core|0x0100-0x0103": {
+        "section": "11.16.17",
+        "pdf_page": 305
+      },
+      "esc_core|0x0108-0x0109": {
+        "section": "11.16.18",
+        "pdf_page": 306
+      },
+      "esc_core|0x0110-0x0111": {
+        "section": "11.16.19",
+        "pdf_page": 307
+      },
+      "esc_core|0x0120-0x0121": {
+        "section": "11.16.20",
+        "pdf_page": 308
+      },
+      "esc_core|0x0130-0x0131": {
+        "section": "11.16.21",
+        "pdf_page": 309
+      },
+      "esc_core|0x0134-0x0135": {
+        "section": "11.16.22",
+        "pdf_page": 309
+      },
+      "esc_core|0x0138": {
+        "section": "11.16.23",
+        "pdf_page": 310
+      },
+      "esc_core|0x0139": {
+        "section": "11.16.24",
+        "pdf_page": 310
+      },
+      "esc_core|0x0140": {
+        "section": "11.16.25",
+        "pdf_page": 311
+      },
+      "esc_core|0x0141": {
+        "section": "11.16.26",
+        "pdf_page": 312
+      },
+      "esc_core|0x0142-0x0143": {
+        "section": "11.16.27",
+        "pdf_page": 313
+      },
+      "esc_core|0x0144-0x0145": {
+        "section": "11.16.28",
+        "pdf_page": 313
+      },
+      "esc_core|0x0150": {
+        "section": "11.16.29",
+        "pdf_page": 314
+      },
+      "esc_core|0x0151": {
+        "section": "11.16.30",
+        "pdf_page": 317
+      },
+      "esc_core|0x0152-0x0153": {
+        "section": "11.16.31",
+        "pdf_page": 318
+      },
+      "esc_core|0x0200-0x0201": {
+        "section": "11.16.32",
+        "pdf_page": 321
+      },
+      "esc_core|0x0204-0x0207": {
+        "section": "11.16.33",
+        "pdf_page": 321
+      },
+      "esc_core|0x0210-0x0211": {
+        "section": "11.16.34",
+        "pdf_page": 322
+      },
+      "esc_core|0x0220-0x0223": {
+        "section": "11.16.35",
+        "pdf_page": 323
+      },
+      "esc_core|0x0300-0x0301": {
+        "section": "11.16.36",
+        "pdf_page": 325
+      },
+      "esc_core|0x0302-0x0303": {
+        "section": "11.16.36",
+        "pdf_page": 325
+      },
+      "esc_core|0x0304-0x0305": {
+        "section": "11.16.36",
+        "pdf_page": 325
+      },
+      "esc_core|0x0306-0x0307": {
+        "section": "11.16.36",
+        "pdf_page": 325
+      },
+      "esc_core|0x0308": {
+        "section": "11.16.37",
+        "pdf_page": 326
+      },
+      "esc_core|0x0309": {
+        "section": "11.16.37",
+        "pdf_page": 326
+      },
+      "esc_core|0x030A": {
+        "section": "11.16.37",
+        "pdf_page": 326
+      },
+      "esc_core|0x030B": {
+        "section": "11.16.37",
+        "pdf_page": 326
+      },
+      "esc_core|0x030C": {
+        "section": "11.16.38",
+        "pdf_page": 326
+      },
+      "esc_core|0x030D": {
+        "section": "11.16.39",
+        "pdf_page": 326
+      },
+      "esc_core|0x030E": {
+        "section": "11.16.40",
+        "pdf_page": 327
+      },
+      "esc_core|0x0310": {
+        "section": "11.16.41",
+        "pdf_page": 328
+      },
+      "esc_core|0x0311": {
+        "section": "11.16.41",
+        "pdf_page": 328
+      },
+      "esc_core|0x0312": {
+        "section": "11.16.41",
+        "pdf_page": 328
+      },
+      "esc_core|0x0313": {
+        "section": "11.16.41",
+        "pdf_page": 328
+      },
+      "esc_core|0x0400-0x0401": {
+        "section": "11.16.42",
+        "pdf_page": 329
+      },
+      "esc_core|0x0410-0x0411": {
+        "section": "11.16.43",
+        "pdf_page": 329
+      },
+      "esc_core|0x0420-0x0421": {
+        "section": "11.16.44",
+        "pdf_page": 329
+      },
+      "esc_core|0x0440-0x0441": {
+        "section": "11.16.45",
+        "pdf_page": 330
+      },
+      "esc_core|0x0442": {
+        "section": "11.16.46",
+        "pdf_page": 330
+      },
+      "esc_core|0x0443": {
+        "section": "11.16.47",
+        "pdf_page": 330
+      },
+      "esc_core|0x0500": {
+        "section": "11.16.48",
+        "pdf_page": 331
+      },
+      "esc_core|0x0501": {
+        "section": "11.16.49",
+        "pdf_page": 331
+      },
+      "esc_core|0x0502-0x0503": {
+        "section": "11.16.50",
+        "pdf_page": 332
+      },
+      "esc_core|0x0504-0x0507": {
+        "section": "11.16.51",
+        "pdf_page": 334
+      },
+      "esc_core|0x0508-0x050F": {
+        "section": "11.16.52",
+        "pdf_page": 334
+      },
+      "esc_core|0x0510-0x0511": {
+        "section": "11.16.53",
+        "pdf_page": 335
+      },
+      "esc_core|0x0512": {
+        "section": "11.16.54",
+        "pdf_page": 336
+      },
+      "esc_core|0x0513": {
+        "section": "11.16.55",
+        "pdf_page": 336
+      },
+      "esc_core|0x0514-0x0515": {
+        "section": "11.16.56",
+        "pdf_page": 337
+      },
+      "esc_core|0x0516": {
+        "section": "11.16.57",
+        "pdf_page": 337
+      },
+      "esc_core|0x0517": {
+        "section": "11.16.58",
+        "pdf_page": 338
+      },
+      "esc_core|0x0518": {
+        "section": "11.16.59",
+        "pdf_page": 338
+      },
+      "esc_core|0x0519": {
+        "section": "11.16.59",
+        "pdf_page": 338
+      },
+      "esc_core|0x051A": {
+        "section": "11.16.59",
+        "pdf_page": 338
+      },
+      "esc_core|0x051B": {
+        "section": "11.16.59",
+        "pdf_page": 338
+      },
+      "esc_core|0x0900-0x0903": {
+        "section": "11.16.62",
+        "pdf_page": 347
+      },
+      "esc_core|0x0904-0x0907": {
+        "section": "11.16.63",
+        "pdf_page": 348
+      },
+      "esc_core|0x0908-0x090B": {
+        "section": "11.16.64",
+        "pdf_page": 348
+      },
+      "esc_core|0x0910-0x0917": {
+        "section": "11.16.65",
+        "pdf_page": 349
+      },
+      "esc_core|0x0918-0x091F": {
+        "section": "11.16.66",
+        "pdf_page": 349
+      },
+      "esc_core|0x0920-0x0927": {
+        "section": "11.16.67",
+        "pdf_page": 350
+      },
+      "esc_core|0x0928-0x092B": {
+        "section": "11.16.68",
+        "pdf_page": 350
+      },
+      "esc_core|0x092C-0x092F": {
+        "section": "11.16.69",
+        "pdf_page": 350
+      },
+      "esc_core|0x0930-0x0931": {
+        "section": "11.16.70",
+        "pdf_page": 351
+      },
+      "esc_core|0x0932-0x0933": {
+        "section": "11.16.71",
+        "pdf_page": 351
+      },
+      "esc_core|0x0934": {
+        "section": "11.16.72",
+        "pdf_page": 352
+      },
+      "esc_core|0x0935": {
+        "section": "11.16.73",
+        "pdf_page": 352
+      },
+      "esc_core|0x0980": {
+        "section": "11.16.74",
+        "pdf_page": 353
+      },
+      "esc_core|0x0981": {
+        "section": "11.16.75",
+        "pdf_page": 354
+      },
+      "esc_core|0x0982-0x0983": {
+        "section": "11.16.76",
+        "pdf_page": 355
+      },
+      "esc_core|0x0984": {
+        "section": "11.16.77",
+        "pdf_page": 355
+      },
+      "esc_core|0x098E": {
+        "section": "11.16.78",
+        "pdf_page": 356
+      },
+      "esc_core|0x098F": {
+        "section": "11.16.79",
+        "pdf_page": 356
+      },
+      "esc_core|0x0990-0x0997": {
+        "section": "11.16.80",
+        "pdf_page": 356
+      },
+      "esc_core|0x0998-0x099F": {
+        "section": "11.16.81",
+        "pdf_page": 357
+      },
+      "esc_core|0x09A0-0x09A3": {
+        "section": "11.16.82",
+        "pdf_page": 357
+      },
+      "esc_core|0x09A4-0x09A7": {
+        "section": "11.16.83",
+        "pdf_page": 357
+      },
+      "esc_core|0x09A8": {
+        "section": "11.16.84",
+        "pdf_page": 358
+      },
+      "esc_core|0x09A9": {
+        "section": "11.16.85",
+        "pdf_page": 358
+      },
+      "esc_core|0x09AE": {
+        "section": "11.16.86",
+        "pdf_page": 359
+      },
+      "esc_core|0x09AF": {
+        "section": "11.16.87",
+        "pdf_page": 359
+      },
+      "esc_core|0x09B0-0x09B7": {
+        "section": "11.16.88",
+        "pdf_page": 360
+      },
+      "esc_core|0x09B8-0x09BF": {
+        "section": "11.16.89",
+        "pdf_page": 360
+      },
+      "esc_core|0x09C0-0x09C7": {
+        "section": "11.16.90",
+        "pdf_page": 361
+      },
+      "esc_core|0x09C8-0x09CF": {
+        "section": "11.16.91",
+        "pdf_page": 361
+      },
+      "esc_core|0x09F0-0x09F3": {
+        "section": "11.16.92",
+        "pdf_page": 362
+      },
+      "esc_core|0x09F8-0x09FB": {
+        "section": "11.16.93",
+        "pdf_page": 362
+      },
+      "esc_core|0x09FC-0x09FF": {
+        "section": "11.16.94",
+        "pdf_page": 362
+      },
+      "esc_core|0x0E00-0x0E07": {
+        "section": "11.16.95",
+        "pdf_page": 363
+      },
+      "esc_core|0x0E08-0x0E0F": {
+        "section": "11.16.96",
+        "pdf_page": 363
+      },
+      "esc_core|0x0F00-0x0F01": {
+        "section": "11.16.97",
+        "pdf_page": 363
+      },
+      "esc_core|0x0F10-0x0F11": {
+        "section": "11.16.98",
+        "pdf_page": 364
+      },
+      "esc_core|0x0F18-0x0F19": {
+        "section": "11.16.99",
+        "pdf_page": 364
+      },
+      "esc_core|0x1000-0x1001": {
+        "section": "11.16.101",
+        "pdf_page": 365
+      },
+      "process_ram|0x1000-0x2FFF": {
+        "section": "11.16.102",
+        "pdf_page": 365
+      },
+      "lan925x_system_csr|0x0000-0x001C": {
+        "section": "11.15.1",
+        "pdf_page": 285
+      },
+      "lan925x_system_csr|0x0050": {
+        "section": "15.1",
+        "pdf_page": 375
+      },
+      "lan925x_system_csr|0x0054": {
+        "section": "7.3.1",
+        "pdf_page": 64
+      },
+      "lan925x_system_csr|0x0058": {
+        "section": "7.3.2",
+        "pdf_page": 66
+      },
+      "lan925x_system_csr|0x005C": {
+        "section": "7.3.3",
+        "pdf_page": 67
+      },
+      "lan925x_system_csr|0x0064": {
+        "section": "15.1.2",
+        "pdf_page": 376
+      },
+      "lan925x_system_csr|0x0074": {
+        "section": "15.1.3",
+        "pdf_page": 377
+      },
+      "lan925x_system_csr|0x0084": {
+        "section": "6.3.5.1",
+        "pdf_page": 56
+      },
+      "lan925x_system_csr|0x008C": {
+        "section": "14.3.1",
+        "pdf_page": 373
+      },
+      "lan925x_system_csr|0x0090": {
+        "section": "14.3.2",
+        "pdf_page": 373
+      },
+      "lan925x_system_csr|0x009C": {
+        "section": "14.3.3",
+        "pdf_page": 374
+      },
+      "lan925x_system_csr|0x01F8": {
+        "section": "6.2.3.1",
+        "pdf_page": 50
+      },
+      "lan925x_system_csr|0x0300": {
+        "section": "11.15.3",
+        "pdf_page": 287
+      },
+      "lan925x_system_csr|0x0304": {
+        "section": "11.15.4",
+        "pdf_page": 288
+      },
+      "lan925x_system_csr|0x0308": {
+        "section": "11.15.5",
+        "pdf_page": 289
+      },
+      "lan925x_system_csr|0x030C": {
+        "section": "11.15.6",
+        "pdf_page": 290
+      },
+      "lan925x_system_csr|0x0310": {
+        "section": "11.15.7",
+        "pdf_page": 291
+      },
+      "lan925x_system_csr|0x0314": {
+        "section": "11.15.8",
+        "pdf_page": 292
+      },
+      "hbi_local|0x0000-0x0003": {
+        "section": "8.3.2.1",
+        "pdf_page": 71
+      },
+      "hbi_local|0x0004-0x0007": {
+        "section": "8.3.2.2",
+        "pdf_page": 71
+      },
+      "hbi_local|0x0008-0x000B": {
+        "section": "8.3.2.1",
+        "pdf_page": 71
+      },
+      "hbi_local|0x000C-0x000F": {
+        "section": "8.3.2.2",
+        "pdf_page": 71
+      },
+      "hbi_local|0x0010-0x0013": {
+        "section": "8.3.2.1",
+        "pdf_page": 71
+      },
+      "hbi_local|0x0014-0x0017": {
+        "section": "8.3.2.2",
+        "pdf_page": 71
+      },
+      "hbi_local|0x0018-0x001B": {
+        "section": "Table 8-3",
+        "pdf_page": 71
+      },
+      "hbi_local|0x001C-0x001F": {
+        "section": "8.3.2.3",
+        "pdf_page": 73
+      },
+      "phy|13": {
+        "section": "10.2.18.10",
+        "pdf_page": 219
+      },
+      "phy|14": {
+        "section": "10.2.18.11",
+        "pdf_page": 220
+      },
+      "phy|24": {
+        "section": "10.2.18.15",
+        "pdf_page": 225
+      },
+      "phy|25": {
+        "section": "10.2.18.16",
+        "pdf_page": 226
+      },
+      "phy|26": {
+        "section": "10.2.18.17",
+        "pdf_page": 227
+      },
+      "phy|28": {
+        "section": "10.2.18.19",
+        "pdf_page": 229
+      },
+      "phy|3.0": {
+        "section": "10.2.18.23",
+        "pdf_page": 237
+      },
+      "phy|3.1": {
+        "section": "10.2.18.24",
+        "pdf_page": 237
+      },
+      "phy|3.20": {
+        "section": "10.2.18.27",
+        "pdf_page": 240
+      },
+      "phy|3.22": {
+        "section": "10.2.18.28",
+        "pdf_page": 241
+      },
+      "phy|3.32784": {
+        "section": "10.2.18.29",
+        "pdf_page": 242
+      },
+      "phy|3.32785": {
+        "section": "10.2.18.30",
+        "pdf_page": 243
+      },
+      "phy|3.32786": {
+        "section": "10.2.18.31",
+        "pdf_page": 244
+      },
+      "phy|3.32865": {
+        "section": "10.2.18.33",
+        "pdf_page": 247
+      },
+      "phy|3.32866": {
+        "section": "10.2.18.34",
+        "pdf_page": 247
+      },
+      "phy|3.32867": {
+        "section": "10.2.18.35",
+        "pdf_page": 247
+      },
+      "phy|3.5": {
+        "section": "10.2.18.25",
+        "pdf_page": 238
+      },
+      "phy|3.6": {
+        "section": "10.2.18.26",
+        "pdf_page": 239
+      },
+      "phy|30.14": {
+        "section": "10.2.18.45",
+        "pdf_page": 255
+      },
+      "phy|30.15": {
+        "section": "10.2.18.46",
+        "pdf_page": 255
+      },
+      "phy|30.16": {
+        "section": "10.2.18.47",
+        "pdf_page": 255
+      },
+      "phy|30.17": {
+        "section": "10.2.18.48",
+        "pdf_page": 256
+      },
+      "phy|30.18": {
+        "section": "10.2.18.49",
+        "pdf_page": 256
+      },
+      "phy|30.19": {
+        "section": "10.2.18.50",
+        "pdf_page": 257
+      },
+      "phy|30.2": {
+        "section": "10.2.18.40",
+        "pdf_page": 252
+      },
+      "phy|30.20": {
+        "section": "10.2.18.51",
+        "pdf_page": 257
+      },
+      "phy|30.21": {
+        "section": "10.2.18.52",
+        "pdf_page": 258
+      },
+      "phy|30.22": {
+        "section": "10.2.18.53",
+        "pdf_page": 259
+      },
+      "phy|30.23": {
+        "section": "10.2.18.54",
+        "pdf_page": 260
+      },
+      "phy|30.3": {
+        "section": "10.2.18.41",
+        "pdf_page": 252
+      },
+      "phy|30.5": {
+        "section": "10.2.18.42",
+        "pdf_page": 253
+      },
+      "phy|30.6": {
+        "section": "10.2.18.43",
+        "pdf_page": 254
+      },
+      "phy|30.8": {
+        "section": "10.2.18.44",
+        "pdf_page": 254
+      },
+      "phy|7": {
+        "section": "10.2.18.8",
+        "pdf_page": 217
+      },
+      "phy|7.5": {
+        "section": "10.2.18.36",
+        "pdf_page": 248
+      },
+      "phy|7.6": {
+        "section": "10.2.18.37",
+        "pdf_page": 249
+      },
+      "phy|7.60": {
+        "section": "10.2.18.38",
+        "pdf_page": 250
+      },
+      "phy|7.61": {
+        "section": "10.2.18.39",
+        "pdf_page": 251
+      },
+      "phy|8": {
+        "section": "10.2.18.9",
+        "pdf_page": 218
+      },
+      "esc_core|0x0600-0x0603": {
+        "section": "11.16.60.1",
+        "pdf_page": 339
+      },
+      "esc_core|0x0604-0x0605": {
+        "section": "11.16.60.2",
+        "pdf_page": 340
+      },
+      "esc_core|0x0606": {
+        "section": "11.16.60.3",
+        "pdf_page": 340
+      },
+      "esc_core|0x0607": {
+        "section": "11.16.60.4",
+        "pdf_page": 340
+      },
+      "esc_core|0x0608-0x0609": {
+        "section": "11.16.60.5",
+        "pdf_page": 341
+      },
+      "esc_core|0x060A": {
+        "section": "11.16.60.6",
+        "pdf_page": 341
+      },
+      "esc_core|0x060B": {
+        "section": "11.16.60.7",
+        "pdf_page": 341
+      },
+      "esc_core|0x060C": {
+        "section": "11.16.60.8",
+        "pdf_page": 342
+      },
+      "esc_core|0x060D-0x060F": {
+        "section": "11.16.60.9",
+        "pdf_page": 342
+      },
+      "esc_core|0x0800-0x0801": {
+        "section": "11.16.61.1",
+        "pdf_page": 343
+      },
+      "esc_core|0x0802-0x0803": {
+        "section": "11.16.61.2",
+        "pdf_page": 343
+      },
+      "esc_core|0x0804": {
+        "section": "11.16.61.3",
+        "pdf_page": 344
+      },
+      "esc_core|0x0805": {
+        "section": "11.16.61.4",
+        "pdf_page": 345
+      },
+      "esc_core|0x0806": {
+        "section": "11.16.61.5",
+        "pdf_page": 346
+      },
+      "esc_core|0x0807": {
+        "section": "11.16.61.6",
+        "pdf_page": 347
+      },
+      "user_ram|0x0F80-0x0FFF": {
+        "section": "11.16.100",
+        "pdf_page": 364
+      },
+      "lan925x_system_csr|0x0020-0x003C": {
+        "section": "11.15.2",
+        "pdf_page": 286
+      },
+      "phy|3.32801": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      },
+      "phy|3.32802": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      },
+      "phy|3.32803": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      },
+      "phy|3.32804": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      },
+      "phy|3.32805": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      },
+      "phy|3.32806": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      },
+      "phy|3.32807": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      },
+      "phy|3.32808": {
+        "section": "10.2.18.32",
+        "pdf_page": 245
+      }
+    }
+  }
+}

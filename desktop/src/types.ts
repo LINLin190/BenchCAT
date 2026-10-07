@@ -106,6 +106,16 @@ export interface PdoEntry {
   data_type?: string;
 }
 
+export interface RegisterManualReference {
+  filename: string;
+  title: string;
+  section?: string | null;
+  pdf_page?: number | null;
+  version?: string;
+  sha256?: string;
+  page_count?: number;
+}
+
 export interface RegisterDefinition {
   definition_id?: string;
   profile?: string;
@@ -149,6 +159,7 @@ export interface RegisterDefinition {
   field_variants?: { name: string; fields: NonNullable<RegisterDefinition["fields"]> }[];
   bit_fields?: { name: string; shift: number; bits: number; access?: string; reserved?: boolean; description?: string }[];
   source?: { source_id: string; section?: string; page?: number | string; pdf_page?: number }[];
+  manuals?: RegisterManualReference[];
 }
 
 export interface OperationProgress {

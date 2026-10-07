@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card, Checkbox,
   CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
@@ -11,9 +11,10 @@ import {
   CheckRounded, CloseRounded, ContentCopyRounded, ExpandMoreRounded, MoreHorizRounded,
   PlaylistAddRounded, RefreshRounded, SearchRounded, StarBorderRounded, StarRounded,
 } from "@mui/icons-material";
-import { BridgeRequestError, bridgeRequest, openRegisterManual } from "./api";
+import { BridgeRequestError, bridgeRequest } from "./api";
+import type { ManualTarget } from "./PdfManualViewer";
 import { operationStore } from "./operationStore";
-import { hex, type RegisterDefinition, type SlaveInfo } from "./types";
+import { hex, type RegisterDefinition, type RegisterManualReference, type SlaveInfo } from "./types";
 import {
   decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterBinary, formatRegisterValue,
   requiresManualRead, isCommonRegister, registerSearchRank, parseRegisterAddress, registerDisplayName, registerMeaning,
@@ -35,6 +36,8 @@ interface RegisterCatalog { catalog: RegisterDefinition[] | null; catalog_versio
 interface CachedRegisters { catalog: RegisterDefinition[]; catalogVersion: string; details: Map<string, RegisterDefinition>; values: Record<string, RegisterValue>; errors: Record<string, string>; snapshot?: RegisterSnapshot }
 const snapshots = new Map<string, CachedRegisters>();
 let cachedSession = "";
+// Load the PDF engine only when the user opens a reference manual.
+const PdfManualViewer = lazy(() => import("./PdfManualViewer"));
 
 /** Restore user choices without storing live values across connection sessions. */
 function registerPreferences(profile: string): { favorites: string[]; pinned: string[]; intervalMs: number; format: ValueFormat } {
@@ -364,7 +367,10 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
   const [reading, setReading] = useState(false);
   const [watching, setWatching] = useState(false);
   const [intervalMs, setIntervalMs] = useState(preferences.intervalMs);
-  const [manualError, setManualError] = useState("");
+  const [manualTarget, setManualTarget] = useState<ManualTarget>();
+  const [manualOpen, setManualOpen] = useState(false);
+  // A stable callback lets the PDF viewer ignore register acquisition updates.
+  const closeManual = useCallback(() => setManualOpen(false), []);
   const [watchConfirm, setWatchConfirm] = useState<RegisterDefinition>();
   const [moreAnchor, setMoreAnchor] = useState<HTMLElement | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
@@ -446,7 +452,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     setValues(saved?.values ?? {}); valuesRef.current = saved?.values ?? {}; setErrors(saved?.errors ?? {});
     setChanges({}); setSnapshotInfo(saved?.snapshot); setReadbackKeys(new Set());
     setWatching(false); setReading(false); setDetailLoading(false);
-    setPageError(""); setDetailError(""); setManualError(""); setWriteContext(undefined); setWatchConfirm(undefined);
+    setPageError(""); setDetailError(""); setManualOpen(false); setWriteContext(undefined); setWatchConfirm(undefined);
     setRawOpen(false); setRawResult(undefined); setRawError(""); setRawWriteInput(""); setRawWriteWkc(undefined); setRawReadWkc(undefined); setResetConfirm(false); setMonitor(false);
     if (!slave) return;
     setCatalogLoading(true);
@@ -679,7 +685,6 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     const cached = resolvedDefinitions.current.get(definitionKey(definition));
     dirtyRef.current = false; setSelected(cached ?? definition); setWriteContext(undefined); setWriteInput("");
     setWriteError(""); setWriteMessage(""); setDetailLoading(!cached); setDetailError("");
-    setManualError("");
     // Cached definitions appear synchronously, without a loading-state round trip.
     if (cached) {
       if (!valuesRef.current[definitionKey(cached)] && cached.automatic_read_allowed !== false && !requiresManualRead(cached)) enqueueReads([cached], true);
@@ -881,6 +886,13 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     setWriteFormat(next);
   };
 
+  /** Pass the selected definition's document and physical destination to the local viewer. */
+  const openManual = (manual: RegisterManualReference) => {
+    if (!selected) return;
+    setManualTarget({ manual, name: selected.official_name || selected.name, address: selected.address_text || hex(selected.address) });
+    setManualOpen(true);
+  };
+
   if (!slave) return <Box sx={{ py: 8, textAlign: "center", color: "text.secondary" }}>请先选择从站</Box>;
 
   /** Edit catalog registers with their documented write semantics. */
@@ -924,8 +936,8 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
   }, []);
 
   return <ThemeProvider theme={registerTheme}><Stack className="register-workspace" spacing={1.25} sx={{ "& .MuiButton-root": { fontSize: 12 } }}>
-    <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ minHeight: 28 }}>
-      <Typography fontSize={19} fontWeight={700}>寄存器</Typography>
+    {/* The shared slave header owns the page title; keep the register context here. */}
+    <Stack direction="row" alignItems="center" justifyContent="flex-end" sx={{ minHeight: 28 }}>
       <Typography fontSize={12} color="text.secondary">{monitor ? watching ? "监视中" : "监视已暂停" : `ESC ${slave.chip_model} · 参考 ${registerProfile}`}</Typography>
     </Stack>
     <Stack direction="row" spacing={1} alignItems="center" sx={{ minHeight: 36 }}>
@@ -1017,15 +1029,16 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
             </DocumentationSection>}
             {Boolean(selected.fields?.length) && <DocumentationSection title="位字段说明"><DocumentationFields fields={selected.fields!} /></DocumentationSection>}
             {selected.field_variants?.map((variant) => <DocumentationSection key={variant.name} title={`位字段说明 · ${variant.name}`}><DocumentationFields fields={variant.fields} /></DocumentationSection>)}
+          </Stack>}</Disclosure>
+          <Box sx={{ borderTop: 1, borderColor: "divider", py: 1.5 }}>
             {/* Selectable filenames preserve document names when copying the reference text. */}
             <DocumentationSection title={<>参考手册<Typography component="span" fontSize={10} color="text.secondary" sx={{ ml: 0.5, fontWeight: 400 }}>(点击打开文档)</Typography></>}>
-              {registerManuals(selected).map((manual) => <Link key={manual.filename} component="button" type="button" title={manual.title}
-                  sx={{ display: "block", alignSelf: "flex-start", maxWidth: "100%", color: "primary.main", fontSize: 11, lineHeight: 1.7, textAlign: "left", overflowWrap: "anywhere", userSelect: "text" }} onClick={() => {
-                    setManualError(""); void openRegisterManual(manual.filename).catch((error) => setManualError(failureText(error)));
-                  }}>{manual.filename}</Link>)}
-              {manualError && <Alert severity="error" sx={{ fontSize: 11 }}>{manualError}</Alert>}
+              {registerManuals(selected).map((manual) => <Link key={manual.filename} component="button" type="button" title={`${manual.title}${manual.section ? ` · 章节 ${manual.section}` : ""}`}
+                  disabled={detailLoading || Boolean(detailError)}
+                  sx={{ display: "block", alignSelf: "flex-start", maxWidth: "100%", color: "primary.main", fontSize: 11, lineHeight: 1.7, textAlign: "left", overflowWrap: "anywhere", userSelect: "text", "&:disabled": { color: "text.disabled", cursor: "default" } }}
+                  onClick={() => openManual(manual)}>{manual.filename}{manual.pdf_page ? ` · PDF 第 ${manual.pdf_page} 页` : ""}</Link>)}
             </DocumentationSection>
-          </Stack>}</Disclosure>
+          </Box>
           {/* Acquisition metadata stays visible independently of the description disclosure. */}
           <Box component="footer" sx={{ borderTop: 1, borderColor: "divider", pt: 1.5 }}>
             <Typography fontSize={11} color="text.secondary" sx={{ lineHeight: 1.8 }}>
@@ -1095,6 +1108,9 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
       try { const value = await run(() => bridgeRequest("register_reset", { position: slave.position, profile: registerProfile }), "复位命令已发送"); if (value && contextRef.current === requestedContext) setResetConfirm(false); }
       finally { if (mounted.current && contextRef.current === requestedContext) setWriting(false); }
     }}>复位</Button></DialogActions></Dialog>
+    {manualTarget && <Suspense fallback={<Dialog open={manualOpen} onClose={() => setManualOpen(false)}><DialogContent><CircularProgress size={24} /> 正在加载查看器…</DialogContent></Dialog>}>
+      <PdfManualViewer target={manualTarget} open={manualOpen} onClose={closeManual} />
+    </Suspense>}
   </Stack></ThemeProvider>;
 }, (previous, next) => {
   // Ignore unrelated bus-state changes while preserving identity, session, and control changes.

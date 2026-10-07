@@ -211,13 +211,16 @@ export async function openExternal(url: string): Promise<void> {
   await invoke("open_external", { url });
 }
 
-/** Both desktop and browser development open the bundled offline PDF. */
-export async function openRegisterManual(filename: string): Promise<void> {
-  if (!isTauri) {
-    await fetchJson("/api/register-manual", { filename });
-    return;
+/** Read original PDF bytes outside the device command transport. */
+export async function readRegisterManual(filename: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+  signal?.throwIfAborted();
+  if (isTauri) return invoke<ArrayBuffer>("read_register_manual", { filename });
+  const response = await fetch(`/api/register-manual/${encodeURIComponent(filename)}`, { signal });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message || "无法加载离线手册");
   }
-  await invoke("open_register_manual", { filename });
+  return response.arrayBuffer();
 }
 
 export const previewMode = false;

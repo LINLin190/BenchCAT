@@ -1,0 +1,15 @@
+.benchcat-manual-container {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.benchcat-manual .pdfViewer {
+  padding-block: 12px;
+  --scale-factor: 1;
+}
+
+.benchcat-manual .pdfViewer .page {
+  background: white;
+}
