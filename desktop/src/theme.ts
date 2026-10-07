@@ -21,6 +21,8 @@ export const theme = createTheme({
     button: { textTransform: "none", fontWeight: 650, fontSize: "0.82rem" },
   },
   components: {
+    // Require a deliberate hover, including when moving between nearby controls.
+    MuiTooltip: { defaultProps: { enterDelay: 450, enterNextDelay: 450 } },
     // Keep auxiliary controls quiet; main EEPROM actions and file selection opt into ripple.
     MuiButtonBase: { defaultProps: { disableRipple: true }, styleOverrides: { root: { "&.Mui-focusVisible": { outline: "2px solid #365CCF", outlineOffset: 2 } } } },
     MuiButton: { defaultProps: { disableElevation: true }, styleOverrides: { root: { minHeight: 32, padding: "4px 10px", borderRadius: 6 } } },

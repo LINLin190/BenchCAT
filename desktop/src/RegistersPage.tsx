@@ -219,6 +219,7 @@ const RegisterTableRow = memo(function RegisterTableRow({ definition, index, val
     onClick={() => onSelect(definition)} onKeyDown={(event) => { if (event.target === event.currentTarget && event.key === "Enter") onSelect(definition); }}
     sx={{ cursor: "pointer", height: 36, "&:hover .register-favorite, &:focus-within .register-favorite": { visibility: "visible" }, "&.Mui-selected": { bgcolor: "#EDF2FF" } }}>
     <TableCell className="mono" sx={{ color: "text.primary", fontWeight: 650, whiteSpace: "pre-line", lineHeight: "14px" }}>{isPramOverview(definition) ? definition.address_text?.replace("-", "-\n") : hex(definition.address)}</TableCell>
+    {/* Show bilingual register names only after a deliberate hover. */}
     <TableCell sx={{ overflow: "hidden" }}><Tooltip title={<Stack spacing={0.25}><span>{name}</span>{name !== (definition.official_name ?? definition.name) && <span>{definition.official_name ?? definition.name}</span>}</Stack>}><Typography fontSize={12} fontWeight={400} noWrap>{name}</Typography></Tooltip></TableCell>
     <TableCell><Tooltip title={error || readHint(definition) || (monitor && change && value ? `${formatRegisterValue(change.previous, format)} → ${formatRegisterValue(value, format)}` : value ?? "")}>
       <Typography className="mono" fontSize={12} color={error ? "error.main" : "text.primary"} noWrap>
@@ -242,7 +243,7 @@ interface RegisterTableProps {
   definitions: RegisterDefinition[]; values: Record<string, RegisterValue>; changes: Record<string, ValueChange>;
   errors: Record<string, string>; favorites: Set<string>; selectedKey: string; favoriteFeedback?: string;
   format: ValueFormat; monitor: boolean; writing: boolean; reading: boolean; scope: string;
-  loading: boolean; emptyText: string;
+  loading: boolean; emptyText: string; detailsVisible: boolean;
   onSelect: RegisterRowProps["onSelect"]; onFavorite: RegisterRowProps["onFavorite"];
 }
 const registerRowHeight = 36;
@@ -251,7 +252,7 @@ const registerOverscan = 8;
 
 /** Keep only viewport rows mounted while spacer rows preserve the full scroll range. */
 const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, values, changes, errors, favorites, selectedKey,
-  favoriteFeedback, format, monitor, writing, reading, scope, loading, emptyText, onSelect, onFavorite }: RegisterTableProps) {
+  favoriteFeedback, format, monitor, writing, reading, scope, loading, emptyText, detailsVisible, onSelect, onFavorite }: RegisterTableProps) {
   const container = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   useLayoutEffect(() => {
@@ -291,10 +292,10 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
     const top = event.currentTarget.scrollTop;
     setViewport((current) => current.top === top ? current : { ...current, top });
   }} sx={{ flex: 1, minHeight: 0, overflowAnchor: "none" }}>
-    {/* Keep the same column positions in every view; long overview addresses use two lines. */}
+    {/* Adjust the value column position with the detail panel while keeping header and cells aligned. */}
     <Table stickyHeader size="small" aria-rowcount={definitions.length + 1} sx={{ tableLayout: "fixed", "& td, & th": { fontSize: 12, py: 0.5, borderColor: "#EEF1F6", boxSizing: "border-box", height: registerRowHeight }, "& th": { py: 0, height: registerHeaderHeight } }}>
       <TableHead><TableRow aria-rowindex={1}>
-        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: 200 }}>当前值</TableCell>
+        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: detailsVisible ? 192 : 320 }}>当前值</TableCell>
         <TableCell sx={{ width: 58 }}>权限</TableCell><TableCell sx={{ width: 58 }}>宽度</TableCell><TableCell sx={{ width: 32 }} />
       </TableRow></TableHead>
       <TableBody>
@@ -962,10 +963,10 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
       <IconButton size="small" aria-label="更多操作" disabled={writing} onClick={(event) => setMoreAnchor(event.currentTarget)}><MoreHorizRounded sx={{ fontSize: 21 }} /></IconButton>
     </Stack>
     {pageError && <Alert severity="error" onClose={() => setPageError("")}>{pageError}</Alert>}
-    <Box sx={{ display: "grid", gridTemplateColumns: selected ? "minmax(0, 1fr) 360px" : "minmax(0, 1fr)", gap: 1.5, height: "calc(100vh - 235px)", minHeight: 380 }}>
+    <Box sx={{ display: "grid", gridTemplateColumns: selected ? "minmax(0, 1fr) 340px" : "minmax(0, 1fr)", gap: 1.5, height: "calc(100vh - 235px)", minHeight: 380 }}>
       <Card variant="outlined" sx={{ minWidth: 0, overflow: "hidden", borderRadius: 1.5, display: "flex", flexDirection: "column", boxShadow: "none" }}>
         <VirtualRegisterTable definitions={displayed} values={values} changes={changes} errors={errors} favorites={favorites}
-          selectedKey={selectedKey} favoriteFeedback={favoriteFeedback} format={format} monitor={monitor} writing={writing} reading={reading}
+          selectedKey={selectedKey} favoriteFeedback={favoriteFeedback} format={format} monitor={monitor} writing={writing} reading={reading} detailsVisible={Boolean(selected)}
           scope={`${monitor}:${view}:${group}:${query}:${showReservedAddresses}`} loading={catalogLoading}
           emptyText={monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
           onSelect={selectRow} onFavorite={favoriteRow} />
