@@ -57,14 +57,14 @@ export function EepromSources({ recent, current, disabled, active, onChoose, onS
     // Reveal paths when equal filenames belong to separate records.
     const paths = recentRow ? filteredRecent : filteredFixed.map(item => item.path);
     const showPath = paths.some(path => !sameEepromSource({ path }, entry) && fileName(path).toLowerCase() === fileName(entry.path).toLowerCase());
-    return <Box key={entry.path.toLowerCase()} sx={{ position: "relative" }}>
+    return <Box key={entry.path.toLowerCase()} className="eeprom-file-row" sx={{ position: "relative" }}>
     <ListItemButton disabled={disabled} selected={Boolean(current && sameEepromSource(current, entry))} onClick={() => select(entry.path, recentRow ? undefined : entry.ordinal)} title={entry.path} sx={{ pr: 8, flexDirection: "column", alignItems: "stretch" }}>
       <Box minWidth={0}><Typography variant="body2" fontWeight={650} noWrap>{fileName(entry.path)}</Typography><Typography variant="caption" color="text.secondary" noWrap display="block">{isBinFile(entry.path) ? `BIN${entry.byte_size ? ` · ${entry.byte_size} B` : " · 原始数据"}` : entry.type_name || entry.device_name || "XML · Device 配置"}</Typography>{!recentRow && !isBinFile(entry.path) && entry.ordinal >= 0 && <Typography variant="caption" className="mono">Product {hex(entry.product_code, 8)}</Typography>}</Box>
       {showPath && <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", width: "100%", fontSize: 11 }}>{entry.path}</Typography>}
     </ListItemButton>
     <Stack direction="row" sx={{ position: "absolute", right: 2, top: 6 }}>
-      <Tooltip title="删除记录（不删除文件）"><span><IconButton size="small" disabled={disabled} aria-label={`删除记录 ${fileName(entry.path)}`} onClick={() => recentRow ? onRemoveRecent(entry.path) : setFixed(state => saveFixedEsiState(removeFixedEsiEntry(state, entry, library.entries)))}><DeleteOutlineRounded fontSize="small" /></IconButton></span></Tooltip>
-      <Tooltip title={isFixed(entry) ? "移出固定列表" : "加入固定列表"}><span><IconButton size="small" disabled={disabled} aria-label={`${isFixed(entry) ? "移出固定列表" : "加入固定列表"} ${fileName(entry.path)}`} onClick={() => toggleFixed(entry)}>{isFixed(entry) ? <StarRounded color="warning" fontSize="small" /> : <StarOutlineRounded fontSize="small" />}</IconButton></span></Tooltip>
+      <Tooltip title="删除记录（不删除文件）"><span className="eeprom-hover-action"><IconButton size="small" disabled={disabled} aria-label={`删除记录 ${fileName(entry.path)}`} onClick={() => recentRow ? onRemoveRecent(entry.path) : setFixed(state => saveFixedEsiState(removeFixedEsiEntry(state, entry, library.entries)))}><DeleteOutlineRounded fontSize="small" /></IconButton></span></Tooltip>
+      <Tooltip title={isFixed(entry) ? "移出固定列表" : "加入固定列表"}><span className={isFixed(entry) ? undefined : "eeprom-hover-action"}><IconButton size="small" disabled={disabled} aria-label={`${isFixed(entry) ? "移出固定列表" : "加入固定列表"} ${fileName(entry.path)}`} onClick={() => toggleFixed(entry)}>{isFixed(entry) ? <StarRounded color="warning" fontSize="small" /> : <StarOutlineRounded fontSize="small" />}</IconButton></span></Tooltip>
     </Stack>
   </Box>;
   };
@@ -80,11 +80,11 @@ export function EepromSources({ recent, current, disabled, active, onChoose, onS
   const choose = () => { setAnchor(null); onChoose(); };
 
   return <Box className="eeprom-source-bar">
-    <Stack direction="row" alignItems="center" gap={1} sx={{ minHeight: 30 }}>
+    <Stack direction="row" alignItems="center" gap={1} className="eeprom-file-row" sx={{ minHeight: 30 }}>
       <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>目标文件</Typography>
       {current && <Chip size="small" variant="outlined" color="primary" label={isBinFile(current.path) ? "BIN" : "XML"} />}
       <Button size="small" aria-label="选择目标文件" aria-haspopup="dialog" aria-expanded={Boolean(anchor)} endIcon={<ExpandMoreRounded />} disabled={disabled} onClick={event => setAnchor(event.currentTarget)} sx={{ minWidth: 0, maxWidth: "55%", justifyContent: "flex-start" }}><Typography component="span" variant="body2" fontWeight={650} noWrap title={current?.path}>{current ? fileName(current.path) : "选择 XML/BIN"}</Typography></Button>
-      {current && <Tooltip title={isFixed(current) ? "移出固定列表" : "加入固定列表"}><span><IconButton size="small" disabled={disabled} aria-label={isFixed(current) ? "移出固定列表" : "加入固定列表"} onClick={() => toggleFixed(current)}>{isFixed(current) ? <StarRounded color="warning" fontSize="small" /> : <StarOutlineRounded fontSize="small" />}</IconButton></span></Tooltip>}
+      {current && <Tooltip title={isFixed(current) ? "移出固定列表" : "加入固定列表"}><span className={isFixed(current) ? undefined : "eeprom-hover-action"}><IconButton size="small" disabled={disabled} aria-label={isFixed(current) ? "移出固定列表" : "加入固定列表"} onClick={() => toggleFixed(current)}>{isFixed(current) ? <StarRounded color="warning" fontSize="small" /> : <StarOutlineRounded fontSize="small" />}</IconButton></span></Tooltip>}
       <Box sx={{ flex: 1 }} />
       {current && <><Typography variant="caption" color="text.secondary">{current.byte_size > 0 ? `${current.byte_size} B` : "请选择 Device"}</Typography><Button size="small" disabled={disabled} onClick={() => setPathExpanded(value => !value)} aria-expanded={pathExpanded}>文件路径</Button></>}
     </Stack>

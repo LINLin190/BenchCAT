@@ -58,7 +58,7 @@ export function EepromHexView({ data, comparisonData }: { data?: string; compari
   return <Box className="eeprom-hex-view">
     <Stack direction="row" alignItems="center" gap={1} className="eeprom-hex-tools">
       <TextField size="small" label="字节地址（Hex）" value={address} error={Boolean(addressError)} onChange={(event) => { setAddress(event.target.value); setAddressError(""); }} onKeyDown={(event) => { if (event.key === "Enter") jump(); }} inputProps={{ className: "mono" }} sx={{ width: 160 }} />
-      <Button size="small" variant="outlined" onClick={jump}>跳转</Button>
+      <Button size="small" variant="outlined" className="eeprom-hex-jump" onClick={jump}>跳转</Button>
       <Typography variant="caption" color={addressError ? "error" : "text.secondary"} sx={{ flex: 1 }}>{addressError || copyMessage}</Typography>
       <Button size="small" onClick={() => void copyPage()}>复制当前页</Button>
     </Stack>

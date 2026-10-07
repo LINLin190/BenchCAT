@@ -17,6 +17,9 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .eeprom-source-list .MuiListItemButton-root { margin-bottom: 4px; }
 .eeprom-source-panel .MuiTab-root { min-width: 0; padding: 6px; font-size: 12px; }
 .eeprom-source-panel .MuiInputBase-root { font-size: 12px; }
+/* Reveal secondary file actions on hover or keyboard focus without moving row content. */
+.eeprom-file-row .eeprom-hover-action { opacity: 0; pointer-events: none; }
+.eeprom-file-row:hover .eeprom-hover-action, .eeprom-file-row:has(:focus-visible) .eeprom-hover-action { opacity: 1; pointer-events: auto; }
 .eeprom-comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .eeprom-summary { min-width: 0; display: flex; flex-direction: column; }
 .eeprom-summary-row { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: 8px; align-items: center; min-height: 35px; border-bottom: 1px solid #edf0f5; }
@@ -39,8 +42,9 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .eeprom-hex-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .eeprom-hex-tools { padding: 12px 14px 8px; flex-shrink: 0; }
 /* Keep the Hex toolbar text compact without changing its controls or byte table. */
-.eeprom-hex-tools .MuiInputBase-root, .eeprom-hex-tools .MuiInputLabel-root { font-size: 13px; }
+.eeprom-hex-tools .MuiInputBase-root, .eeprom-hex-tools .MuiInputLabel-root { font-size: 12px; }
 .eeprom-hex-tools .MuiButton-root { font-size: 11.5px; }
+.eeprom-hex-tools .eeprom-hex-jump { font-size: 10.5px; }
 .eeprom-hex-tools .MuiTypography-caption { font-size: 11px; }
 .eeprom-hex-table { flex: 1; min-height: 0; overflow: auto; }
 .eeprom-hex-table table { min-width: 780px; table-layout: fixed; }

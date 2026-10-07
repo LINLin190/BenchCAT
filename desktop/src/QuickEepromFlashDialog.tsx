@@ -438,7 +438,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     const records = recent ? filteredHistory : filteredLibrary;
     const showPath = records.some(entry => !sameEepromSource(entry, item) && fileName(entry.path).toLowerCase() === fileName(path).toLowerCase());
     const rowKey = path.toLowerCase();
-    return <Box key={rowKey} sx={{ position: "relative", mb: 0.4 }}>
+    return <Box key={rowKey} className="eeprom-file-row" sx={{ position: "relative", mb: 0.4 }}>
       <ListItemButton
         selected={selected}
         disabled={operationInProgress || configSaving}
@@ -459,8 +459,8 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
         />
       </ListItemButton>
       <Stack direction="row" sx={{ position: "absolute", top: 4, right: 4 }}>
-        <Tooltip title="删除记录（不删除文件）"><span><IconButton size="small" disabled={operationInProgress || configSaving} aria-label={`删除记录 ${fileName(path)}`} onClick={() => recent ? setHistory(current => removeFlashHistory(item, current)) : removeFixed(item)}><DeleteOutlineRounded fontSize="small" /></IconButton></span></Tooltip>
-        {recent ? <Tooltip title={inFixedList ? "取消收藏" : "收藏到固定列表"}><span><IconButton size="small" disabled={operationInProgress || configSaving} aria-label={inFixedList ? "取消收藏" : "收藏到固定列表"} onClick={() => inFixedList ? removeFixed(item) : favoriteHistory(item as FlashHistoryEntry)}>{inFixedList ? <StarRounded fontSize="small" color="warning" /> : <StarOutlineRounded fontSize="small" color="action" />}</IconButton></span></Tooltip> : <Tooltip title="取消收藏（不删除文件）"><span><IconButton size="small" disabled={operationInProgress || configSaving} aria-label="取消收藏" onClick={() => removeFixed(item)}><StarRounded fontSize="small" color="warning" /></IconButton></span></Tooltip>}
+        <Tooltip title="删除记录（不删除文件）"><span className="eeprom-hover-action"><IconButton size="small" disabled={operationInProgress || configSaving} aria-label={`删除记录 ${fileName(path)}`} onClick={() => recent ? setHistory(current => removeFlashHistory(item, current)) : removeFixed(item)}><DeleteOutlineRounded fontSize="small" /></IconButton></span></Tooltip>
+        {recent ? <Tooltip title={inFixedList ? "取消收藏" : "收藏到固定列表"}><span className={inFixedList ? undefined : "eeprom-hover-action"}><IconButton size="small" disabled={operationInProgress || configSaving} aria-label={inFixedList ? "取消收藏" : "收藏到固定列表"} onClick={() => inFixedList ? removeFixed(item) : favoriteHistory(item as FlashHistoryEntry)}>{inFixedList ? <StarRounded fontSize="small" color="warning" /> : <StarOutlineRounded fontSize="small" color="action" />}</IconButton></span></Tooltip> : <Tooltip title="取消收藏（不删除文件）"><span><IconButton size="small" disabled={operationInProgress || configSaving} aria-label="取消收藏" onClick={() => removeFixed(item)}><StarRounded fontSize="small" color="warning" /></IconButton></span></Tooltip>}
       </Stack>
     </Box>;
   };
