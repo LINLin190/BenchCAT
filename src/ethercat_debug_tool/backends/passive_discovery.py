@@ -79,6 +79,12 @@ class _PcapPacketHeader(ctypes.Structure):
     ]
 
 
+class _BpfProgram(ctypes.Structure):
+    """Match libpcap's native filter length and instruction pointer layout."""
+
+    _fields_ = [("bf_len", ctypes.c_uint), ("bf_insns", ctypes.c_void_p)]
+
+
 class NpcapEthercatTransport:
     """Small Npcap EtherCAT transport for positional register access.
 
@@ -125,9 +131,47 @@ class NpcapEthercatTransport:
         library.pcap_close.restype = None
         library.pcap_geterr.argtypes = [ctypes.c_void_p]
         library.pcap_geterr.restype = ctypes.c_char_p
+        # Compile filters in libpcap and release their native instruction storage.
+        library.pcap_compile.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(_BpfProgram), ctypes.c_char_p, ctypes.c_int, ctypes.c_uint32,
+        ]
+        library.pcap_compile.restype = ctypes.c_int
+        library.pcap_setfilter.argtypes = [ctypes.c_void_p, ctypes.POINTER(_BpfProgram)]
+        library.pcap_setfilter.restype = ctypes.c_int
+        library.pcap_freecode.argtypes = [ctypes.POINTER(_BpfProgram)]
+        library.pcap_freecode.restype = None
+        library.pcap_setmintocopy.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        library.pcap_setmintocopy.restype = ctypes.c_int
         self._pcap = library
         return library
 
+    # Exclude unrelated traffic before copying packets into the Python process.
+    def _set_capture_filter(self, source: bytes) -> None:
+        mac = ":".join(f"{byte:02x}" for byte in source)
+        expression = f"ether proto 0x88a4 and ether src {mac}".encode("ascii")
+        program = _BpfProgram()
+        if self._pcap.pcap_compile(self._handle, ctypes.byref(program), expression, 1, 0xFFFFFFFF) != 0:
+            detail = decode_native_text(self._pcap.pcap_geterr(self._handle) or b"unknown error")
+            raise PassiveDiscoveryError(f"无法编译 EtherCAT 接收过滤器：{detail}")
+        try:
+            if self._pcap.pcap_setfilter(self._handle, ctypes.byref(program)) != 0:
+                detail = decode_native_text(self._pcap.pcap_geterr(self._handle) or b"unknown error")
+                raise PassiveDiscoveryError(f"无法设置 EtherCAT 接收过滤器：{detail}")
+        finally:
+            self._pcap.pcap_freecode(ctypes.byref(program))
+
+    # Refresh the filter before sending with a new source at the index wrap.
+    def _next_index(self) -> int:
+        index = self._index + 1
+        if index > PASSIVE_INDEX_MAX:
+            source = b"\x02" + secrets.token_bytes(5)
+            self._set_capture_filter(source)
+            self._source = source
+            index = PASSIVE_INDEX_MIN
+        self._index = index
+        return index
+
+    # Configure low-latency capture before any register or EEPROM request.
     def open(self) -> None:
         if self._handle.value:
             return
@@ -139,11 +183,21 @@ class NpcapEthercatTransport:
             # maximum responsiveness, and an immediate packet wait.
             handle = library.pcap_open(name, 65535, 0x01 | 0x08 | 0x10, -1, None, error)
         else:
-            handle = library.pcap_open_live(name, 65535, 1, self.timeout_ms, error)
+            # Keep the packet-buffer wait shorter than register-read budgets.
+            handle = library.pcap_open_live(name, 65535, 1, 1, error)
         if not handle:
             detail = decode_native_text(error.value) or "未知错误"
             raise PassiveDiscoveryError(f"无法打开 EtherCAT 被动发现通道：{detail}")
         self._handle = ctypes.c_void_p(handle)
+        try:
+            # Deliver each available response without waiting for a full batch.
+            if library.pcap_setmintocopy(self._handle, 0) != 0:
+                detail = decode_native_text(library.pcap_geterr(self._handle) or b"unknown error")
+                raise PassiveDiscoveryError(f"无法设置 EtherCAT 即时接收：{detail}")
+            self._set_capture_filter(self._source)
+        except Exception:
+            self.close()
+            raise
 
     def close(self) -> None:
         if self._handle.value and self._pcap is not None:
@@ -196,13 +250,10 @@ class NpcapEthercatTransport:
         wkc = struct.unpack_from("<H", packet, data_end)[0]
         return packet[data_start:data_end], wkc
 
+    # Send once and keep matching responses within the existing transaction budget.
     def exchange(self, command: int, index: int, adp: int, ado: int, data: bytes) -> tuple[bytes, int]:
         self.open()
-        self._index += 1
-        if self._index > PASSIVE_INDEX_MAX:
-            self._index = PASSIVE_INDEX_MIN
-            self._source = b"\x02" + secrets.token_bytes(5)
-        index = self._index
+        index = self._next_index()
         request = self._frame(command, index, adp, ado, data, self._source)
         buffer = (ctypes.c_ubyte * len(request)).from_buffer_copy(request)
         if self._pcap.pcap_sendpacket(self._handle, buffer, len(request)) != 0:
@@ -279,11 +330,7 @@ class NpcapEthercatTransport:
     def read_many(self, command: int, adp: int, requests: list[tuple[int, int]], timeout_us: int = 2000) -> list[tuple[bytes, int]]:
         """Send one read frame once; never retry a failed register transaction."""
         self.open()
-        self._index += 1
-        if self._index > PASSIVE_INDEX_MAX:
-            self._index = PASSIVE_INDEX_MIN
-            self._source = b"\x02" + secrets.token_bytes(5)
-        request = self._read_frame(command, self._index, adp, requests, self._source)
+        request = self._read_frame(command, self._next_index(), adp, requests, self._source)
         buffer = (ctypes.c_ubyte * len(request)).from_buffer_copy(request)
         if self._pcap.pcap_sendpacket(self._handle, buffer, len(request)) != 0:
             error = self._pcap.pcap_geterr(self._handle)

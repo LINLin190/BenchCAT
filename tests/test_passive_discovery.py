@@ -141,12 +141,16 @@ def test_matching_response_preserves_zero_wkc():
     assert NpcapEthercatTransport._response(bytes(response), request, 1, 7, 2) == (bytes(2), 0)
 
 
-def test_passive_indices_never_overlap_soem_and_wrap_rejects_old_response(monkeypatch):
+# Both receive paths must reject old replies after refreshing the source filter.
+@pytest.mark.parametrize("method", ["aprd", "read_many"])
+def test_passive_indices_never_overlap_soem_and_wrap_rejects_old_response(monkeypatch, method):
     nonce = iter(bytes([value]) * 5 for value in range(10))
     monkeypatch.setattr("ethercat_debug_tool.backends.passive_discovery.secrets.token_bytes",
                         lambda size: next(nonce))
     channel = NpcapEthercatTransport("mock")
     monkeypatch.setattr(channel, "open", lambda: None)
+    filters = []
+    monkeypatch.setattr(channel, "_set_capture_filter", filters.append)
     requests = []
     responses = []
     old_response = None
@@ -179,7 +183,9 @@ def test_passive_indices_never_overlap_soem_and_wrap_rejects_old_response(monkey
 
     channel._pcap = Pcap()
     for sequence in range(1, 481):
-        assert channel.aprd(1, 0x0130, 2) == (sequence.to_bytes(2, "little"), 1)
+        reply = channel.aprd(1, 0x0130, 2) if method == "aprd" else channel.read_many(1, 0, [(0x0130, 2)])[0]
+        assert reply == (sequence.to_bytes(2, "little"), 1)
     assert [request[17] for request in requests] == list(range(16, 256)) * 2
     assert requests[0][6:12] != requests[240][6:12]
+    assert filters == [requests[240][6:12]]
     assert responses == []

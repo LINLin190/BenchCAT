@@ -650,6 +650,7 @@ struct Bridge {
 }
 
 impl Bridge {
+    // Start the isolated communication core and connect its IPC channels.
     fn spawn(
         app: tauri::AppHandle,
         generation: u64,
@@ -698,7 +699,11 @@ impl Bridge {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
             use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
+            use windows_sys::Win32::System::Threading::{
+                ABOVE_NORMAL_PRIORITY_CLASS, CREATE_NO_WINDOW,
+            };
+            // Favor the communication core under CPU load without using real-time priority.
+            command.creation_flags(CREATE_NO_WINDOW | ABOVE_NORMAL_PRIORITY_CLASS);
             let mut child = match command.spawn() {
                 Ok(child) => child,
                 Err(error) => {

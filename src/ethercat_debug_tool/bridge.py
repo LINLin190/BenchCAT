@@ -279,7 +279,7 @@ def _user_error_message(exc: BaseException, code: str, method: str, mutating: bo
         return f"无法确认{action}的结果。请先刷新设备状态，确认结果后再操作。"
     if code == "VALIDATION":
         return f"{action}未完成。请检查输入和当前操作条件。"
-    return f"{action}未完成。请检查当前连接和操作条件；如果反复出现，请记录操作步骤并反馈。"
+    return f"{action}未完成。请检查网络连接和设备供电；如果反复出现，请重新扫描设备或重启软件。"
 
 
 def _structured_error(
