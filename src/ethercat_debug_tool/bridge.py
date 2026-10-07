@@ -32,6 +32,7 @@ from .backends.pysoem_backend import (
 from .command_registry import CommandSpec, load_command_registry
 from .esc_profiles.profiles import ProfileRegistry
 from .esi import EsiParser
+from .esi.config_editor import EsiConfigSaveError, save_config_data
 from .framing import FrameError, IncrementalFrameReader, write_frame
 from .infrastructure import AuditLogger, default_audit_path
 from .master_state import MasterStateMachine, StaleMasterSession
@@ -243,6 +244,8 @@ _OPERATION_LABELS = {
 
 # Describe missing XML sources explicitly while preserving other operation errors.
 def _user_error_message(exc: BaseException, code: str, method: str, mutating: bool) -> str:
+    if isinstance(exc, EsiConfigSaveError):
+        return str(exc)
     if isinstance(exc, StateRequestDisplayError):
         return str(exc)
     if code == "CANCELLED":
@@ -1475,6 +1478,20 @@ class BridgeRuntime:
             document = EsiParser().parse(Path(params["path"]))
             document_id = uuid.uuid4().hex
             self._remember_asset(self.documents, document_id, document, MAX_STORED_ESI_DOCUMENTS)
+            return {
+                "document_id": document_id,
+                "path": document.path,
+                "sha256": document.sha256,
+                "vendor_id": document.vendor_id,
+                "vendor_name": document.vendor_name,
+                "devices": document.devices,
+            }
+        if method == "esi_config_save":
+            # Serialize source edits and publish the saved document to future generators.
+            document_id = str(params["document_id"])
+            with self._asset_lock:
+                document = save_config_data(self.documents[document_id], int(params["ordinal"]), str(params["config_data"]))
+                self.documents[document_id] = document
             return {
                 "document_id": document_id,
                 "path": document.path,

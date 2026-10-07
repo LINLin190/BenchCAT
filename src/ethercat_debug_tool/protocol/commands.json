@@ -10,6 +10,7 @@
     "register_definition": { "lane": "metadata", "timeout_ms": 3000, "mutating": false },
     "esi_library_list": { "lane": "metadata", "timeout_ms": 10000, "mutating": false },
     "esi_load": { "lane": "metadata", "timeout_ms": 10000, "mutating": false },
+    "esi_config_save": { "lane": "metadata", "timeout_ms": 10000, "mutating": true },
     "eeprom_bin_load": { "lane": "metadata", "timeout_ms": 10000, "mutating": false },
     "sii_generate": { "lane": "metadata", "timeout_ms": 10000, "mutating": false },
     "enumerate_adapters": { "lane": "hardware", "timeout_ms": 15000, "mutating": false },
