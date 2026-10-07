@@ -209,11 +209,13 @@ const UPDATE_ERROR_LABELS: Record<UpdateStage, string> = {
   downloading: "下载更新失败",
   installing: "安装启动失败",
 };
-const UPDATE_NETWORK_ERROR_MESSAGE = "软件更新未完成，可稍后重试。检查与GitHub网络连接。";
-
-// Replace updater request errors with actionable network guidance in both views.
-function isUpdateNetworkFailure(error: UpdateFailure): boolean {
-  return (error.stage === "checking" || error.stage === "downloading") && /error sending request/i.test(error.message);
+// Share retry and manual-download guidance while preserving other error details.
+function updateFailureMessage(error: UpdateFailure): string {
+  const requestStage = error.stage === "checking" || error.stage === "downloading";
+  if (requestStage && /error sending request/i.test(error.message)) {
+    return `${UPDATE_ERROR_LABELS[error.stage]}。请检查网络连接并稍后重试，或前往 GitHub 手动下载。`;
+  }
+  return `${UPDATE_ERROR_LABELS[error.stage]}：${error.message}${requestStage ? "。可稍后重试，或前往 GitHub 手动下载。" : ""}`;
 }
 
 function isUpdateInProgress(state: UpdateState): state is "preparing" | "downloading" | "installing" {
@@ -278,7 +280,7 @@ function UpdateDialog({
             </Stack>
           </>}
           {blockedReason && !updating && <Alert severity="info">{blockedReason}</Alert>}
-          {state === "error" && error && <Alert severity="warning" sx={{ overflowWrap: "anywhere" }}>{isUpdateNetworkFailure(error) ? UPDATE_NETWORK_ERROR_MESSAGE : `${UPDATE_ERROR_LABELS[error.stage]}：${error.message}`}</Alert>}
+          {state === "error" && error && <Alert severity="warning" sx={{ overflowWrap: "anywhere" }}>{updateFailureMessage(error)}</Alert>}
         </Stack>
       </DialogContent>
       <Box sx={{ px: 3, pt: 1.5 }}>
@@ -288,7 +290,7 @@ function UpdateDialog({
       </Box>
       <DialogActions sx={{ px: 3, pb: 2, pt: 1.5, gap: 0.5 }}>
         {state === "available" && <Button onClick={onIgnore} sx={{ mr: "auto" }}>忽略本次更新</Button>}
-        {state === "error" && <Button onClick={onDownloadPage} sx={{ mr: "auto" }}>打开下载页面</Button>}
+        {state === "error" && <Button startIcon={<GitHubIcon />} onClick={onDownloadPage} sx={{ mr: "auto" }}>GitHub 手动下载</Button>}
         <Button onClick={onClose}>{updating ? "后台运行" : state === "available" ? "取消" : "关闭"}</Button>
         {state === "available" && <Button variant="contained" disabled={Boolean(blockedReason) || !update} onClick={onInstall}>立即更新</Button>}
         {state === "error" && <Button variant="contained" disabled={error?.stage !== "checking" && Boolean(blockedReason)} onClick={onRetry}>{error?.stage === "checking" ? "重新检查" : "重试更新"}</Button>}
@@ -1195,8 +1197,10 @@ export default function App() {
     else if (await run(() => bridgeRequest("connect", { adapter }))) await scan();
   };
   const checkUpdate = useCallback(async (automatic = false) => {
-    if (updateTaskRef.current || (automatic && startupUpdateCheckedRef.current)) return;
-    startupUpdateCheckedRef.current = true;
+    if (automatic && startupUpdateCheckedRef.current) return true;
+    if (updateTaskRef.current) return false;
+    // Manual checks take over from startup retries, including manual failures.
+    if (!automatic) startupUpdateCheckedRef.current = true;
     updateTaskRef.current = true;
     setPendingUpdateReminder(false);
     setUpdateError(undefined);
@@ -1204,11 +1208,12 @@ export default function App() {
     setUpdateState("checking");
     try {
       const update = await checkForUpdate();
+      startupUpdateCheckedRef.current = true;
       if (!update) {
         setUpdateState("latest");
         setUpdateDialogOpen(false);
         if (!automatic) setMessage({ text: `当前已是最新版本 v${packageInfo.version}`, severity: "info" });
-        return;
+        return true;
       }
       setAvailableUpdate(update);
       setUpdateProgress({ downloaded: 0, total: 0 });
@@ -1223,10 +1228,16 @@ export default function App() {
       } else {
         setUpdateDialogOpen(true);
       }
+      return true;
     } catch (error) {
+      if (automatic) {
+        setUpdateState("idle");
+        return false;
+      }
       setUpdateState("error");
       setUpdateError({ stage: "checking", message: error instanceof Error ? error.message : String(error) });
-      if (!automatic) setUpdateDialogOpen(true);
+      setUpdateDialogOpen(true);
+      return true;
     } finally {
       updateTaskRef.current = false;
     }
@@ -1287,9 +1298,18 @@ export default function App() {
       updateTaskRef.current = false;
     }
   };
+  // Retry silent startup failures with increasing intervals, stopping on success or manual takeover.
   useEffect(() => {
-    const timer = window.setTimeout(() => { void checkUpdate(true); }, 25_000);
-    return () => window.clearTimeout(timer);
+    let cancelled = false;
+    let retryDelay = 30_000;
+    const attempt = async () => {
+      const complete = await checkUpdate(true);
+      if (cancelled || complete) return;
+      timer = window.setTimeout(() => { void attempt(); }, retryDelay);
+      retryDelay = Math.min(retryDelay * 2, 5 * 60_000);
+    };
+    let timer = window.setTimeout(() => { void attempt(); }, 25_000);
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [checkUpdate]);
   const scan = async () => {
     const found = await run(() => bridgeRequest<SlaveInfo[]>("scan"));
@@ -1449,7 +1469,7 @@ export default function App() {
             <Button variant="outlined" startIcon={updateState === "checking" ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={updateState === "checking" || updating} onClick={() => void checkUpdate()}>{updateState === "checking" ? "正在检查…" : "检查更新"}</Button>
           </Stack>
           {updateState === "latest" && <Alert severity="success">当前已是最新版本。</Alert>}
-          {updateState === "error" && updateError && <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button>} sx={{ overflowWrap: "anywhere" }}>{isUpdateNetworkFailure(updateError) ? UPDATE_NETWORK_ERROR_MESSAGE : "软件更新未完成，可查看详情或稍后重试。"}</Alert>}
+          {updateState === "error" && updateError && <Alert severity="warning" action={<Stack direction="row"><Button color="inherit" size="small" onClick={() => visit(DOWNLOAD_URL)}>GitHub 手动下载</Button><Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button></Stack>} sx={{ overflowWrap: "anywhere" }}>{updateFailureMessage(updateError)}</Alert>}
           {availableUpdate && updateState === "available" && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }}>查看更新</Button>}>{ignoredUpdateVersion === availableUpdate.version ? `已忽略 v${availableUpdate.version} 的自动提醒，仍可手动更新。` : `发现 v${availableUpdate.version} 更新。${pendingUpdateReminder ? "设备操作结束后将显示更新弹窗。" : ""}`}</Alert>}
           {updating && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>}>{UPDATE_STAGE_LABELS[updateState]}，请保持软件运行。</Alert>}
           <Typography variant="caption" color="text.secondary">Copyright © BenchCAT contributors</Typography>
