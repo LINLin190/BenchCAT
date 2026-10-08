@@ -29,7 +29,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { MemoryRounded, SaveAltRounded, EditRounded } from "@mui/icons-material";
+import { MemoryRounded, SaveAltRounded, EditRounded, FolderOpenRounded } from "@mui/icons-material";
 import { operationStore } from "./operationStore";
 import { EepromDataView } from "./EepromDataView";
 import { EepromSources } from "./EepromSources";
@@ -398,7 +398,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
               { label: "设备声明容量", value: slave.eeprom_capacity == null ? "未知" : `${slave.eeprom_capacity} B` },
             ]} />
           <EepromSummaryColumn title="待写入目标" tag={bin ? "BIN" : esi ? "XML" : undefined}
-            emptyState={!esi && !bin ? <Stack spacing={0.75} alignItems="center" justifyContent="center" aria-live="polite" sx={{ flex: 1, minHeight: 100, p: 3, textAlign: "center", border: "2px dashed", borderColor: dragOver ? "primary.main" : "transparent", borderRadius: 1.5 }}><Typography variant="body2" fontWeight={650} color={dragOver ? "primary.main" : "text.secondary"}>{dragOver ? "松开以加载 XML/BIN" : "尚未选择 XML/BIN"}</Typography>{!dragOver && <Typography variant="body2" color="text.secondary">选择或拖入文件后，显示待写入信息。</Typography>}</Stack> : undefined}
+            emptyState={!esi && !bin ? <Stack spacing={0.75} alignItems="center" justifyContent="center" aria-live="polite" sx={{ flex: 1, minHeight: 100, p: 3, textAlign: "center", border: "2px dashed", borderColor: dragOver ? "primary.main" : "transparent", borderRadius: 1.5 }}>{dragOver && <Typography variant="body2" fontWeight={650} color="primary.main">松开以加载 XML/BIN</Typography>}<Button size="small" variant="outlined" disableRipple={false} startIcon={<FolderOpenRounded />} disabled={operationInProgress || configSaving || deviceOperationsBlocked} onClick={() => void selectFile()}>选择/拖入XML/BIN</Button>{!dragOver && <Typography variant="body2" color="text.secondary">选择或拖入文件后，显示待写入信息。</Typography>}</Stack> : undefined}
             configInput={configEditing ? <TextField fullWidth size="small" value={configData} disabled={configSaving || operationInProgress || deviceOperationsBlocked} error={Boolean(configDataResult.error || configSaveError)} helperText={configSaveError || configDataResult.error || "保存会修改当前 XML Device 的 ConfigData"} onChange={(event) => { setConfigData(event.target.value.toUpperCase()); setConfigSaveError(""); }} onBlur={() => configDataResult.formatted && setConfigData(configDataResult.formatted)} inputProps={{ "aria-label": "XML ConfigData", className: "mono", spellCheck: false }} /> : undefined}
             configAction={esi && ordinal >= 0 ? <Button size="small" variant={configEditing ? "contained" : "text"} sx={{ flexShrink: 0 }} startIcon={configSaving ? <CircularProgress size={14} color="inherit" /> : configEditing ? undefined : <EditRounded />} disabled={configSaving || operationInProgress || deviceOperationsBlocked || (configEditing && Boolean(configDataResult.error))} onClick={() => { if (configEditing) void saveConfig(); else { generationRequestRef.current += 1; setConfigSaveError(""); setConfigEditing(true); } }}>{configEditing ? "保存" : "编辑"}</Button> : undefined}
             config={effectiveConfig} compareConfig={actualConfig} placeholder={bin ? "BIN 按原始字节写入，不编辑 ConfigData" : ordinal < 0 && esi ? "请选择 Device" : "选择 XML 后显示配置"}
