@@ -1,10 +1,11 @@
 /* Shrink the illustration first so captions and playback controls stay visible. */
-.guide-stage { flex: 1; min-height: 0; overflow: hidden; border: 1px solid #e2e6ef; border-radius: 12px; background: #f4f6fa; }
+.guide-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; border: 1px solid #e2e6ef; border-radius: 12px; background: #f4f6fa; }
 .guide-scene { display: block; width: 100%; height: 100%; font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; font-size: 14px; fill: #172033; }
+.guide-cursor-layer { position: absolute; inset: 0; pointer-events: none; }
 .guide-cursor, .guide-drag-file { transition: transform 550ms ease-in-out; pointer-events: none; }
+.guide-drag-file { transition: transform 550ms ease-in-out, opacity 0ms; }
 .guide-click { animation: guide-click 1.4s ease-out 550ms infinite; }
 .guide-appear { animation: guide-appear 250ms ease-out both; }
-.guide-paused .guide-cursor, .guide-paused .guide-drag-file { transition: none; }
 .guide-paused .guide-click { animation: none; opacity: 0; }
 .guide-paused .guide-appear { animation: none; }
 .guide-progress { flex: 1; height: 24px; padding: 9px 0; border: 0; background: transparent; cursor: pointer; }

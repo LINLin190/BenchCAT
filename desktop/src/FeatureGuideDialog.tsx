@@ -61,18 +61,26 @@ function DemoCursor({ x, y, label, pulseKey }: { x: number; y: number; label?: s
   </g>;
 }
 
+function cursorPosition(topic: GuideTopic, step: number) {
+  if (topic === "drop") return [[336, 214], [177, 164], [677, 261], [723, 276], [177, 211], [600, 365], [805, 472]][step];
+  if (topic === "manual") return [[29, 163], [256, 197], [739, 405], [628, 285], [665, 142]][step];
+  const explorer = topic === "xml";
+  if (step >= (explorer ? 3 : 2)) return step === 2 ? [174, 426] : step === 3 ? [651, 355] : [811, 466];
+  return explorer ? step === 2 ? [437, 291] : [365, 198] : step === 1 ? [228, 209] : [129, 165];
+}
+
 function FileDropScene({ step }: { step: number }) {
   const quickFlash = step >= 4;
   const loaded = step === 3 || step === 6;
   const dragging = step === 1 || step === 2 || step === 5;
-  const cursor = [[336, 214], [177, 164], [677, 261], [723, 276], [465, 92], [600, 365], [805, 472]][step];
+  const cursor = cursorPosition("drop", step);
   return <svg className="guide-scene" viewBox="0 0 960 520" preserveAspectRatio="xMidYMin meet" role="img" aria-label={`拖入 XML/BIN：${guides.drop.steps[step][0]}`}>
     <rect width="960" height="520" rx="12" fill="#f4f6fa" />
     <text x="22" y="30" fontSize="17" fontWeight="700">从资源管理器拖入 BenchCAT</text>
     <rect x="18" y="56" width="280" height="444" rx="10" fill="#fff" stroke="#e2e6ef" />
     <text x="35" y="85" fontWeight="700">文件资源管理器</text>
     <rect x="30" y="100" width="256" height="29" rx="5" fill="#f4f6fa" /><text x="43" y="120" fontSize="12" fill="#647087">此电脑　 ›　 EtherCAT　 ›　 ESI</text>
-    <rect x="30" y={step >= 5 ? 190 : 143} width="256" height="43" rx="5" fill="#e9eeff" />
+    <rect x="30" y={quickFlash ? 190 : 143} width="256" height="43" rx="5" fill="#e9eeff" />
     <path d="M44 150H58L65 158V174H44ZM44 197H58L65 205V221H44Z" fill="#fff" stroke="#365ccf" />
     <text x="76" y="168" fontWeight="650">Device.xml</text><text x="76" y="215" fontWeight="650">Device-backup.bin</text>
     <text x="35" y="478" fontSize="12" fill="#647087">XML / BIN 文件</text>
@@ -121,17 +129,16 @@ function FileDropScene({ step }: { step: number }) {
         : <g><text x="783" y="251" textAnchor="middle" fontSize="12" fill={step === 2 ? "#365ccf" : "#647087"}>{step === 2 ? "松开以加载 XML/BIN" : "尚未选择 XML/BIN"}</text>{step !== 2 && <text x="783" y="332" textAnchor="middle" fontSize="11" fill="#647087">选择或拖入文件后显示待写入信息</text>}</g>}
       <rect x="367" y="369" width="559" height="116" rx="7" fill="#fff" stroke="#e2e6ef" /><text x="382" y="395" fontWeight="700">EEPROM 原始数据</text><path d="M367 407H926" stroke="#e2e6ef" /><text x="382" y="434" fontSize="12" fill="#647087">读取范围　　完整读取　⌄</text><text x="797" y="434" fontSize="12" fill="#365ccf">读取　 保存 BIN</text><text x="382" y="468" fontSize="12" fill="#647087">尚未读取 EEPROM 数据</text>
     </g>}
-    {dragging && <g className="guide-drag-file" style={{ transform: `translate(${cursor[0] + 25}px, ${cursor[1] + 20}px)` }}>
-      <rect width="205" height="37" rx="6" fill="#e9eeff" stroke="#365ccf" opacity=".95" /><text x="12" y="24" fontSize="12" fontWeight="650" fill="#365ccf">{step === 5 ? "Device-backup.bin" : "Device.xml"}　＋</text>
-    </g>}
-    <DemoCursor x={cursor[0]} y={cursor[1]} pulseKey={`drop-${step}`} label={step === 1 ? "拖动" : undefined} />
+    {/* Keep the preview mounted so it follows the cursor; reveal it after the XML pickup movement. */}
+    <g className="guide-drag-file" style={{ transform: `translate(${cursor[0] + 25}px, ${cursor[1] + 20}px)`, opacity: dragging ? 1 : 0, transitionDelay: step === 1 ? "0ms, 550ms" : "0ms" }}>
+      <rect width={quickFlash ? 136 : 90} height="37" rx="6" fill="#e9eeff" stroke="#365ccf" opacity=".95" /><text x="12" y="24" fontSize="12" fontWeight="650" fill="#365ccf">{quickFlash ? "Device-backup.bin" : "Device.xml"}</text>
+    </g>
   </svg>;
 }
 
 function RegisterManualScene({ step }: { step: number }) {
   const details = step >= 1;
   const reader = step >= 3;
-  const cursor = [[29, 163], [256, 197], [739, 405], [628, 285], [665, 142]][step];
   return <svg className="guide-scene" viewBox="0 0 960 520" preserveAspectRatio="xMidYMin meet" role="img" aria-label={`寄存器参考手册：${guides.manual.steps[step][0]}`}>
     <rect width="960" height="520" rx="12" fill="#f4f6fa" />
     <rect width="960" height="46" rx="12" fill="#fff" /><path d="M0 34H960V46H0Z" fill="#fff" /><text x="22" y="29" fontSize="17" fontWeight="700">BenchCAT</text><text x="882" y="28" fill="#647087">−　□　×</text>
@@ -172,7 +179,6 @@ function RegisterManualScene({ step }: { step: number }) {
         {[178, 208, 238, 268].map(y => <g key={y}><path d={`M28 ${y}H427`} stroke="#e2e6ef" /><rect x="42" y={y - 15} width="72" height="5" rx="2" fill="#cbd2df" /><rect x="135" y={y - 15} width="255" height="5" rx="2" fill="#e2e6ef" /></g>)}
       </g>
     </g>}
-    <DemoCursor x={cursor[0]} y={cursor[1]} pulseKey={`manual-${step}`} />
   </svg>;
 }
 
@@ -183,9 +189,6 @@ function DemoScene({ topic, step }: { topic: GuideTopic; step: number }) {
   const flashOpen = step >= (explorer ? 3 : 2);
   const fileLoaded = explorer || step >= 3;
   const menuOpen = explorer ? step === 1 || step === 2 : step === 1;
-  const cursor = flashOpen
-    ? step === 2 ? [174, 426] : step === 3 ? [651, 355] : [811, 466]
-    : explorer ? step === 2 ? [437, 291] : [365, 198] : step === 1 ? [228, 209] : [129, 165];
 
   return <svg className="guide-scene" viewBox="0 0 960 520" preserveAspectRatio="xMidYMin meet" role="img" aria-label={`${guides[topic].title}：${guides[topic].steps[step][0]}`}>
     <rect width="960" height="520" rx="12" fill="#f4f6fa" />
@@ -250,7 +253,6 @@ function DemoScene({ topic, step }: { topic: GuideTopic; step: number }) {
       {step === 4 && <rect x="752" y="453" width="117" height="39" rx="7" fill="none" stroke="#365ccf" strokeWidth="2" />}
       <rect x="758" y="459" width="105" height="27" rx="5" fill={fileLoaded ? "#365ccf" : "#cbd2df"} /><text x="810" y="478" textAnchor="middle" fontSize="13" fontWeight="650" fill="#fff">烧录</text>
     </g>}
-    <DemoCursor x={cursor[0]} y={cursor[1]} pulseKey={`${topic}-${step}`} label={step === 0 || explorer && step === 1 ? explorer && step === 0 ? "XML" : "右键" : undefined} />
     <rect x="808" y="7" width="68" height="30" rx="15" fill="#eef2ff" /><text x="842" y="27" textAnchor="middle" fill="#365ccf" fontSize="12">示例演示</text>
   </svg>;
 }
@@ -260,14 +262,16 @@ export function FeatureGuideDialog({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState(0);
   const [playing, setPlaying] = useState(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const guide = guides[topic];
+  const cursor = cursorPosition(topic, step);
 
   // The guide owns only presentation state; it never opens the live programming dialog.
   useEffect(() => {
     if (!playing) return;
+    const lastStep = step === guide.steps.length - 1;
+    // Hold the final step for its normal duration plus a four-second replay pause.
     const timer = window.setTimeout(() => {
-      if (step === guide.steps.length - 1) setPlaying(false);
-      else setStep(step + 1);
-    }, 2600);
+      setStep(lastStep ? 0 : step + 1);
+    }, 2600 + (lastStep ? 4000 : 0));
     return () => window.clearTimeout(timer);
   }, [playing, step, guide]);
 
@@ -286,7 +290,13 @@ export function FeatureGuideDialog({ onClose }: { onClose: () => void }) {
         {(["slave", "xml", "drop", "manual"] as const).map(value => <Button key={value} variant={topic === value ? "contained" : "outlined"} aria-pressed={topic === value} onClick={() => selectTopic(value)} startIcon={value === "slave" ? <DeveloperBoardRounded /> : value === "xml" ? <DescriptionOutlined /> : value === "drop" ? <DriveFolderUploadRounded /> : <MenuBookRounded />}>{guides[value].title}</Button>)}
       </Stack>
       <Typography fontWeight={700} sx={{ flexShrink: 0 }}>{guide.subtitle}</Typography>
-      <Box className={`guide-stage${playing ? "" : " guide-paused"}`}><DemoScene topic={topic} step={step} /></Box>
+      <Box className={`guide-stage${playing ? "" : " guide-paused"}`}>
+        <DemoScene topic={topic} step={step} />
+        {/* A shared cursor layer preserves movement across all guide topics. */}
+        <svg className="guide-scene guide-cursor-layer" viewBox="0 0 960 520" preserveAspectRatio="xMidYMin meet" aria-hidden="true">
+          <DemoCursor x={cursor[0]} y={cursor[1]} pulseKey={`${topic}-${step}`} label={topic === "slave" && step === 0 || topic === "xml" && step === 1 ? "右键" : topic === "xml" && step === 0 ? "XML" : undefined} />
+        </svg>
+      </Box>
       <Box sx={{ flexShrink: 0 }} aria-live={playing ? "off" : "polite"}>
         <Typography fontWeight={750}><Box component="span" sx={{ color: "primary.main", mr: 1 }}>{step + 1} / {guide.steps.length}</Box>{guide.steps[step][0]}</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{guide.steps[step][1]}</Typography>
