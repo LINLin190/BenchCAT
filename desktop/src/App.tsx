@@ -161,7 +161,7 @@ function escModelLabel(chipModel: string | undefined, profile: string): string {
 }
 
 function StateChip({ state, error = false }: { state: number; error?: boolean }) {
-  const color = error ? "error" : state === 8 ? "success" : state === 0 ? "default" : state === 1 ? "warning" : "primary";
+  const color = error ? "error" : state === 8 ? "success" : state === 0 || state === 1 ? "default" : "primary";
   return <Chip size="small" color={color} variant={state === 8 ? "filled" : "outlined"} label={`${stateLabel(state)}${error ? " + ERROR" : ""}`} />;
 }
 
@@ -966,14 +966,14 @@ export default function App() {
         <Box component="img" src={appIconUrl} alt="BenchCAT" sx={{ width: 42, height: 42, borderRadius: 1.2, display: "block", flexShrink: 0 }} />
       </Toolbar>
       <Divider />
-      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={(updateState === "preparing" && item.key !== page) || (eepromExclusive && item.key !== "eeprom")} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 58, mb: 0.3, px: 0.3, py: 0.8, flexDirection: "column", gap: 0.45, color: page === item.key ? "primary.main" : "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}>{item.icon}</ListItemIcon><Typography sx={{ fontSize: 11, lineHeight: 1.3, fontWeight: page === item.key ? 700 : 500 }}>{item.label}</Typography></ListItemButton></span></Tooltip>)}</List>
+      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={(updateState === "preparing" && item.key !== page) || (eepromExclusive && item.key !== "eeprom")} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 52, mb: 0.3, px: 0.3, py: 0.6, flexDirection: "column", gap: 0.45, color: page === item.key ? "primary.main" : "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}>{item.icon}</ListItemIcon><Typography sx={{ fontSize: 11, lineHeight: 1.3, fontWeight: page === item.key ? 700 : 500 }}>{item.label}</Typography></ListItemButton></span></Tooltip>)}</List>
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
-      <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettings(true); }} sx={{ minHeight: 58, px: 0.3, py: 0.8, flexDirection: "column", color: "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
+      <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettings(true); }} sx={{ width: 48, height: 48, minHeight: 48, mx: "auto", p: 0, justifyContent: "center", color: "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
     </Drawer>
     <Box sx={{ ml: "64px", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       <AppBar className="workbench-toolbar" position="static" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "rgba(255,255,255,.96)" }}>
-        <Toolbar sx={{ minHeight: "54px !important", columnGap: 0.65, rowGap: 0.65, px: "10px !important", py: 0.45, flexWrap: "wrap", alignContent: "center" }}>
+        <Toolbar sx={{ minHeight: "54px !important", columnGap: 0.65, rowGap: 0.65, px: "10px !important", py: 0.45, flexWrap: "wrap", alignContent: "center", "&:hover .connection-disconnect:not(.Mui-disabled)": { color: "error.main", borderColor: "error.main", transitionDelay: "0s" } }}>
           <Stack sx={{ width: 170, minWidth: 0, flexShrink: 0 }} spacing={0.15}>
             <Stack direction="row" gap={0.6} alignItems="center" flexWrap="wrap">
               <Chip size="small" color={!bridgeAvailable ? bridgeStarting ? "default" : "error" : status.connected ? "success" : "default"} variant={status.connected ? "filled" : "outlined"} label={!bridgeAvailable ? bridgeStarting ? "正在启动" : "连接暂不可用" : status.connected ? "网卡已连接" : "网卡未连接"} />
@@ -990,9 +990,9 @@ export default function App() {
             </Tooltip>
           </Box>}
           <Box sx={{ display: "flex", alignItems: "center", alignContent: "center", justifyContent: "flex-end", flex: "0 1 auto", minWidth: 0, ml: "auto", flexWrap: "wrap", gap: 0.65 }}>
-            <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} MenuProps={{ PaperProps: { sx: { width: 270, maxWidth: 270 } } }} value={adapter} disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name} title={item.description || item.name} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
-            <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || (status.connected ? disconnectBusy : busy || adaptersLoading) || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
-            <Button size="small" variant="outlined" startIcon={<RefreshRounded className={scanning ? "operation-icon-spinning" : undefined} />} disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
+            <FormControl size="small" sx={{ width: 250, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} MenuProps={{ PaperProps: { sx: { width: 250, maxWidth: 250 } } }} value={adapter} disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name} title={item.description || item.name} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
+            <Button className={status.connected ? "connection-disconnect" : undefined} size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || (status.connected ? disconnectBusy : busy || adaptersLoading) || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap", ...(status.connected ? { color: "text.secondary", borderColor: "divider", transition: "color 0s 600ms, border-color 0s 600ms, background-color 150ms", "&.Mui-disabled": { transition: "none" } } : {}) }}>{status.connected ? "断开" : "连接"}</Button>
+            <Button size="small" variant="outlined" startIcon={<RefreshRounded className={scanning ? "operation-icon-spinning" : undefined} />} disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{scanning ? "扫描中…" : status.slaves.length > 0 ? "重扫" : "扫描"}</Button>
           </Box>
         </Toolbar>
       </AppBar>
