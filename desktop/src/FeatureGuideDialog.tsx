@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Dialog, DialogContent, DialogTitle, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import { CloseRounded, DescriptionOutlined, DeveloperBoardRounded, DriveFolderUploadRounded, MenuBookRounded, PauseRounded, PlayArrowRounded, ReplayRounded } from "@mui/icons-material";
 import "./featureGuide.css";
 
@@ -299,6 +299,5 @@ export function FeatureGuideDialog({ onClose }: { onClose: () => void }) {
         </Box>
       </Stack>
     </DialogContent>
-    <DialogActions sx={{ px: 3, py: 1, flexShrink: 0 }}><Button disabled={step === 0} onClick={() => { setPlaying(false); setStep(step - 1); }}>上一步</Button><Button disabled={step === guide.steps.length - 1} onClick={() => { setPlaying(false); setStep(step + 1); }}>下一步</Button><Button onClick={onClose}>完成</Button></DialogActions>
   </Dialog>;
 }
