@@ -90,7 +90,7 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .overview-cards .section-label { font-size: 0.72rem; }
 
 /* The compact runtime strip spans both diagnostic columns. Expanded cards size independently. */
-.overview-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; align-items: stretch; }
+.overview-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 12px; align-items: start; }
 .overview-grid > .MuiCard-root { min-width: 0; }
 .ov-runtime { grid-column: 1 / -1; }
 .ov-runtime-facts { display: grid; grid-template-columns: max-content max-content max-content minmax(0, 1fr) max-content max-content; align-items: center; gap: 10px 16px; }
@@ -99,8 +99,6 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .ov-runtime-actions .overview-state-buttons { width: 320px; }
 .ov-repair-actions { margin-left: auto; }
 .ov-section-title { font-size: 13px !important; font-weight: 700 !important; color: #42536d; margin-bottom: 8px !important; }
-/* Keep cards independent until Collapse has completed its exit animation. */
-.overview-grid:has(.MuiCollapse-root:not(.MuiCollapse-hidden)) { align-items: start; }
 .ov-pdo-label { font-size: 14px !important; font-weight: 600 !important; }
 .ov-pdo-values { display: flex; align-items: center; gap: 20px; }
 .ov-pdo-values .MuiTypography-root { font-size: 14px; }
@@ -154,8 +152,8 @@ html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
    predictable so both sides of the card line up and the register suffix stays on one line. */
 .ov-pair-table .MuiTableCell-root { padding: 8px 10px; }
 .ov-pair-table .MuiTableCell-root:first-of-type { width: 40%; white-space: nowrap; }
-.ov-card-tail { margin-top: auto; padding-top: 12px; }
-.ov-card-body { display: flex; flex-direction: column; height: 100%; }
+.ov-card-tail { padding-top: 12px; }
+.ov-card-body { display: flex; flex-direction: column; }
 /* Stack unequal summary groups to avoid an empty half-card beside the PDI rows. */
 .ov-eeprom-pair { display: grid; gap: 16px; }
 .ov-eeprom-pair > section { min-width: 0; }

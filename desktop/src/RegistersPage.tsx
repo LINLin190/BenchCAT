@@ -78,7 +78,7 @@ const groupLabels: Record<string, string> = {
 const referenceGroups = ["phy", "lan925x_system_csr", "hbi_local"];
 const disclosureSx = {
   borderTop: 1, borderColor: "divider", "&:before": { display: "none" },
-  "& .MuiAccordionSummary-root": { px: 0, minHeight: 40 },
+  "& .MuiAccordionSummary-root, & .MuiAccordionSummary-root.Mui-expanded": { px: 0, minHeight: 40 },
   "& .MuiAccordionDetails-root": { px: 0, pt: 0, pb: 1.5 },
 };
 
@@ -945,7 +945,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   if (!slave) return <Box sx={{ py: 8, textAlign: "center", color: "text.secondary" }}>请先选择从站</Box>;
 
   /** Edit catalog registers with their documented write semantics. */
-  const renderEditor = () => <Stack spacing={1.25}>
+  const renderEditor = () => <Stack spacing={1.25} useFlexGap>
     {writeContext?.access === "WAC" ? <Typography fontSize={12} color="text.secondary">写入后清零此计数器</Typography> : <Stack direction="row" spacing={0.75}>
       <TextField fullWidth size="small" label={writeContext?.access === "W1C" ? "清除位掩码" : writeContext?.access === "W1S" ? "置位掩码" : writeFormat === "bytes" ? "写入值（HEX）" : "写入值"} value={writeInput}
         onChange={(event) => { dirtyRef.current = true; setWatching(false); setWriteInput(event.target.value); setWriteMessage(""); }}
@@ -1027,7 +1027,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
           <Typography fontSize={11} color={pageError ? "error.main" : "text.secondary"}>{reading ? "正在读取…" : snapshotInfo ? `${snapshotInfo.cancelled ? "读取已取消 · " : ""}${new Date(snapshotInfo.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${snapshotInfo.duration_ms.toFixed(1)} ms` : "尚未读取"}</Typography>
         </Stack>
       </Card>
-      <RegisterDetailsPanel open={Boolean(selected)} animate={animateDetails}>{selected && <Card variant="outlined" sx={{ height: "100%", minWidth: 0, overflow: "auto", borderRadius: 1.5, boxShadow: "none" }}><Stack spacing={1.75} sx={{ p: 2 }}>
+      <RegisterDetailsPanel open={Boolean(selected)} animate={animateDetails}>{selected && <Card variant="outlined" sx={{ height: "100%", minWidth: 0, overflow: "auto", borderRadius: 1.5, boxShadow: "none" }}><Stack spacing={1.75} useFlexGap sx={{ p: 2 }}>
         <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={0.5}><Box minWidth={0}>
           <Typography fontSize={14} fontWeight={500} sx={{ overflowWrap: "anywhere" }}>{registerDisplayName(selected)}</Typography>
           {registerDisplayName(selected) !== registerLabel(selected.name) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.25 }}>{registerLabel(selected.name)}</Typography>}
