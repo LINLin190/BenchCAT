@@ -70,6 +70,20 @@ fn bridge_error(code: &str, message: String, method: Option<&str>, unknown: bool
         "session_invalidated":true,"operation_result":if unknown {"unknown"} else {"failed"},"method":method})
 }
 
+fn validate_bridge_ready(payload: &Value, protocol_version: u64) -> Result<(), String> {
+    if payload.pointer("/data/protocol_version").and_then(Value::as_u64) != Some(protocol_version)
+        || !matches!(payload.pointer("/data/mode").and_then(Value::as_str), Some("real" | "demo"))
+    {
+        return Err("通信核心就绪消息与宿主协议不匹配".into());
+    }
+    Ok(())
+}
+
+fn wait_bridge_ready(receiver: &mpsc::Receiver<Result<(), String>>, deadline: Instant) -> Result<(), String> {
+    receiver.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|error| format!("通信核心未完成就绪握手：{error}"))?
+}
+
 fn snapshot_with_generation(
     snapshot: &Value,
     session_id: u64,
@@ -266,18 +280,123 @@ fn acquire_single_instance() -> Result<Option<SingleInstanceGuard>, String> {
     Ok(Some(SingleInstanceGuard))
 }
 
-fn acquire_single_instance_or_activate() -> Result<Option<SingleInstanceGuard>, String> {
+fn acquire_single_instance_or_activate(
+    path: Option<&str>,
+) -> Result<Option<SingleInstanceGuard>, String> {
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
         match acquire_single_instance()? {
             Some(guard) => return Ok(Some(guard)),
-            None if bring_existing_instance_to_front() => return Ok(None),
+            None if path.map_or_else(bring_existing_instance_to_front, forward_eeprom_request) => {
+                return Ok(None)
+            }
             None if Instant::now() >= deadline => {
-                return Err("旧实例仍在退出且未能释放单实例锁，请稍后重试".into())
+                return Err(if path.is_some() {
+                    "无法将 XML 交给已运行的 BenchCAT，请关闭旧窗口后重试".into()
+                } else {
+                    "旧实例仍在退出且未能释放单实例锁，请稍后重试".into()
+                })
             }
             None => std::thread::sleep(Duration::from_millis(100)),
         }
     }
+}
+
+fn eeprom_launch_path(args: &[String]) -> Result<Option<String>, String> {
+    let Some(index) = args.iter().position(|arg| arg == "--quick-flash") else {
+        return Ok(None);
+    };
+    let path = args
+        .get(index + 1)
+        .filter(|path| !path.is_empty())
+        .ok_or("请为快速烧录指定一个 XML 文件")?;
+    if !Path::new(path)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
+    {
+        return Err("快速烧录入口只接受 XML 文件".into());
+    }
+    // Resolving a launch path does not read or parse the XML before showing the UI.
+    let absolute =
+        std::path::absolute(path).map_err(|error| format!("无法解析 XML 路径：{error}"))?;
+    Ok(Some(absolute.to_string_lossy().into_owned()))
+}
+
+#[cfg(windows)]
+fn eeprom_open_pipe_name() -> String {
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    let mut session = 0;
+    unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
+    format!(r"\\.\pipe\BenchCAT.com.benchcat.app.eeprom.{session}")
+}
+
+#[cfg(windows)]
+fn forward_eeprom_request(path: &str) -> bool {
+    let Ok(mut pipe) = OpenOptions::new().write(true).open(eeprom_open_pipe_name()) else {
+        return false;
+    };
+    let Ok(frame) = encode_frame(&json!({ "path": path }), 131_072) else {
+        return false;
+    };
+    if write_encoded_frame(&mut pipe, &frame).is_err() {
+        return false;
+    }
+    bring_existing_instance_to_front();
+    true
+}
+
+#[cfg(not(windows))]
+fn forward_eeprom_request(_path: &str) -> bool {
+    false
+}
+
+#[derive(Default)]
+struct EepromOpenRequests(Mutex<Vec<String>>);
+
+#[tauri::command]
+fn take_eeprom_open_requests(state: State<'_, EepromOpenRequests>) -> Vec<String> {
+    std::mem::take(&mut *state.0.lock().unwrap())
+}
+
+#[cfg(windows)]
+fn create_eeprom_open_pipe() -> Result<File, String> {
+    use std::os::windows::io::FromRawHandle;
+    let handle = create_pipe(&eeprom_open_pipe_name(), PipeDirection::HostReads)?;
+    Ok(unsafe { File::from_raw_handle(handle as _) })
+}
+
+#[cfg(windows)]
+fn listen_eeprom_open_requests(mut pipe: File, app: tauri::AppHandle) {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_PIPE_CONNECTED};
+    use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, DisconnectNamedPipe};
+    std::thread::spawn(move || loop {
+        let handle = pipe.as_raw_handle() as _;
+        let connected = unsafe { ConnectNamedPipe(handle, std::ptr::null_mut()) };
+        if connected == 0 && unsafe { GetLastError() } != ERROR_PIPE_CONNECTED {
+            break;
+        }
+        let request = read_frame(&mut pipe, 131_072);
+        unsafe { DisconnectNamedPipe(handle) };
+        if let Ok(request) = request {
+            if let Some(path) = request.get("path").and_then(Value::as_str) {
+                if let Ok(Some(path)) = eeprom_launch_path(&["--quick-flash".into(), path.into()]) {
+                    app.state::<EepromOpenRequests>()
+                        .0
+                        .lock()
+                        .unwrap()
+                        .push(path);
+                    // The queued request survives until React has subscribed to the event.
+                    let _ = app.emit("eeprom-open-request", ());
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[cfg(windows)]
@@ -444,7 +563,7 @@ fn assign_kill_on_close_job(child: &Child) -> Result<JobHandle, String> {
     Ok(JobHandle(job as usize))
 }
 
-#[cfg(test)]
+#[cfg(any(test, windows))]
 fn read_frame(reader: &mut File, max: usize) -> std::io::Result<Value> {
     let mut raw = [0_u8; 4];
     reader.read_exact(&mut raw)?;
@@ -886,7 +1005,10 @@ impl Bridge {
             let max = registry.limits.max_frame_bytes;
             let reader_fault_tx = fault_tx.clone();
             let reader_generation_gate = Arc::clone(&generation_gate);
+            let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+            let protocol_version = registry.protocol_version;
             std::thread::spawn(move || {
+                let mut ready_tx = Some(ready_tx);
                 let mut reader = response_pipe;
                 let mut frame_reader = IncrementalFrameReader::new(max);
                 let reason = loop {
@@ -956,11 +1078,19 @@ impl Bridge {
                                 // Heartbeat is telemetry only. It cannot prove that
                                 // the native-call Worker is making progress.
                                 if kind == Some("ready") {
+                                    if let Err(error) = validate_bridge_ready(&payload, protocol_version) {
+                                        break error;
+                                    }
                                     if let Ok(mut s) = rl.lock() {
                                         if *s == Lifecycle::Starting {
                                             *s = Lifecycle::Ready
                                         }
                                     }
+                                    if let Some(sender) = ready_tx.take() {
+                                        let _ = sender.send(Ok(()));
+                                    }
+                                    // Only the supervisor may announce an admitted core to the UI.
+                                    continue;
                                 }
                                 if kind == Some("worker_stalled") {
                                     if let Ok(mut s) = rl.lock() {
@@ -990,6 +1120,9 @@ impl Bridge {
                 };
                 if let Ok(mut s) = rl.lock() {
                     *s = Lifecycle::Exited
+                }
+                if let Some(sender) = ready_tx.take() {
+                    let _ = sender.send(Err(format!("通信核心在就绪前退出：{reason}")));
                 }
                 let code = rc
                     .lock()
@@ -1044,7 +1177,7 @@ impl Bridge {
                 generation,
                 Arc::clone(&generation_gate),
             );
-            Ok(Arc::new(Self {
+            let bridge = Arc::new(Self {
                 generation,
                 child,
                 request_tx,
@@ -1054,7 +1187,17 @@ impl Bridge {
                 registry,
                 next_id: AtomicU64::new(1),
                 _job: job,
-            }))
+            });
+            // Pipe connection and Python initialization share the existing startup deadline.
+            if let Err(error) = wait_bridge_ready(&ready_rx, connect_deadline) {
+                bridge.force_terminate(&error);
+                return Err(error);
+            }
+            if bridge.lifecycle.lock().map(|state| *state != Lifecycle::Ready).unwrap_or(true) {
+                bridge.force_terminate("通信核心在发布就绪状态前退出");
+                return Err("通信核心在发布就绪状态前退出".into());
+            }
+            Ok(bridge)
         }
     }
 
@@ -1096,7 +1239,7 @@ impl Bridge {
             .unwrap_or(Lifecycle::Exited);
         if matches!(
             state,
-            Lifecycle::Exited | Lifecycle::Stopping | Lifecycle::Stalled
+            Lifecycle::Starting | Lifecycle::Exited | Lifecycle::Stopping | Lifecycle::Stalled
         ) {
             return Err(bridge_error(
                 "BRIDGE_UNAVAILABLE",
@@ -1276,6 +1419,20 @@ impl BridgeSupervisor {
             .and_then(|bridge| bridge.as_ref().map(Arc::clone))
     }
 
+    fn readiness(&self) -> Value {
+        let generation = self.current_generation.load(Ordering::Acquire);
+        if let Some(bridge) = self.bridge().filter(|bridge| bridge.generation == generation) {
+            let state = bridge.lifecycle.lock().map(|state| *state).unwrap_or(Lifecycle::Exited);
+            let ready = matches!(state, Lifecycle::Ready | Lifecycle::Busy);
+            return json!({"state": if ready { "ready" } else { "unavailable" },
+                "host_generation": generation,
+                "message": if ready { None } else { Some(format!("通信核心状态：{}", state.label())) }});
+        }
+        let failure = self.last_spawn_error.lock().ok().and_then(|error| error.clone());
+        json!({"state": if failure.is_some() { "failed" } else { "starting" },
+            "host_generation": generation, "message": failure})
+    }
+
     fn ensure_bridge(&self, reason: &str) {
         if self.stopped.load(Ordering::Acquire) || self.bridge().is_some() {
             return;
@@ -1375,19 +1532,16 @@ impl BridgeSupervisor {
 
     fn request(&self, method: String, params: Value, session_id: Option<u64>) -> PendingResult {
         let Some(bridge) = self.bridge() else {
-            let message = self
+            let failure = self
                 .last_spawn_error
                 .lock()
                 .ok()
-                .and_then(|error| error.clone())
-                .map(|error| format!("通信核心启动失败：{error}"))
-                .unwrap_or_else(|| "通信核心正在后台启动；界面仍可使用，请稍后重试".into());
-            return Err(bridge_error(
-                "BRIDGE_STARTING",
-                message,
-                Some(&method),
-                false,
-            ));
+                .and_then(|error| error.clone());
+            let message = failure.as_ref().map(|error| format!("通信核心启动失败：{error}"))
+                .unwrap_or_else(|| "通信核心正在初始化，请等待就绪".into());
+            return Err(json!({"code": if failure.is_some() { "BRIDGE_START_FAILED" } else { "BRIDGE_STARTING" },
+                "message": message, "user_message": message, "method": method,
+                "category": "transport", "session_invalidated": failure.is_some(), "operation_result": "failed"}));
         };
         let unavailable = bridge
             .lifecycle
@@ -1452,6 +1606,10 @@ impl BridgeSupervisor {
 }
 
 struct BridgeState(Arc<BridgeSupervisor>);
+#[tauri::command]
+fn bridge_host_state(state: State<'_, BridgeState>) -> Value {
+    state.0.readiness()
+}
 #[tauri::command]
 async fn bridge_request(
     state: State<'_, BridgeState>,
@@ -1575,7 +1733,14 @@ fn configure_main_window(app: &tauri::App) {
 }
 
 fn main() {
-    let _single_instance = match acquire_single_instance_or_activate() {
+    let launch_path = match eeprom_launch_path(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        Ok(path) => path,
+        Err(error) => {
+            show_startup_error(&error);
+            return;
+        }
+    };
+    let _single_instance = match acquire_single_instance_or_activate(launch_path.as_deref()) {
         Ok(Some(guard)) => guard,
         Ok(None) => {
             return;
@@ -1585,14 +1750,28 @@ fn main() {
             return;
         }
     };
+    // Publish the pipe before WebView startup so a second launch can hand off immediately.
+    #[cfg(windows)]
+    let open_pipe = match create_eeprom_open_pipe() {
+        Ok(pipe) => pipe,
+        Err(error) => {
+            show_startup_error(&error);
+            return;
+        }
+    };
+    let launch_script = format!("window.__BENCHCAT_EEPROM_PATH__ = {};", json!(launch_path));
     tauri::Builder::default()
+        .append_invoke_initialization_script(launch_script)
+        .manage(EepromOpenRequests::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
-            configure_main_window(app);
+        .setup(move |app| {
             let supervisor = BridgeSupervisor::new(app.handle().clone());
             app.manage(BridgeState(supervisor));
+            #[cfg(windows)]
+            listen_eeprom_open_requests(open_pipe, app.handle().clone());
+            configure_main_window(app);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1612,9 +1791,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             bridge_request,
+            bridge_host_state,
             reveal_path,
             open_external,
             read_register_manual,
+            take_eeprom_open_requests,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build BenchCAT")
@@ -1630,6 +1811,36 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_handshake_requires_matching_protocol_and_complete_core_readiness() {
+        assert!(validate_bridge_ready(&json!({"data": {"mode": "real", "protocol_version": 1}}), 1).is_ok());
+        assert!(validate_bridge_ready(&json!({"data": null}), 1).is_err());
+        assert!(validate_bridge_ready(&json!({"data": {"mode": "real", "protocol_version": 2}}), 1).is_err());
+        let (sender, receiver) = mpsc::sync_channel(1);
+        assert!(wait_bridge_ready(&receiver, Instant::now()).is_err());
+        sender.send(Ok(())).unwrap();
+        assert!(wait_bridge_ready(&receiver, Instant::now() + Duration::from_secs(1)).is_ok());
+        sender.send(Err("core exited during startup".into())).unwrap();
+        assert_eq!(wait_bridge_ready(&receiver, Instant::now() + Duration::from_secs(1)).unwrap_err(), "core exited during startup");
+    }
+    #[test]
+    fn quick_flash_launch_accepts_unicode_spaces_and_missing_xml_without_reading_it() {
+        let path = std::env::temp_dir().join("BenchCAT 未创建文件 1.XML");
+        assert_eq!(
+            eeprom_launch_path(&["--quick-flash".into(), path.to_string_lossy().into_owned()])
+                .unwrap(),
+            Some(path.to_string_lossy().into_owned())
+        );
+    }
+
+    #[test]
+    fn quick_flash_launch_rejects_missing_paths_and_other_file_types() {
+        assert!(eeprom_launch_path(&["--quick-flash".into()]).is_err());
+        assert!(eeprom_launch_path(&["--quick-flash".into(), "".into()]).is_err());
+        assert!(eeprom_launch_path(&["--quick-flash".into(), "image.bin".into()]).is_err());
+        assert_eq!(eeprom_launch_path(&[]).unwrap(), None);
+    }
+
     #[test]
     fn frame_round_trip() {
         let path = std::env::temp_dir().join(format!("ec-frame-{}.bin", std::process::id()));
