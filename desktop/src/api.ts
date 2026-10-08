@@ -3,8 +3,44 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AdapterInfo, BridgeEvent, BridgeExitInfo, WorkbenchStatus } from "./types";
 import { normalizeBridgeFailure, operationStore } from "./operationStore";
 import { acceptsSessionEvent, acceptsSnapshot } from "./snapshotClock";
+import { reconcileBusSnapshot } from "./busSnapshot";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
+
+export function initialEepromPath(): string | undefined {
+  return (window as Window & { __BENCHCAT_EEPROM_PATH__?: string | null }).__BENCHCAT_EEPROM_PATH__ ?? undefined;
+}
+
+// Subscribe before draining so requests arriving during frontend startup stay queued.
+export async function onEepromOpenRequest(handler: (path: string) => void): Promise<UnlistenFn> {
+  if (!isTauri) return () => undefined;
+  let active = true;
+  let draining = false;
+  let pending = false;
+  const drain = async () => {
+    pending = true;
+    if (draining) return;
+    draining = true;
+    try {
+      while (active && pending) {
+        pending = false;
+        const paths = await invoke<string[]>("take_eeprom_open_requests");
+        if (active) paths.forEach((path) => handler(path));
+      }
+    } finally {
+      draining = false;
+    }
+  };
+  const unlisten = await listen("eeprom-open-request", () => { void drain(); });
+  try {
+    await drain();
+  } catch (error) {
+    active = false;
+    unlisten();
+    throw error;
+  }
+  return () => { active = false; unlisten(); };
+}
 type Handler = (event: BridgeEvent) => void;
 type SnapshotHandler = (snapshot: WorkbenchStatus) => void;
 interface BridgeEnvelope<T> {
@@ -14,15 +50,34 @@ interface BridgeEnvelope<T> {
   snapshot: WorkbenchStatus;
 }
 
+function statusSnapshot(envelope: BridgeEnvelope<unknown>): WorkbenchStatus {
+  const snapshot = envelope?.snapshot;
+  const validClock = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  if (!snapshot || !validClock(snapshot.host_generation) || !validClock(snapshot.session_id)
+    || !validClock(snapshot.revision) || snapshot.host_generation !== envelope.host_generation
+    || snapshot.session_id !== envelope.session_id || !["real", "demo"].includes(snapshot.mode)
+    || typeof snapshot.phase !== "string" || typeof snapshot.connected !== "boolean"
+    || typeof snapshot.cycle_running !== "boolean" || !Array.isArray(snapshot.slaves)
+    || !(snapshot.adapter === null || typeof snapshot.adapter === "string")
+    || !(snapshot.last_error === null || typeof snapshot.last_error === "string")) {
+    throw { code: "PROTOCOL", message: "Status snapshot is incomplete or inconsistent with its envelope",
+      user_message: "暂时无法连接设备，请重新加载网卡或重启软件。",
+      method: "status", operation_result: "failed" };
+  }
+  return snapshot;
+}
+
 const snapshotHandlers = new Set<SnapshotHandler>();
 let latestSnapshot: WorkbenchStatus | undefined;
 
 function publishSnapshot(snapshot: WorkbenchStatus | undefined, sourceOperationId?: string) {
   if (!snapshot) return;
   if (!acceptsSnapshot(latestSnapshot, snapshot)) return;
-  latestSnapshot = snapshot;
   operationStore.setSnapshotClock(snapshot.host_generation, snapshot.session_id, sourceOperationId);
-  snapshotHandlers.forEach((handler) => handler(snapshot));
+  const next = reconcileBusSnapshot(latestSnapshot, snapshot);
+  if (next === latestSnapshot) return;
+  latestSnapshot = next;
+  snapshotHandlers.forEach((handler) => handler(next));
 }
 
 function publishHostFault(message: string, hostGeneration?: number) {
@@ -49,12 +104,29 @@ export function subscribeBusSnapshot(handler: SnapshotHandler): () => void {
   return () => snapshotHandlers.delete(handler);
 }
 
+const connectionErrorMessages: Record<string, string> = {
+  BRIDGE_STARTING: "正在准备连接，请稍候。",
+  BRIDGE_START_FAILED: "暂时无法连接设备，请重启软件后重试。",
+  BRIDGE_UNAVAILABLE: "暂时无法连接设备，请重启软件后重试。",
+  PROTOCOL: "暂时无法连接设备，请重新加载网卡或重启软件。",
+  PROCESS_EXITED: "设备连接已中断，请重新连接网卡或重启软件。",
+  TRANSPORT_WRITE: "设备连接已中断，请重新连接网卡或重启软件。",
+  HOST_TIMEOUT: "设备暂时没有响应，请检查网卡连接；如仍无法使用，请重启软件。",
+  WORKER_STALLED: "设备暂时没有响应，请检查网卡连接；如仍无法使用，请重启软件。",
+  WORKER_FATAL: "暂时无法连接设备，请重启软件后重试。",
+  GENERATION_CHANGED: "连接状态已变化，请重新连接网卡后再操作。",
+  GENERATION_SUPERSEDED: "连接状态已变化，请重新连接网卡后再操作。",
+};
+
 export class BridgeRequestError extends Error {
   readonly code: string;
   readonly failure: ReturnType<typeof normalizeBridgeFailure>;
 
   constructor(failure: ReturnType<typeof normalizeBridgeFailure>) {
-    super(failure.user_message ?? (failure.code === "CANCELLED" ? "操作已取消" : "操作未完成，请检查当前连接和操作条件。"));
+    const connectionMessage = connectionErrorMessages[failure.code];
+    super(connectionMessage
+      ? connectionMessage + (failure.operation_result === "unknown" ? " 写入结果尚未确认，请先读取设备确认结果，再继续操作。" : "")
+      : failure.user_message ?? (failure.code === "CANCELLED" ? "操作已取消" : "操作未完成，请检查当前连接和操作条件。"));
     this.name = "BridgeRequestError";
     this.code = failure.code;
     this.failure = failure;
@@ -114,11 +186,13 @@ export async function bridgeRequest<T>(method: string, params: Record<string, un
     const envelope = isTauri
       ? await invoke<BridgeEnvelope<T>>("bridge_request", { method, params, sessionId: operation.sessionId })
       : await browserBridgeRequest<T>(method, params, operation.sessionId);
+    // The host owns generation metadata; Python's raw status result has no host clock.
+    const result = method === "status" ? statusSnapshot(envelope) : envelope.result;
     publishSnapshot(envelope.snapshot, operation.id);
     const current = operationStore.get(operation.id);
     if (current?.phase !== "running") throw current?.error ?? new Error("操作上下文已失效");
     operationStore.transition(operation.id, "completed");
-    return envelope.result;
+    return result as T;
   } catch (error) {
     if (error && typeof error === "object" && "snapshot" in error) {
       publishSnapshot((error as { snapshot?: WorkbenchStatus }).snapshot, operation.id);
@@ -133,6 +207,7 @@ export async function bridgeRequest<T>(method: string, params: Record<string, un
 export async function onBridgeEvent(handler: Handler): Promise<UnlistenFn> {
   if (!isTauri) {
     const events = new EventSource("/api/events");
+    events.onopen = () => handler({ kind: "host_ready", data: {} });
     events.onmessage = (message) => {
       try {
         consumeBridgeEvent(handler, JSON.parse(message.data) as BridgeEvent);
@@ -142,16 +217,26 @@ export async function onBridgeEvent(handler: Handler): Promise<UnlistenFn> {
     };
     return () => events.close();
   }
-  const bridgeEvent = await listen<BridgeEvent>("bridge-event", (event) => {
-    consumeBridgeEvent(handler, event.payload);
-  });
-  const restarted = await listen<{ host_generation: number }>("bridge-restarted", (event) =>
-    handler({ kind: "host_ready", data: event.payload })
-  );
-  const restartFailed = await listen<{ host_generation: number; message: string }>("bridge-restart-failed", (event) =>
-    handler({ kind: "host_restart_failed", data: event.payload })
-  );
-  return () => { bridgeEvent(); restarted(); restartFailed(); };
+  let observedGeneration = 0;
+  const stops: UnlistenFn[] = [];
+  const publishHostState = (kind: "host_ready" | "host_restart_failed", data: { host_generation: number; message?: string }) => {
+    if (data.host_generation < observedGeneration) return;
+    observedGeneration = data.host_generation;
+    handler({ kind, host_generation: data.host_generation, data });
+  };
+  try {
+    stops.push(await listen<BridgeEvent>("bridge-event", (event) => consumeBridgeEvent(handler, event.payload)));
+    stops.push(await listen<{ host_generation: number }>("bridge-restarted", (event) => publishHostState("host_ready", event.payload)));
+    stops.push(await listen<{ host_generation: number; message: string }>("bridge-restart-failed", (event) => publishHostState("host_restart_failed", event.payload)));
+    // Read durable native state after subscribing, so an earlier ready event cannot be lost.
+    const state = await invoke<{ state: "starting" | "ready" | "failed" | "unavailable"; host_generation: number; message?: string }>("bridge_host_state");
+    if (state.state === "ready") publishHostState("host_ready", state);
+    else if (state.state !== "starting") publishHostState("host_restart_failed", state);
+    return () => stops.forEach(stop => stop());
+  } catch (error) {
+    stops.forEach(stop => stop());
+    throw error;
+  }
 }
 
 export async function onBridgeExited(handler: (info: BridgeExitInfo) => void): Promise<UnlistenFn> {
@@ -165,8 +250,13 @@ export async function onBridgeExited(handler: (info: BridgeExitInfo) => void): P
     handler(info);
   };
   const exited = await listen<BridgeExitInfo | string>("bridge-exited", (event) => receive(event.payload));
-  const stalled = await listen<{ message: string }>("bridge-stalled", (event) => receive({ ...event.payload, reason: "heartbeat_timeout" }));
-  return () => { exited(); stalled(); };
+  try {
+    const stalled = await listen<{ message: string }>("bridge-stalled", (event) => receive({ ...event.payload, reason: "heartbeat_timeout" }));
+    return () => { exited(); stalled(); };
+  } catch (error) {
+    exited();
+    throw error;
+  }
 }
 
 // Expose native drag presence without publishing high-frequency pointer movement.

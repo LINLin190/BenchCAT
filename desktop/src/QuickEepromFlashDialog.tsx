@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, IconButton, InputAdornment, LinearProgress, List, ListItemButton, ListItemText, Stack, Tab, Tabs,
@@ -68,9 +68,17 @@ export interface EepromDetailSelection {
   configData: string;
 }
 
+export interface EepromLaunchSource {
+  path: string;
+}
+
 interface Props {
   open: boolean;
   slave?: SlaveInfo;
+  onSelectSlave: (position: number) => void;
+  initialSource?: EepromLaunchSource;
+  onInitialSourceConsumed: () => void;
+  onBusyChange: (busy: boolean) => void;
   status: WorkbenchStatus;
   progress?: EepromProgressState;
   autoResetEsc: boolean;
@@ -112,7 +120,7 @@ function ConfigSummary({ title, configData, subtle = false, placeholder = "等�
   </Box>;
 }
 
-export function QuickEepromFlashDialog({ open, slave, status, progress, autoResetEsc, setProgress, onClose, onOpenDetails }: Props) {
+export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSource, onInitialSourceConsumed, onBusyChange, status, progress, autoResetEsc, setProgress, onClose, onOpenDetails }: Props) {
   const [tab, setTab] = useState<0 | 1>(() => loadQuickFlashTab());
   const [query, setQuery] = useState("");
   const [visibleCount, setVisibleCount] = useState(50);
@@ -132,19 +140,24 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   const [configSaving, setConfigSaving] = useState(false);
   const [generationError, setGenerationError] = useState("");
   const [result, setResult] = useState<{ severity: "success" | "warning" | "error" | "info"; text: string }>();
+  const [sourcePath, setSourcePath] = useState(() => initialSource?.path ?? "");
+  const sourceRequestRef = useRef<{ path: string; ordinal?: number; configData?: string } | undefined>(undefined);
   const requestRef = useRef(0);
   const loadRequestRef = useRef(0);
   const generatedConfigRef = useRef("");
   const openedContextRef = useRef("");
+  const libraryRequestRef = useRef(0);
   const targetContextRef = useRef("");
   const currentDevice = esi?.devices[ordinal];
   const flashTarget = bin ?? target;
   const parsedConfig = normalizeConfigData(configData);
   const targetDecoded = decodeConfigData(configData);
   const operationInProgress = Boolean(progress?.operation?.startsWith("eeprom") && progress.percent < 100);
+  useEffect(() => onBusyChange(operationInProgress || configSaving), [operationInProgress, configSaving, onBusyChange]);
   const contextKey = `${status.host_generation}:${status.session_id}:${slaveKey(slave)}`;
   const contextRef = useRef(contextKey);
   contextRef.current = contextKey;
+  if (esi && !loading) sourceRequestRef.current = { path: esi.path, ordinal: ordinal >= 0 ? ordinal : undefined, configData };
 
   // Discard generated targets when the source or selected slave changes.
   const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig: string) => {
@@ -171,6 +184,8 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
 
   // XML keeps its Device selection and temporary ConfigData override.
   const loadXml = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
+    sourceRequestRef.current = { path, ordinal: preferredOrdinal, configData: overrideConfig };
+    setSourcePath(path);
     const loadId = ++loadRequestRef.current;
     const context = contextKey;
     requestRef.current += 1;
@@ -194,6 +209,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
         ? preferredOrdinal : matches.length === 1 ? matches[0] : document.devices.length === 1 ? 0 : -1;
       const original = deviceConfigData(document.devices[selectedOrdinal]);
       const effective = normalizeConfigData(overrideConfig ?? original).formatted ?? original;
+      sourceRequestRef.current = { path: document.path, ordinal: selectedOrdinal >= 0 ? selectedOrdinal : undefined, configData: effective };
       setEsi(document);
       setOrdinal(selectedOrdinal);
       setOriginalConfigData(original);
@@ -209,6 +225,8 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
   // BIN selection freezes the original bytes in the same target store as XML.
   const loadFile = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
     if (!isBinFile(path)) return loadXml(path, preferredOrdinal, overrideConfig);
+    sourceRequestRef.current = { path };
+    setSourcePath(path);
     const loadId = ++loadRequestRef.current;
     const context = contextKey;
     requestRef.current += 1;
@@ -243,20 +261,20 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
       setConfigData(originalConfigData);
       return;
     }
-    if (!slave || openedContextRef.current === contextKey) return;
+    if (openedContextRef.current === contextKey) return;
+    const previousContext = openedContextRef.current;
+    const firstOpen = !previousContext;
+    const clockChanged = previousContext.split(":").slice(0, 2).join(":") !== contextKey.split(":").slice(0, 2).join(":");
     openedContextRef.current = contextKey;
     // Reload shared favorites when opening after a main-page source-list edit.
-    setFixedState(loadFixedEsiState());
-    setHistory(loadFlashHistory());
+    if (firstOpen) {
+      setFixedState(loadFixedEsiState());
+      setHistory(loadFlashHistory());
+    }
     setResult(undefined);
     setHeader(undefined);
     setHeaderError("");
-    void bridgeRequest<LibraryResult>("esi_library_list").then(value => {
-      if (openedContextRef.current === contextKey) setLibrary(value);
-    }).catch(() => {
-      if (openedContextRef.current === contextKey) setLibrary({ directory: "", entries: [], errors: [{ path: "", error: "无法读取 XML/BIN 文件列表" }] });
-    });
-    void bridgeRequest<EepromHeader>("eeprom_header", { position: slave.position })
+    if (slave) void bridgeRequest<EepromHeader>("eeprom_header", { position: slave.position })
       .then((value) => { if (openedContextRef.current === contextKey) setHeader(value); })
       .catch((error) => { if (openedContextRef.current === contextKey) setHeaderError(error instanceof BridgeRequestError ? error.message : "无法读取设备当前配置"); });
     requestRef.current += 1;
@@ -264,14 +282,46 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     setLoading(false);
     setConfigSaving(false);
     generatedConfigRef.current = "";
-    setEsi(undefined);
-    setBin(undefined);
-    setOrdinal(-1);
     setTarget(undefined);
-    setConfigData("");
-    setOriginalConfigData("");
     setGenerationError("");
-  }, [contextKey, open, slave]);
+    if (firstOpen) {
+      sourceRequestRef.current = undefined;
+      setSourcePath(initialSource?.path ?? "");
+      setEsi(undefined);
+      setBin(undefined);
+      setOrdinal(-1);
+      setConfigData("");
+      setOriginalConfigData("");
+    } else if (status.host_generation > 0 && sourceRequestRef.current && (clockChanged || bin || loading)) {
+      const source = sourceRequestRef.current;
+      void loadFile(source.path, source.ordinal, source.configData);
+    }
+    // A slave switch keeps the XML draft; generation binds a fresh target to that slave.
+  }, [contextKey, open, slave, status.host_generation, initialSource, bin, loading, loadFile]);
+
+  const loadLibrary = useCallback(async (refresh = false) => {
+    const request = ++libraryRequestRef.current;
+    try {
+      const value = await bridgeRequest<LibraryResult>("esi_library_list", { refresh });
+      if (libraryRequestRef.current === request) setLibrary(value);
+    } catch (error) {
+      if (libraryRequestRef.current !== request) return;
+      if (refresh) setResult({ severity: "error", text: error instanceof BridgeRequestError ? error.message : "无法刷新文件列表" });
+      else setLibrary({ directory: "", entries: [], errors: [{ path: "", error: "无法读取 XML/BIN 文件列表" }] });
+    }
+  }, []);
+
+  // Library metadata belongs to the dialog, independently of the selected slave.
+  useEffect(() => {
+    if (open && status.host_generation > 0) void loadLibrary();
+    return () => { libraryRequestRef.current += 1; };
+  }, [open, status.host_generation, loadLibrary]);
+
+  useEffect(() => {
+    if (!open || !initialSource || status.host_generation === 0 || operationInProgress || configSaving) return;
+    void loadFile(initialSource.path);
+    onInitialSourceConsumed();
+  }, [open, initialSource, status.host_generation, operationInProgress, configSaving, loadFile, onInitialSourceConsumed]);
 
   useEffect(() => {
     if (!open || configSaving || !esi || ordinal < 0 || !parsedConfig.formatted || parsedConfig.formatted === generatedConfigRef.current) return;
@@ -325,18 +375,15 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     return () => { cancelled = true; dispose?.(); };
   }, [loadFile, open, operationInProgress, configSaving]);
 
-  const filteredHistory = useMemo(() => history.filter((item) => {
-    const haystack = `${item.path} ${item.deviceName} ${item.productCode.toString(16)} ${item.effectiveConfigData}`.toLowerCase();
-    return haystack.includes(query.trim().toLowerCase());
-  }), [history, query]);
+  const search = useDeferredValue(query).trim().toLowerCase();
+  const historySearch = useMemo(() => history.map(item => ({ item, text: `${item.path} ${item.deviceName} ${item.productCode.toString(16)} ${item.effectiveConfigData}`.toLowerCase() })), [history]);
+  const filteredHistory = useMemo(() => historySearch.filter(entry => entry.text.includes(search)).map(entry => entry.item), [historySearch, search]);
   const fixedEntries = useMemo(() => fixedEsiEntries(fixedState, library.entries), [fixedState, library.entries]);
-  const filteredLibrary = useMemo(() => fixedEntries.filter((item) => {
-    const haystack = `${item.path} ${item.type_name} ${item.device_name} ${item.product_code.toString(16)} ${item.config_data}`.toLowerCase();
-    return haystack.includes(query.trim().toLowerCase());
-  }), [fixedEntries, query]);
+  const librarySearch = useMemo(() => fixedEntries.map(item => ({ item, text: `${item.path} ${item.type_name} ${item.device_name} ${item.product_code.toString(16)} ${item.config_data}`.toLowerCase() })), [fixedEntries]);
+  const filteredLibrary = useMemo(() => librarySearch.filter(entry => entry.text.includes(search)).map(entry => entry.item), [librarySearch, search]);
   const fixedIndex = useMemo(() => eepromSourceIndex(fixedEntries), [fixedEntries]);
   const displayedIndex = useMemo(() => eepromSourceIndex<{ path: string }>(tab === 0 ? filteredHistory : filteredLibrary), [tab, filteredHistory, filteredLibrary]);
-  useEffect(() => { setVisibleCount(50); }, [query, tab, fixedEntries, history, open]);
+  useEffect(() => { setVisibleCount(50); }, [search, tab, fixedEntries, history, open]);
 
   const blocker = operationInProgress ? "EEPROM 操作正在执行"
     : configSaving ? "正在修改 XML 文件"
@@ -480,13 +527,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
 
   // A manual refresh bypasses cached metadata, including malformed-file results.
   const refreshLibrary = async () => {
-    const context = contextKey;
-    try {
-      const value = await bridgeRequest<LibraryResult>("esi_library_list", { refresh: true });
-      if (openedContextRef.current === context) setLibrary(value);
-    } catch (error) {
-      if (openedContextRef.current === context) setResult({ severity: "error", text: error instanceof BridgeRequestError ? error.message : "无法刷新文件列表" });
-    }
+    await loadLibrary(true);
   };
 
   const handleClose = (_event?: object, reason?: "backdropClick" | "escapeKeyDown") => {
@@ -496,7 +537,7 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
     onClose();
   };
 
-  return <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg" disableEscapeKeyDown={operationInProgress || configSaving}
+  return <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg" transitionDuration={0} disableEscapeKeyDown={operationInProgress || configSaving}
     PaperProps={{ sx: { width: "calc(100% - 96px)", maxWidth: 1080, height: { xs: "calc(100vh - 56px)", xl: 730 }, maxHeight: "calc(100vh - 56px)", borderRadius: 2, overflow: "hidden", outline: dragOver ? "2px solid #9aaedb" : undefined } }}>
     <DialogTitle sx={{ py: 1.35, px: 2 }}>
       <Box><Typography variant="h6" fontWeight={780} fontSize={18}>快速烧录 EEPROM</Typography><Typography variant="body2" fontSize={12.5} color="text.secondary">{slave ? `从站 ${slave.position} · ${slaveDisplayName(slave)} · ${slave.chip_model}` : "未选择从站"}</Typography></Box>
@@ -533,17 +574,21 @@ export function QuickEepromFlashDialog({ open, slave, status, progress, autoRese
             <Box sx={{ display: "grid", gridTemplateColumns: "minmax(0, 0.9fr) minmax(0, 1.1fr)", gap: 1.25 }}>
               <Box sx={{ p: 1.35, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "background.paper", minWidth: 0 }}>
                 <Typography variant="overline" color="text.secondary" sx={{ fontSize: 11, lineHeight: 1.55 }}>当前 Device</Typography>
+                <TextField select fullWidth size="small" value={slave?.position ?? ""} disabled={operationInProgress || configSaving || status.slaves.length === 0} onChange={(event) => onSelectSlave(Number(event.target.value))} SelectProps={{ displayEmpty: true }} inputProps={{ "aria-label": "选择烧录从站" }} sx={{ mt: 0.45, mb: 0.75, "& .MuiSelect-select": { fontSize: 13 } }}>
+                  {status.slaves.length === 0 && <MenuItem value="">未发现从站</MenuItem>}
+                  {status.slaves.map((item) => <MenuItem key={item.position} value={item.position}>从站 {item.position} · {slaveDisplayName(item)}</MenuItem>)}
+                </TextField>
                 <Typography fontWeight={780} fontSize={14} noWrap title={slaveDisplayName(slave)}>Device：{slaveDisplayName(slave)}</Typography>
                 <Typography variant="body2" fontSize={13} color="text.secondary" noWrap>{slave ? `从站 ${slave.position} · ${slave.chip_model}` : "未选择从站"}</Typography>
               </Box>
-              <ConfigSummary title="实际 EEPROM ConfigData" configData={header?.config_data ?? ""} placeholder={headerError ? "读取失败" : "读取中…"} subtle />
+              <ConfigSummary title="实际 EEPROM ConfigData" configData={header?.config_data ?? ""} placeholder={!slave ? "等待从站连接…" : headerError ? "读取失败" : "读取中…"} subtle />
             </Box>
             {headerError ? <Alert severity="warning" sx={{ mt: 1 }}>暂时无法读取设备当前配置，仍可尝试烧录。</Alert>
               : header?.sii_status === "blank" ? <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>EEPROM 未烧录，可直接烧录。</Typography>
                 : header?.sii_error && <Alert severity="warning" sx={{ mt: 1 }}>设备信息未能完整读取或解析，仍可尝试烧录。</Alert>}
           </Box>
           {generationError && <Alert severity="error" sx={{ mb: 1.5 }}>{generationError}</Alert>}
-          {!esi && !bin ? <Box sx={{ minHeight: 280, display: "grid", placeItems: "center", textAlign: "center", color: "text.secondary" }}><Stack alignItems="center" spacing={1}><MemoryRounded sx={{ fontSize: 48, opacity: 0.24 }} /><Typography fontWeight={750}>选择文件，或将 XML/BIN 拖入此窗口</Typography><Typography variant="body2">XML 可临时修改 ConfigData；BIN 按原始内容写入</Typography>{loading && <CircularProgress size={22} />}</Stack></Box> : bin ? <Stack spacing={1.75}>
+          {!esi && !bin ? <Box sx={{ minHeight: 280, display: "grid", placeItems: "center", textAlign: "center", color: "text.secondary" }}><Stack alignItems="center" spacing={1}><MemoryRounded sx={{ fontSize: 48, opacity: 0.24 }} /><Typography fontWeight={750}>{sourcePath ? fileName(sourcePath) : "选择文件，或将 XML/BIN 拖入此窗口"}</Typography><Typography variant="body2">{!slave ? "请连接从站并扫描，默认选择从站 1" : sourcePath && loading ? "正在加载烧录文件…" : "XML 可临时修改 ConfigData；BIN 按原始内容写入"}</Typography>{(loading || initialSource) && <CircularProgress size={22} />}</Stack></Box> : bin ? <Stack spacing={1.75}>
             <Box sx={{ p: 1.75, border: 1, borderColor: "divider", borderRadius: 1.5, bgcolor: "#FAFBFD" }}>
               <Typography fontWeight={780} fontSize={15}>选中 BIN · 待烧录目标</Typography>
               <Typography fontWeight={750} sx={{ mt: 1 }}>{fileName(bin.path)}</Typography>

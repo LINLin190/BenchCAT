@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
+import {
   Alert,
   AppBar,
   Box,
@@ -30,7 +39,6 @@ import {
   Select,
   Snackbar,
   Stack,
-  Switch,
   Tab,
   Table,
   TableBody,
@@ -45,46 +53,46 @@ import {
   Typography,
 } from "@mui/material";
 import {
-  BugReportRounded,
-  MenuRounded,
-  ChevronLeftRounded,
   CloseRounded,
   DashboardRounded,
   DeveloperBoardRounded,
-  FolderOpenRounded,
   GitHub as GitHubIcon,
-  InfoOutlineRounded,
   MemoryRounded,
-  OpenInNewRounded,
   PlayArrowRounded,
   RefreshRounded,
-  SaveAltRounded,
   SettingsRounded,
   StopRounded,
   TuneRounded,
   UsbRounded,
   WarningAmberRounded,
-  ExpandMoreRounded,
-  EditRounded,
 } from "@mui/icons-material";
 import packageInfo from "../package.json";
-import { RegistersPage } from "./RegistersPage";
 import { OverviewEeprom } from "./OverviewEeprom";
-import { EepromDataView } from "./EepromDataView";
-import { EepromSources } from "./EepromSources";
-import type { ImageSnapshot } from "./eepromViewModel";
+import type { EepromReadResult } from "./EepromPage";
+import { EmptyState, PageTitle, slaveDisplayName, slaveIdentityKey } from "./pageShared";
 import { CardHeading } from "./OverviewDisclosure";
 import { EscHardwareCard } from "./EscHardwareCard";
 import { alStatusInfo, type AlStatusLanguage } from "./alStatus";
-import { BridgeRequestError, bridgeRequest, onBridgeEvent, onBridgeExited, onFileDrop, openExternal, pickDirectory, pickFile, previewMode, revealPath, subscribeBusSnapshot, type AdapterInfo } from "./api";
+import {
+  BridgeRequestError,
+  bridgeRequest,
+  onBridgeEvent,
+  onBridgeExited,
+  onEepromOpenRequest,
+  initialEepromPath,
+  openExternal,
+  previewMode,
+  subscribeBusSnapshot,
+  type AdapterInfo,
+} from "./api";
 import { minimumBusState } from "./busState";
 import { operationStore } from "./operationStore";
-import { decodeConfigData, isBinFile, loadEepromAutoReset, loadRecentEsi, normalizeConfigData, sameEepromSource, saveEepromAutoReset, writeRecentEsi, type EepromBinTarget, type FixedEsiEntry } from "./eepromConfig";
-import { QuickEepromFlashDialog, type EepromDetailSelection, type EepromProgressState } from "./QuickEepromFlashDialog";
+import { createBridgeStartup } from "./bridgeStartup";
+import { loadEepromAutoReset, saveEepromAutoReset } from "./eepromConfig";
+import { QuickEepromFlashDialog, type EepromDetailSelection, type EepromProgressState, type EepromLaunchSource } from "./QuickEepromFlashDialog";
 import type {
   BridgeEvent,
   BridgeExitInfo,
-  EsiDevice,
   OperationProgress,
   PdoEntry,
   SlaveInfo,
@@ -94,8 +102,11 @@ import type {
 import { hex, stateLabel } from "./types";
 import { checkForUpdate, type AvailableUpdate } from "./updater";
 
+const RegistersPage = lazy(() => import("./RegistersPage").then(module => ({ default: module.RegistersPage })));
+const EepromPage = lazy(() => import("./EepromPage").then(module => ({ default: module.EepromPage })));
+const SettingsDialog = lazy(() => import("./SettingsDialog").then(module => ({ default: module.SettingsDialog })));
+
 const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
-const brandIconUrl = new URL("./assets/BenchCAT.png", import.meta.url).href;
 
 type PageKey = "overview" | "registers" | "eeprom";
 type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
@@ -105,7 +116,6 @@ const AUTO_UPDATE_KEY = "benchcat.auto-check-updates";
 const IGNORED_UPDATE_KEY = "benchcat.ignored-update-version";
 const PROJECT_URL = "https://github.com/LINLin190/BenchCAT";
 const DOWNLOAD_URL = `${PROJECT_URL}/releases/latest`;
-const ISSUES_URL = `${PROJECT_URL}/issues`;
 
 function orderAdapters(items: AdapterInfo[]): AdapterInfo[] {
   const virtual = /\b(wan miniport|wi-?fi|wireless|loopback|vmware|virtual|wintun|tunnel)\b/i;
@@ -132,20 +142,6 @@ const cardSx = { borderRadius: 1.25, minWidth: 0 };
 const registerProfiles = ["ET1100", "LAN9252", "LAN9253"];
 const controllableStates = [1, 2, 4, 8];
 
-function slaveIdentityKey(slave?: SlaveInfo): string {
-  if (!slave) return "none";
-  const identity = slave.identity;
-  return [slave.position, identity.vendor_id, identity.product_code, identity.revision, identity.serial_number, slave.configured_address ?? ""].join(":");
-}
-
-function slaveDisplayName(slave: SlaveInfo): string {
-  return slave.product_model || slave.name;
-}
-
-function esiDeviceDisplayName(device: EsiDevice): string {
-  return device.type_name || device.name;
-}
-
 function isEepromOperation(operation?: string): boolean {
   return Boolean(operation?.startsWith("eeprom"));
 }
@@ -162,31 +158,6 @@ function defaultRegisterProfile(chipModel: string | undefined): string {
 
 function escModelLabel(chipModel: string | undefined, profile: string): string {
   return chipModel === "E252" && profile === "LAN9252" ? "E252" : profile;
-}
-
-function PageTitle({ title, subtitle, actions }: { title: string; subtitle: string; actions?: ReactNode }) {
-  return (
-    <Stack direction="row" alignItems="center" justifyContent="space-between" gap={2} sx={{ mb: 1.25 }}>
-      <Box>
-        <Typography variant="h5" fontWeight={750}>{title}</Typography>
-        {subtitle && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.2 }}>{subtitle}</Typography>}
-      </Box>
-      {actions && <Stack direction="row" gap={1}>{actions}</Stack>}
-    </Stack>
-  );
-}
-
-function EmptyState({ text }: { text: string }) {
-  return (
-    <Card sx={cardSx}>
-      <CardContent sx={{ minHeight: 156, display: "grid", placeItems: "center", textAlign: "center" }}>
-        <Stack alignItems="center" spacing={0.8} color="text.secondary">
-          <DeveloperBoardRounded sx={{ fontSize: 36, opacity: 0.45 }} />
-          <Typography>{text}</Typography>
-        </Stack>
-      </CardContent>
-    </Card>
-  );
 }
 
 function StateChip({ state, error = false }: { state: number; error?: boolean }) {
@@ -337,7 +308,7 @@ function StateSelector({ state, disabled, onRequest, label, className = "" }: {
   </Box>;
 }
 
-function OverviewPage({ slave, status, busy, stateRequestBusy, run, refresh, registerProfile, onRegisterProfileChange, alLanguage }: { slave?: SlaveInfo; status: WorkbenchStatus; busy: boolean; stateRequestBusy: boolean; run: Run; refresh: () => Promise<void>; registerProfile: string; onRegisterProfileChange: (profile: string) => void; alLanguage: AlStatusLanguage }) {
+const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequestBusy, run, refresh, registerProfile, onRegisterProfileChange, alLanguage }: { slave?: SlaveInfo; status: WorkbenchStatus; busy: boolean; stateRequestBusy: boolean; run: Run; refresh: () => Promise<void>; registerProfile: string; onRegisterProfileChange: (profile: string) => void; alLanguage: AlStatusLanguage }) {
   const [switchingProfile, setSwitchingProfile] = useState<string>();
   const requestState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: slave?.position ?? 0, state }),
@@ -425,7 +396,7 @@ function OverviewPage({ slave, status, busy, stateRequestBusy, run, refresh, reg
       )}
     </>
   );
-}
+});
 
 function CoePage({ slave, run }: { slave?: SlaveInfo; run: Run }) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
@@ -484,425 +455,23 @@ function IoPage({ slave, status, snapshot, run, refresh }: { slave?: SlaveInfo; 
     </Box>}</>;
 }
 
-interface EsiResult { document_id: string; path: string; sha256: string; vendor_id: number; vendor_name: string; devices: EsiDevice[] }
-interface TargetResult { target_id: string; size: number; sha256: string; supported: string[]; omitted: string[]; device: EsiDevice; original_config_data?: string; effective_config_data?: string }
-type ProgressState = EepromProgressState;
-interface EepromComparisonResult { equal: boolean; differing_bytes: number; first_difference?: number | null; target_sha256: string; readback_sha256: string }
-interface EepromReadResult extends ImageSnapshot { data: string; size: number; sha256: string; read_at: string; sii_valid: boolean; sii_error?: string; identity?: { vendor_id: number; product_code: number; revision: number; serial_number: number }; category_count?: number; categories?: number[]; end_offset?: number; comparison?: EepromComparisonResult }
-interface EepromFlashDetails { bytes_read_back: number; words_written: number; comparison: EepromComparisonResult; sii_valid: boolean; semantic_valid: boolean | null; image_verification: string; reset_sequence?: boolean[] | null; rediscovered?: boolean | null; reload_verified?: boolean | null; reload_error?: string | null }
-interface EepromFlashPayload { success: boolean; result: EepromFlashDetails; slaves: SlaveInfo[] }
-interface EepromOperationResult { title: string; severity: "success" | "warning" | "error" | "info"; payload?: EepromFlashPayload; error?: string }
-
-function deviceRevision(device: EsiDevice): number {
-  return Number(device.revision ?? device.revision_number ?? 0);
-}
-
-function deviceConfigData(device?: EsiDevice): string {
-  const value = typeof device?.config_data === "string" ? device.config_data : "";
-  return normalizeConfigData(value).formatted ?? "";
-}
-
-/** Align current and target facts, and mark only known differing configuration bytes. */
-function EepromSummaryColumn({ title, tag, rows, config, compareConfig, placeholder, configInput, configAction, emptyState }: {
-  title: string; tag?: string; rows: { label: string; value: ReactNode }[];
-  config: string; compareConfig?: string; placeholder: string;
-  configInput?: ReactNode; configAction?: ReactNode; emptyState?: ReactNode;
-}) {
-  const parsed = normalizeConfigData(config);
-  const comparison = normalizeConfigData(compareConfig ?? "");
-  const decoded = decodeConfigData(config);
-  return <Card className="eeprom-summary" variant="outlined">
-    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.75, py: 1.25, bgcolor: "#F8F9FC", borderBottom: 1, borderColor: "divider" }}>
-      <Typography fontWeight={750}>{title}</Typography>{tag && <Chip size="small" label={tag} variant="outlined" />}
-    </Stack>
-    {/* An unloaded target replaces all placeholder facts and configuration bytes. */}
-    {emptyState ?? <><Box sx={{ px: 1.75, py: 0.5 }}>{rows.map((row) => <Box key={row.label} className="eeprom-summary-row"><Typography variant="caption" color="text.secondary">{row.label}</Typography><Box className="eeprom-summary-value">{row.value}</Box></Box>)}</Box>
-    <Box className="eeprom-config-summary">
-      <Typography variant="caption" color="text.secondary" fontWeight={550}>ConfigData · 前 14 字节</Typography>
-      <Stack direction="row" gap={1} alignItems="flex-start" className="eeprom-config-row" sx={{ mt: 0.5 }}>
-        <Box sx={{ flex: 1, minWidth: 0 }}>{configInput ?? <Box className="mono eeprom-config-bytes">{parsed.bytes ? parsed.bytes.map((byte, index) => <span key={index} className={comparison.bytes?.[index] !== undefined && comparison.bytes[index] !== byte ? "eeprom-byte-changed" : undefined}>{byte.toString(16).toUpperCase().padStart(2, "0")}</span>) : <Typography variant="body2" color="text.secondary">{placeholder}</Typography>}</Box>}</Box>
-        {configAction}
-      </Stack>
-      <Typography variant="caption" color="text.secondary" fontWeight={550} sx={{ display: "block", mt: 0.5, minHeight: 20 }}>{decoded ? `PDI ${hex(decoded.pdiCode, 2)} · ${decoded.pdiLabel}` : "PDI —"}</Typography>
-    </Box></>}
-  </Card>;
-}
-
-interface EepromPageProps {
-  slave?: SlaveInfo;
-  status: WorkbenchStatus;
-  progress?: ProgressState;
-  setProgress: (value?: ProgressState) => void;
-  run: Run;
-  readResult?: EepromReadResult;
-  setReadResult: (value?: EepromReadResult) => void;
-  initialSelection?: EepromDetailSelection;
-  onInitialSelectionConsumed: () => void;
-  autoResetEsc: boolean;
-  onAutoResetChange: (value: boolean) => void;
-  fileDropEnabled: boolean;
-  deviceOperationsBlocked: boolean;
-}
-
-// ConfigData drafts are written to the selected XML only after an explicit save.
-function EepromPage({ slave, status, progress, setProgress, run, readResult, setReadResult, initialSelection, onInitialSelectionConsumed, autoResetEsc, onAutoResetChange, fileDropEnabled, deviceOperationsBlocked }: EepromPageProps) {
-  const [esi, setEsi] = useState<EsiResult>();
-  const [bin, setBin] = useState<EepromBinTarget>();
-  const [ordinal, setOrdinal] = useState(-1);
-  const [target, setTarget] = useState<TargetResult>();
-  const flashTarget = bin ?? target;
-  const [generationError, setGenerationError] = useState("");
-  const [backupPath, setBackupPath] = useState("");
-  const [readLength, setReadLength] = useState("");
-  const [readRange, setReadRange] = useState<"device" | "target" | "custom">();
-  const [configEditing, setConfigEditing] = useState(false);
-  const [configSaving, setConfigSaving] = useState(false);
-  const [configSaveError, setConfigSaveError] = useState("");
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [dragOver, setDragOver] = useState(false);
-  const [configurationChanged, setConfigurationChanged] = useState(false);
-  // Resolve one explicit range for both reading and exporting; never silently fall back.
-  const effectiveRange = readRange ?? (slave?.eeprom_capacity != null ? "device" : flashTarget ? "target" : "custom");
-  const capacity = effectiveRange === "device" ? slave?.eeprom_capacity ?? undefined
-    : effectiveRange === "target" ? flashTarget && flashTarget.size + flashTarget.size % 2
-    : readLength.trim() ? Number(readLength) : undefined;
-  const invalidReadLength = capacity !== undefined && (!Number.isInteger(capacity) || capacity < 2 || capacity > 131072 || capacity % 2 !== 0);
-  const readLengthRequired = capacity === undefined;
-  const readLengthHint = invalidReadLength ? "请输入 2–131072 范围的偶数"
-    : readLengthRequired ? effectiveRange === "device" ? "设备声明容量未知，请选择其他范围" : effectiveRange === "target" ? "请先选择 XML/BIN 目标" : "请填写读取长度" : "";
-  const fullSiiRead = readResult?.size === slave?.eeprom_capacity;
-  const [recentEsi, setRecentEsi] = useState(loadRecentEsi);
-  // Refresh records changed by quick programming when its dialog closes.
-  useEffect(() => { if (fileDropEnabled) setRecentEsi(loadRecentEsi()); }, [fileDropEnabled]);
-  const [configData, setConfigData] = useState("");
-  const [operationResult, setOperationResult] = useState<EepromOperationResult>();
-  const generationRequestRef = useRef(0);
-  const loadRequestRef = useRef(0);
-  const generatedConfigRef = useRef("");
-  const targetContextRef = useRef("");
-  const contextKey = `${status.host_generation}:${status.session_id}:${slaveIdentityKey(slave)}`;
-  const contextRef = useRef(contextKey);
-  contextRef.current = contextKey;
-  const currentDevice = esi?.devices[ordinal];
-  const configDataResult = normalizeConfigData(configData);
-  const operationInProgress = isEepromOperation(progress?.operation) && progress!.percent < 100;
-  const canFlash = Boolean(slave && flashTarget && !configEditing && !configSaving && (!esi || !configDataResult.error) && !generationError && targetContextRef.current === contextKey && !status.cycle_running && !operationInProgress && !deviceOperationsBlocked);
-  const blockers = [deviceOperationsBlocked && "软件正在更新", operationInProgress && "已有 EEPROM 操作正在执行", status.cycle_running && "需要停止周期通信", configEditing && "请先保存 ConfigData 到 XML", configSaving && "正在保存 XML", !slave && "请选择从站", esi && ordinal < 0 && "请选择 XML Device", esi && ordinal >= 0 && configDataResult.error, generationError, !flashTarget && "需要准备 XML/BIN 目标", flashTarget && targetContextRef.current !== contextKey && "目标从站或连接已变化"].filter(Boolean) as string[];
-  useEffect(() => {
-    generationRequestRef.current += 1;
-    loadRequestRef.current += 1;
-    generatedConfigRef.current = "";
-    setEsi(undefined); setBin(undefined); setOrdinal(-1); setTarget(undefined); setConfigData("");
-    setGenerationError(""); setOperationResult(undefined); setBackupPath(""); setReadLength("");
-    setReadRange(undefined); setConfigEditing(false); setConfigSaving(false); setConfigSaveError(""); setDetailsOpen(false); setConfigurationChanged(false);
-  }, [contextKey]);
-
-  // Generate a new XML target whenever its selected Device or ConfigData changes.
-  const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig?: string) => {
-    const requestId = ++generationRequestRef.current;
-    const context = contextKey;
-    const normalized = normalizeConfigData(effectiveConfig ?? deviceConfigData(document.devices[selectedOrdinal])).formatted;
-    generatedConfigRef.current = normalized ?? "";
-    setTarget(undefined); setOperationResult(undefined); setGenerationError("");
-    const value = await run(async () => {
-      try { return await bridgeRequest<TargetResult>("sii_generate", { document_id: document.document_id, ordinal: selectedOrdinal, position: slave?.position, ...(normalized ? { config_data: normalized } : {}) }); }
-      catch (error) {
-        if (generationRequestRef.current === requestId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法生成烧录目标，请检查所选 XML。");
-        throw error;
-      }
-    });
-    if (value && generationRequestRef.current === requestId && contextRef.current === context) {
-      targetContextRef.current = context;
-      setTarget(value);
-    }
-  }, [contextKey, run, slave?.position]);
-
-  const loadXml = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
-    const loadId = ++loadRequestRef.current;
-    const context = contextKey;
-    generationRequestRef.current += 1;
-    generatedConfigRef.current = "";
-    setTarget(undefined); setEsi(undefined); setBin(undefined); setGenerationError("");
-    setConfigEditing(false); setConfigSaveError(""); setOperationResult(undefined);
-    const document = await run(() => bridgeRequest<EsiResult>("esi_load", { path }));
-    if (document && loadRequestRef.current === loadId && contextRef.current === context) {
-      setRecentEsi(writeRecentEsi([document.path, ...loadRecentEsi()]));
-      const matches = slave && slave.identity_valid !== false ? document.devices.map((device, index) =>
-        document.vendor_id === slave.identity.vendor_id && device.product_code === slave.identity.product_code && deviceRevision(device) === slave.identity.revision ? index : -1,
-      ).filter((index) => index >= 0) : [];
-      const selectedOrdinal = preferredOrdinal !== undefined && document.devices[preferredOrdinal] ? preferredOrdinal : matches.length === 1 ? matches[0] : document.devices.length === 1 ? 0 : -1;
-      const original = deviceConfigData(document.devices[selectedOrdinal]);
-      const effective = normalizeConfigData(overrideConfig ?? original).formatted ?? original;
-      setEsi(document); setOrdinal(selectedOrdinal); setConfigData(effective);
-      if (selectedOrdinal >= 0) await generate(document, selectedOrdinal, effective);
-    }
-  }, [contextKey, generate, run, slaveIdentityKey(slave)]);
-  // Load BIN bytes into a frozen target; XML follows the existing Device workflow.
-  const loadFile = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
-    if (!isBinFile(path)) return loadXml(path, preferredOrdinal, overrideConfig);
-    const loadId = ++loadRequestRef.current;
-    const context = contextKey;
-    generationRequestRef.current += 1;
-    generatedConfigRef.current = "";
-    setEsi(undefined); setBin(undefined); setTarget(undefined); setOrdinal(-1);
-    setConfigData(""); setGenerationError(""); setOperationResult(undefined);
-    setConfigEditing(false); setConfigSaveError("");
-    const value = await run(async () => {
-      try { return await bridgeRequest<EepromBinTarget>("eeprom_bin_load", { path, position: slave?.position }); }
-      catch (error) {
-        if (loadRequestRef.current === loadId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法加载所选 BIN。");
-        throw error;
-      }
-    });
-    if (value && loadRequestRef.current === loadId && contextRef.current === context) {
-      targetContextRef.current = context;
-      setBin(value);
-      setRecentEsi(writeRecentEsi([value.path, ...loadRecentEsi()]));
-    }
-  }, [contextKey, loadXml, run, slave?.position]);
-
-  useEffect(() => {
-    if (!initialSelection) return;
-    onInitialSelectionConsumed();
-    void loadFile(initialSelection.path, initialSelection.ordinal, initialSelection.configData);
-  }, [initialSelection, loadFile, onInitialSelectionConsumed]);
-  // XML and BIN use one picker and one programming button.
-  const selectFile = useCallback(async () => {
-    const path = await pickFile(["xml", "bin"]); if (path) await loadFile(path);
-  }, [loadFile]);
-  // Stable source actions keep the file list independent of progress updates.
-  const selectSource = useCallback((path: string, deviceOrdinal?: number) => { void loadFile(path, deviceOrdinal); }, [loadFile]);
-  const removeRecentSource = useCallback((path: string) => {
-    setRecentEsi(writeRecentEsi(loadRecentEsi().filter(item => !sameEepromSource({ path: item }, { path }))));
-  }, []);
-  useEffect(() => {
-    setDragOver(false);
-    if (!fileDropEnabled) return;
-    let cancelled = false;
-    let dispose: (() => void) | undefined;
-    void onFileDrop((paths) => {
-      const source = paths.find((path) => /\.(xml|bin)$/i.test(path));
-      if (source && !operationInProgress && !configSaving && !deviceOperationsBlocked) void loadFile(source);
-    }, hovering => setDragOver(hovering && !operationInProgress && !configSaving && !deviceOperationsBlocked)).then((value) => { if (cancelled) value(); else dispose = value; });
-    return () => { cancelled = true; dispose?.(); };
-  }, [fileDropEnabled, loadFile, operationInProgress, configSaving, deviceOperationsBlocked]);
-  useEffect(() => {
-    if (configEditing || configSaving || !esi || ordinal < 0 || !configDataResult.formatted || configDataResult.formatted === generatedConfigRef.current) return;
-    setTarget(undefined);
-    const timer = window.setTimeout(() => void generate(esi, ordinal, configDataResult.formatted!), 250);
-    return () => window.clearTimeout(timer);
-  }, [configData, configDataResult.formatted, configEditing, configSaving, esi, generate, ordinal]);
-  // Selecting another Device starts from its original XML configuration.
-  const changeDevice = async (value: number) => {
-    setConfigEditing(false); setConfigSaveError("");
-    setOrdinal(value);
-    if (esi) {
-      const nextConfig = deviceConfigData(esi.devices[value]);
-      setConfigData(nextConfig);
-      await generate(esi, value, nextConfig);
-    }
-  };
-  // Persist the draft to its loaded Device, then generate a target from the saved XML.
-  const saveConfig = async () => {
-    if (!esi || ordinal < 0 || !configDataResult.formatted || configSaving || operationInProgress || deviceOperationsBlocked) return;
-    const selectedOrdinal = ordinal;
-    const requestId = ++loadRequestRef.current;
-    const context = contextKey;
-    generationRequestRef.current += 1;
-    setConfigSaving(true); setConfigSaveError("");
-    try {
-      const saved = await run(async () => {
-        try {
-          return await bridgeRequest<EsiResult>("esi_config_save", { document_id: esi.document_id, ordinal: selectedOrdinal, config_data: configDataResult.formatted });
-        } catch (error) {
-          if (contextRef.current === context && loadRequestRef.current === requestId) setConfigSaveError(error instanceof BridgeRequestError ? error.message : "无法保存 XML，请检查文件写入权限。");
-          throw error;
-        }
-      }, "ConfigData 已保存到 XML");
-      if (saved && contextRef.current === context && loadRequestRef.current === requestId) {
-        const savedConfig = deviceConfigData(saved.devices[selectedOrdinal]);
-        setRecentEsi(writeRecentEsi([saved.path, ...loadRecentEsi()]));
-        setEsi(saved); setConfigData(savedConfig); setConfigEditing(false); setTarget(undefined);
-        await generate(saved, selectedOrdinal, savedConfig);
-      }
-    } finally {
-      if (contextRef.current === context && loadRequestRef.current === requestId) setConfigSaving(false);
-    }
-  };
-  const operation = async <T,>(fn: () => Promise<T>, success: string, failure = "操作失败"): Promise<T | undefined> => {
-    if (["eeprom_read", "eeprom_backup", "eeprom_flash", "eeprom_restore"].some((method) => operationStore.active(method))) return undefined;
-    setOperationResult(undefined);
-    setProgress({ operation: "eeprom", stage: "准备", completed: 0, total: 100, percent: 0, detail: "正在检查操作条件", tone: "info", cancellable: true });
-    try {
-      const value = await fn();
-      const flashPayload = value as EepromFlashPayload;
-      if (flashPayload && typeof flashPayload === "object" && "success" in flashPayload) {
-        if (!flashPayload.success) {
-          const title = "烧录失败";
-          setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: flashPayload.result.image_verification, tone: "error" });
-          setOperationResult({ title, severity: "error", payload: flashPayload, error: flashPayload.result.image_verification });
-          return value;
-        }
-        const reloadFailed = flashPayload.result.reload_verified === false;
-        const title = reloadFailed ? "镜像校验成功；复位后复核失败" : success;
-        setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: reloadFailed ? "EEPROM 镜像已通过校验，但复位后的重新加载复核未通过。" : success, tone: reloadFailed ? "info" : "success" });
-        setOperationResult({ title, severity: reloadFailed ? "warning" : "success", payload: flashPayload, error: reloadFailed ? "复位后未能确认设备已加载新内容，请重新读取设备。" : undefined });
-      } else {
-        setProgress({ operation: "eeprom", stage: success, completed: 100, total: 100, percent: 100, detail: success, tone: "success" });
-        setOperationResult({ title: success, severity: "success" });
-      }
-      return value;
-    } catch (error) {
-      const text = error instanceof BridgeRequestError ? error.message : "EEPROM 操作未完成，请检查文件与当前连接。";
-      if (error instanceof BridgeRequestError && error.code === "CANCELLED") {
-        setProgress({ operation: "eeprom", stage: "已取消", completed: 100, total: 100, percent: 100, detail: text, tone: "info" });
-        setOperationResult({ title: "操作已取消", severity: "info", error: text });
-        return undefined;
-      }
-      setProgress({ operation: "eeprom", stage: failure, completed: 100, total: 100, percent: 100, detail: text, tone: "error" });
-      setOperationResult({ title: failure, severity: "error", error: text });
-      return undefined;
-    }
-  };
-  // Read exactly the displayed range and retain the raw bytes for Hex navigation.
-  const readFull = async () => {
-    if (!slave || invalidReadLength || readLengthRequired) return;
-    const value = await operation(() => bridgeRequest<EepromReadResult>("eeprom_read", { position: slave.position, target_id: flashTarget?.target_id, capacity }), "读取完成");
-    if (value) { setReadResult(value); if (value.size >= 14) setConfigurationChanged(false); }
-  };
-  // Export the raw bytes under the selected slave's name.
-  const exportBin = async () => {
-    if (!slave || invalidReadLength || readLengthRequired) return;
-    const directory = await pickDirectory();
-    if (!directory) return;
-    // Clear the previous export before attempting another destination.
-    setBackupPath("");
-    const value = await operation(() => bridgeRequest<{ binary_path: string }>("eeprom_backup", {
-      position: slave.position,
-      directory,
-      capacity,
-    }), "BIN 文件导出完成");
-    if (value) setBackupPath(value.binary_path);
-  };
-  // Both sources write the frozen target selected for this slave and session.
-  const flash = () => {
-    if (!canFlash || !slave || !flashTarget) return;
-    // A write attempt can change bytes even when it fails; discard the old read snapshot.
-    setReadResult(undefined); setConfigurationChanged(true);
-    return operation(() => bridgeRequest<EepromFlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc }), autoResetEsc ? "烧录完成" : "烧录完成，未复位 ESC", "烧录失败");
-  };
-
-  // Prefer a complete read snapshot; shorter reads cannot describe the configuration area.
-  const actualConfig = useMemo(() => configurationChanged ? "" : readResult && readResult.size >= 14
-    ? readResult.data.trim().split(/\s+/, 14).join(" ")
-    : slave?.eeprom_prefix?.trim().split(/\s+/, 14).join(" ") ?? "", [configurationChanged, readResult, slave?.eeprom_prefix]);
-  const effectiveConfig = bin ? "" : configEditing ? configData : target?.effective_config_data ?? configData;
-  const currentIdentity = readResult?.identity ?? slave?.identity;
-  const identityKnown = Boolean(readResult?.identity || slave?.identity_valid !== false);
-  const sourcePath = bin?.path ?? esi?.path;
-  // Source shortcuts retain Device selection; the image still comes from the loaded XML/BIN.
-  const sourceEntry = useMemo<FixedEsiEntry | undefined>(() => sourcePath ? {
-    path: sourcePath, sha256: bin?.sha256 ?? esi?.sha256 ?? "", ordinal: bin ? -1 : ordinal,
-    vendor_id: esi?.vendor_id ?? 0, vendor_name: esi?.vendor_name ?? "",
-    device_name: currentDevice?.name ?? "", type_name: currentDevice ? esiDeviceDisplayName(currentDevice) : "",
-    product_code: currentDevice?.product_code ?? 0, revision: currentDevice ? deviceRevision(currentDevice) : 0,
-    byte_size: flashTarget?.size ?? currentDevice?.byte_size ?? 0, config_data: currentDevice ? deviceConfigData(currentDevice) : "",
-  } : undefined, [sourcePath, bin, esi, ordinal, currentDevice, flashTarget?.size]);
-  const readBlocker = deviceOperationsBlocked ? "软件正在更新" : operationInProgress ? "已有 EEPROM 操作正在执行"
-    : status.cycle_running ? "请先停止周期通信" : !slave ? "请选择从站" : readLengthHint;
-  const readDisabled = Boolean(readBlocker);
-  const activeProgress = progress && isEepromOperation(progress.operation) && operationInProgress;
-
-  return <Box className="eeprom-workspace">
-    {!slave && <PageTitle title="EEPROM" subtitle="" />}
-    {!slave ? <Box sx={{ flex: 1 }}><EmptyState text="请先选择目标从站" /></Box> : <>
-      <EepromSources recent={recentEsi} current={sourceEntry} disabled={operationInProgress || configSaving || deviceOperationsBlocked} active={fileDropEnabled} dragOver={dragOver} onChoose={selectFile} onSelect={selectSource} onRemoveRecent={removeRecentSource} />
-      <Box className="eeprom-content">
-      <Box className="eeprom-top">
-        <Box className="eeprom-comparison">
-          <EepromSummaryColumn title="当前设备" tag={configurationChanged ? "待重新读取" : undefined}
-            config={actualConfig} compareConfig={effectiveConfig} placeholder={configurationChanged ? "写入后请重新读取设备配置" : "暂无设备配置数据"}
-            rows={[
-              { label: "设备", value: <Typography variant="body2" fontWeight={650} noWrap title={slaveDisplayName(slave)}>从站 {slave.position} · {slaveDisplayName(slave)}</Typography> },
-              { label: "Vendor ID", value: identityKnown && currentIdentity ? hex(currentIdentity.vendor_id, 8) : "未知" },
-              { label: "Product Code", value: identityKnown && currentIdentity ? hex(currentIdentity.product_code, 8) : "未知" },
-              { label: "Revision", value: identityKnown && currentIdentity ? hex(currentIdentity.revision, 8) : "未知" },
-              { label: "设备声明容量", value: slave.eeprom_capacity == null ? "未知" : `${slave.eeprom_capacity} B` },
-            ]} />
-          <EepromSummaryColumn title="待写入目标" tag={bin ? "BIN" : esi ? "XML" : undefined}
-            emptyState={!esi && !bin ? <Stack spacing={0.75} alignItems="center" justifyContent="center" sx={{ flex: 1, minHeight: 100, p: 3, textAlign: "center" }}><Typography variant="body2" fontWeight={650} color="text.secondary">尚未选择 XML/BIN</Typography><Typography variant="body2" color="text.secondary">选择或拖入文件后，显示待写入信息。</Typography></Stack> : undefined}
-            configInput={configEditing ? <TextField fullWidth size="small" value={configData} disabled={configSaving || operationInProgress || deviceOperationsBlocked} error={Boolean(configDataResult.error || configSaveError)} helperText={configSaveError || configDataResult.error || "保存会修改当前 XML Device 的 ConfigData"} onChange={(event) => { setConfigData(event.target.value.toUpperCase()); setConfigSaveError(""); }} onBlur={() => configDataResult.formatted && setConfigData(configDataResult.formatted)} inputProps={{ "aria-label": "XML ConfigData", className: "mono", spellCheck: false }} /> : undefined}
-            configAction={esi && ordinal >= 0 ? <Button size="small" variant={configEditing ? "contained" : "text"} sx={{ flexShrink: 0 }} startIcon={configSaving ? <CircularProgress size={14} color="inherit" /> : configEditing ? undefined : <EditRounded />} disabled={configSaving || operationInProgress || deviceOperationsBlocked || (configEditing && Boolean(configDataResult.error))} onClick={() => { if (configEditing) void saveConfig(); else { generationRequestRef.current += 1; setConfigSaveError(""); setConfigEditing(true); } }}>{configEditing ? "保存" : "编辑"}</Button> : undefined}
-            config={effectiveConfig} compareConfig={actualConfig} placeholder={bin ? "BIN 按原始字节写入，不编辑 ConfigData" : ordinal < 0 && esi ? "请选择 Device" : "选择 XML 后显示配置"}
-            rows={[
-              { label: "Device", value: esi ? <FormControl fullWidth size="small"><Select value={ordinal} inputProps={{ "aria-label": "烧录 Device" }} disabled={operationInProgress || configSaving || deviceOperationsBlocked} onChange={(event) => void changeDevice(Number(event.target.value))}><MenuItem value={-1} disabled>请选择烧录设备</MenuItem>{esi.devices.map((device, index) => <MenuItem key={index} value={index}>{esiDeviceDisplayName(device)} · {hex(device.product_code, 8)} · Rev {hex(deviceRevision(device), 8)}</MenuItem>)}</Select></FormControl> : <Typography variant="body2" noWrap title={sourcePath}>{bin ? bin.path.split(/[\\/]/).at(-1) : "未选择文件"}</Typography> },
-              { label: "Vendor ID", value: currentDevice && esi ? hex(esi.vendor_id, 8) : "—" },
-              { label: "Product Code", value: currentDevice ? hex(currentDevice.product_code, 8) : "—" },
-              { label: "Revision", value: currentDevice ? hex(deviceRevision(currentDevice), 8) : "—" },
-              { label: "目标镜像长度", value: flashTarget ? `${flashTarget.size} B` : generationError ? "生成失败" : esi && ordinal >= 0 ? "生成中…" : "—" },
-            ]} />
-        </Box>
-
-        {bin && <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>BIN 从地址 0 按原始字节写入，不修改 ConfigData、CRC、身份或 SII 类别。</Typography>}
-        {generationError && <Alert severity="error" sx={{ mt: 1 }}>{generationError}</Alert>}
-      </Box>
-
-    {/* Reading actions precede the Hex panel; short workspaces scroll instead of clipping rows. */}
-    <Box className="eeprom-action-bar">
-      <Stack direction="row" alignItems="center" gap={1}>
-        <FormControl size="small" sx={{ width: 156, flexShrink: 0 }}><InputLabel>读取范围</InputLabel><Select label="读取范围" inputProps={{ "aria-label": "读取范围" }} MenuProps={{ slotProps: { paper: { sx: { "& .MuiMenuItem-root": { minHeight: 30, fontSize: 12 } } } } }} value={effectiveRange} disabled={!slave || operationInProgress || deviceOperationsBlocked} onChange={(event) => setReadRange(event.target.value as "device" | "target" | "custom")}><MenuItem value="device">设备声明容量</MenuItem><MenuItem value="target">目标镜像长度</MenuItem><MenuItem value="custom">自定义长度</MenuItem></Select></FormControl>
-        {effectiveRange === "custom" ? <TextField label="字节数（偶数）" size="small" sx={{ width: 158, flexShrink: 0 }} value={readLength} disabled={!slave || operationInProgress || deviceOperationsBlocked} error={invalidReadLength} onChange={(event) => setReadLength(event.target.value)} inputProps={{ inputMode: "numeric" }} /> : <Typography variant="body2" className="mono" sx={{ minWidth: 78 }}>{capacity == null ? "长度未知" : `${capacity} B`}</Typography>}
-        <Tooltip title={readBlocker}><span><Button variant="outlined" size="small" disableRipple={false} disabled={readDisabled} onClick={() => void readFull()}>读取</Button></span></Tooltip>
-        <Tooltip title={readBlocker || "按所选范围重新读取并导出"}><span><Button variant="outlined" size="small" disableRipple={false} startIcon={<SaveAltRounded />} disabled={readDisabled} onClick={() => void exportBin()}>导出 BIN</Button></span></Tooltip>
-        <Box sx={{ flex: 1 }} />
-        <Stack component="label" direction="row" alignItems="center" sx={{ flexShrink: 0 }}><Switch size="small" checked={autoResetEsc} disabled={operationInProgress || deviceOperationsBlocked} onChange={(event) => onAutoResetChange(event.target.checked)} inputProps={{ "aria-label": "写入后复位 ESC" }} /><Typography variant="body2">写入后复位 ESC</Typography></Stack>
-        <Tooltip title={blockers.join("；")}><span><Button size="small" variant="contained" disableRipple={false} disabled={!canFlash} startIcon={<MemoryRounded />} onClick={() => void flash()}>烧录 EEPROM</Button></span></Tooltip>
-      </Stack>
-      {activeProgress && <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 1 }}><Typography variant="caption" sx={{ minWidth: 120 }}>{progress.stage}</Typography><LinearProgress variant="determinate" value={progress.percent} sx={{ flex: 1, height: 5, borderRadius: 4 }} /><Typography variant="caption" className="mono">{progress.percent}%</Typography><Typography variant="caption" color="text.secondary" noWrap title={progress.detail} sx={{ maxWidth: "45%" }}>{progress.detail}</Typography>{progress.cancellable !== false && <Button size="small" onClick={() => void run(() => bridgeRequest("cancel"))}>取消</Button>}</Stack>}
-      {!operationInProgress && backupPath && <Button size="small" sx={{ mt: 0.75 }} title={backupPath} onClick={() => void run(() => revealPath(backupPath))}>打开导出位置</Button>}
-      {!operationInProgress && operationResult && <Alert severity={operationResult.severity} sx={{ mt: 1, py: 0 }} action={<Button size="small" color="inherit" onClick={() => setDetailsOpen(true)}>详情</Button>}>{operationResult.title}{operationResult.error ? `：${operationResult.error}` : ""}</Alert>}
-    </Box>
-    <EepromDataView read={readResult} targetId={flashTarget?.target_id} fullRead={fullSiiRead} />
-      </Box>
-    </>}
-    <Dialog open={detailsOpen} onClose={() => setDetailsOpen(false)} maxWidth="md" fullWidth>
-      <DialogTitle>EEPROM 操作详情</DialogTitle>
-      <DialogContent dividers><Stack spacing={2}>
-        {flashTarget && <Box><Typography fontWeight={700}>待写入目标 · {flashTarget.size} B</Typography><Typography variant="caption" color="text.secondary">SHA-256</Typography><Typography className="mono" variant="body2" sx={{ overflowWrap: "anywhere" }}>{flashTarget.sha256}</Typography></Box>}
-        {readResult && <Box><Typography fontWeight={700}>最近读取 · {readResult.size} B</Typography><Typography variant="body2">{new Date(readResult.read_at).toLocaleString()}</Typography><Typography variant="caption" color="text.secondary">SHA-256</Typography><Typography className="mono" variant="body2" sx={{ overflowWrap: "anywhere" }}>{readResult.sha256}</Typography>{readResult.sii_error && <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{readResult.sii_error}</Typography>}</Box>}
-        {readResult?.comparison && <Box><Typography fontWeight={700}>读取时的目标对比</Typography><Typography variant="body2">差异 {readResult.comparison.differing_bytes} 字节 · 首个差异地址 {readResult.comparison.first_difference == null ? "无" : hex(readResult.comparison.first_difference, 5)}</Typography><Typography variant="caption" color="text.secondary">当时的目标 SHA-256</Typography><Typography variant="body2" className="mono" sx={{ overflowWrap: "anywhere" }}>{readResult.comparison.target_sha256}</Typography></Box>}
-        {backupPath && <Box><Typography fontWeight={700}>BIN 导出位置</Typography><Typography className="mono" variant="body2" sx={{ overflowWrap: "anywhere" }}>{backupPath}</Typography></Box>}
-        {operationResult && <Alert severity={operationResult.severity}>{operationResult.title}{operationResult.error ? `：${operationResult.error}` : ""}</Alert>}
-        {operationResult?.payload && <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.5 }}>{[
-          ["写入 Word", operationResult.payload.result.words_written], ["完整回读", `${operationResult.payload.result.bytes_read_back} B`],
-          ["差异字节", operationResult.payload.result.comparison.differing_bytes], ["首个差异字节地址", operationResult.payload.result.comparison.first_difference == null ? "无" : hex(operationResult.payload.result.comparison.first_difference, 5)],
-          ["目标 SHA-256", operationResult.payload.result.comparison.target_sha256], ["回读 SHA-256", operationResult.payload.result.comparison.readback_sha256],
-          ["SII 结构（辅助信息）", operationResult.payload.result.sii_valid ? "可解析" : "未解析"], ["XML 语义（辅助信息）", operationResult.payload.result.semantic_valid == null ? "不适用" : operationResult.payload.result.semantic_valid ? "可解析" : "与 XML 描述不同"],
-          ["RES 序列", operationResult.payload.result.reset_sequence == null ? "未执行" : operationResult.payload.result.reset_sequence.every(Boolean) ? "三帧成功" : "未完成"],
-          ["重新发现", operationResult.payload.result.rediscovered == null ? "未执行" : operationResult.payload.result.rediscovered ? "成功" : "失败"],
-          ["重新加载复核", operationResult.payload.result.reload_verified == null ? "未执行" : operationResult.payload.result.reload_verified ? "成功" : "失败"],
-        ].map(([label, value]) => <Box key={String(label)} minWidth={0}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography variant="body2" className={String(label).includes("SHA") ? "mono" : ""} sx={{ overflowWrap: "anywhere" }}>{String(value)}</Typography></Box>)}</Box>}
-      </Stack></DialogContent>
-      <DialogActions><Button onClick={() => setDetailsOpen(false)}>关闭</Button></DialogActions>
-    </Dialog>
-  </Box>;
-}
-
 export default function App() {
-  const startupScanAttempted = useRef(false);
+  const reloadAdaptersRef = useRef<() => void>(() => undefined);
   const requestedPage = new URLSearchParams(window.location.search).get("page") as PageKey | null;
   const [page, setPage] = useState<PageKey>(pages.some((item) => item.key === requestedPage) ? requestedPage! : "overview");
   const [status, setStatus] = useState<WorkbenchStatus>({ host_generation: 0, mode: "real", phase: "disconnected", connected: false, cycle_running: false, slaves: [], session_id: 0, revision: 0 });
-  const [slaveListExpanded, setSlaveListExpanded] = useState(true);
+  const startupEepromPath = initialEepromPath();
   const [adapters, setAdapters] = useState<AdapterInfo[]>([]);
   const [adapter, setAdapter] = useState("");
-  const [selectedPosition, setSelectedPosition] = useState<number>();
+  const [adaptersLoading, setAdaptersLoading] = useState(true);
+  const [adapterLoadError, setAdapterLoadError] = useState<string>();
+  const [selectedPosition, setSelectedPosition] = useState<number | undefined>(() => startupEepromPath ? 1 : undefined);
   const [snapshot, setSnapshot] = useState<Snapshot>();
-  const [bridgeAvailable, setBridgeAvailable] = useState(true);
+  const [bridgeAvailable, setBridgeAvailable] = useState(false);
+  const [bridgeStarting, setBridgeStarting] = useState(true);
   const [bridgeExit, setBridgeExit] = useState<BridgeExitInfo>();
   const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" | "warning"; dismissed?: boolean }>();
   const [settings, setSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState(0);
   const [updateState, setUpdateState] = useState<UpdateState>("idle");
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
   const [updateProgress, setUpdateProgress] = useState({ downloaded: 0, total: 0 });
@@ -918,40 +487,33 @@ export default function App() {
   const autoCheckUpdatesRef = useRef(autoCheckUpdates);
   autoCheckUpdatesRef.current = autoCheckUpdates;
   const [slaveContextMenu, setSlaveContextMenu] = useState<SlaveContextMenu>();
-  const [quickFlashOpen, setQuickFlashOpen] = useState(false);
+  const [quickFlashOpen, setQuickFlashOpen] = useState(() => Boolean(startupEepromPath));
+  const [quickFlashSource, setQuickFlashSource] = useState<EepromLaunchSource | undefined>(() => startupEepromPath ? { path: startupEepromPath } : undefined);
+  const [pendingFlashSource, setPendingFlashSource] = useState<EepromLaunchSource>();
+  const [quickFlashBusy, setQuickFlashBusy] = useState(false);
+  const consumeQuickFlashSource = useCallback(() => setQuickFlashSource(undefined), []);
   const [eepromDetailSelection, setEepromDetailSelection] = useState<EepromDetailSelection>();
   const [eepromReadCache, setEepromReadCache] = useState<Record<string, EepromReadResult>>({});
-  const [progress, setProgress] = useState<ProgressState>();
+  const [progress, setProgress] = useState<EepromProgressState>();
   const [registerProfileOverrides, setRegisterProfileOverrides] = useState<Record<string, string>>({});
   const appliedClockRef = useRef<{ hostGeneration: number; sessionId: number } | undefined>(undefined);
   const slave = status.slaves.find((item) => item.position === selectedPosition);
   const selectedSlaveKey = slaveIdentityKey(slave);
   const eepromReadCacheKey = `${status.host_generation}:${status.session_id}:${selectedSlaveKey}`;
   const registerProfile = slave ? registerProfileOverrides[selectedSlaveKey] ?? defaultRegisterProfile(slave.chip_model) : "ET1100";
-  const operations = useSyncExternalStore(operationStore.subscribe, operationStore.snapshot);
-  const stateRequestBusy = useMemo(() => [...operations.values()].some((operation) =>
-    ["queued", "running"].includes(operation.phase) && operation.method === "request_state"
-  ), [operations]);
-  const hardwareBusy = useMemo(() => [...operations.values()].some((operation) =>
-    ["queued", "running"].includes(operation.phase) && operation.lane === "hardware" && !["register_watch", "request_state"].includes(operation.method)
-  ), [operations]);
-  const scanning = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["scan", "auto_scan"].includes(operation.method));
-  const connecting = [...operations.values()].some((operation) => ["queued", "running"].includes(operation.phase) && ["connect", "disconnect"].includes(operation.method));
+  const { stateRequestBusy, hardwareBusy, scanning, connecting, configSaveBusy, disconnectHardwareBusy } = useSyncExternalStore(operationStore.subscribeActivity, operationStore.activitySnapshot);
   const eepromExclusive = isEepromOperation(progress?.operation) && progress!.percent < 100;
   const updating = isUpdateInProgress(updateState);
   const busy = hardwareBusy || updating;
   // A disconnect cancels pending register frames before closing the same Worker.
-  const disconnectBusy = updating || [...operations.values()].some((operation) =>
-    ["queued", "running"].includes(operation.phase) && operation.lane === "hardware"
-    && !["register_snapshot", "register_watch", "request_state"].includes(operation.method)
-  );
+  const disconnectBusy = updating || disconnectHardwareBusy;
   const updateBlockedReason = eepromExclusive
     ? "EEPROM 操作进行中，完成后即可更新。"
     : hardwareBusy || stateRequestBusy ? "设备操作进行中，完成后即可更新。" : "";
   const busState = minimumBusState(status.slaves);
   const communicationErrors = status.slaves.filter((item) => item.state_error);
   const busStateBlockedReason = !bridgeAvailable
-    ? "通信服务暂不可用"
+    ? "暂时无法连接设备，请重启软件后重试。"
     : !status.connected
       ? "请先连接 EtherCAT 网卡"
       : !status.slaves.length
@@ -963,6 +525,25 @@ export default function App() {
             : busy
             ? "请等待当前硬件操作完成"
             : "";
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    void onEepromOpenRequest((path) => {
+      if (!active) return;
+      setQuickFlashOpen(true);
+      setPendingFlashSource({ path });
+    }).then((stop) => { if (active) unlisten = stop; else stop(); })
+      .catch(() => { if (active) setMessage({ text: "无法接收 XML 右键烧录请求，请重新打开软件。", severity: "error" }); });
+    return () => { active = false; unlisten?.(); };
+  }, []);
+
+  useEffect(() => {
+    if (!pendingFlashSource || eepromExclusive || configSaveBusy || quickFlashBusy || updating) return;
+    setSelectedPosition(1);
+    setQuickFlashSource(pendingFlashSource);
+    setPendingFlashSource(undefined);
+  }, [pendingFlashSource, eepromExclusive, configSaveBusy, quickFlashBusy, updating]);
 
   useEffect(() => subscribeBusSnapshot((next) => {
     const previousClock = appliedClockRef.current;
@@ -1015,22 +596,15 @@ export default function App() {
     await bridgeRequest<SlaveInfo[]>("read_states", { refresh_eeprom: true });
   }, [refresh, status.connected, status.slaves.length]);
 
-  const applyAdapters = useCallback((items: AdapterInfo[]) => {
+  const applyAdapters = useCallback((items: AdapterInfo[], selected?: string) => {
     const ordered = orderAdapters(items);
-    const preferred = window.localStorage.getItem(PREFERRED_ADAPTER_KEY) ?? "";
+    const preferred = selected || window.localStorage.getItem(PREFERRED_ADAPTER_KEY) || "";
     setAdapters(ordered);
     setAdapter(ordered.some((item) => item.name === preferred) ? preferred : ordered[0]?.name ?? "");
+    setAdapterLoadError(items.length ? undefined : "未找到可用网卡。请确认网卡已启用，然后重新加载网卡。");
   }, []);
 
-  const autoScan = useCallback(async () => {
-    const preferred = window.localStorage.getItem(PREFERRED_ADAPTER_KEY) ?? "";
-    const result = await run(() => bridgeRequest<AutoScanResult>("auto_scan", { preferred_adapter: preferred }));
-    if (!result) return;
-
-    const ordered = orderAdapters(result.adapters);
-    const selected = result.selected_adapter || preferred;
-    setAdapters(ordered);
-    setAdapter(ordered.some((item) => item.name === selected) ? selected : ordered[0]?.name ?? "");
+  const applyAutoScan = useCallback((result: AutoScanResult) => {
     if (result.connected && result.slaves.length) {
       if (result.selected_adapter) window.localStorage.setItem(PREFERRED_ADAPTER_KEY, result.selected_adapter);
       const adapterName = result.adapters.find((item) => item.name === result.selected_adapter)?.description
@@ -1040,7 +614,6 @@ export default function App() {
     }
 
     if (!result.adapters.length) {
-      setMessage({ text: "未找到可用网卡。请确认网卡已启用并重新扫描。", severity: "error" });
       return;
     }
     const failed = result.attempts.filter((attempt) => attempt.error);
@@ -1054,7 +627,7 @@ export default function App() {
     } else {
       setMessage({ text: "自动扫描未发现从站。请确认设备已连接并通电，再重新扫描。", severity: "info" });
     }
-  }, [run]);
+  }, []);
 
   useEffect(() => {
     const disableBrowserContextMenu = (event: MouseEvent) => event.preventDefault();
@@ -1066,56 +639,39 @@ export default function App() {
     let active = true;
     let unlisten: (() => void) | undefined;
     let unlistenExit: (() => void) | undefined;
-    let bootstrapInFlight = false;
-    let bootstrapPending = false;
-    let bootstrappedGeneration: number | undefined;
-    const bootstrap = async () => {
-      if (!active || bootstrappedGeneration !== undefined) return;
-      if (bootstrapInFlight) {
-        bootstrapPending = true;
-        return;
-      }
-      bootstrapInFlight = true;
-      try {
-        const current = await bridgeRequest<WorkbenchStatus>("status");
-        const items = await bridgeRequest<AdapterInfo[]>("enumerate_adapters");
-        if (!active) return;
-        applyAdapters(items);
-        bootstrappedGeneration = current.host_generation;
-        bootstrapPending = false;
-        if (!current.connected && !startupScanAttempted.current) {
-          startupScanAttempted.current = true;
-          await autoScan();
-        }
-      } catch (error) {
-        if (!active) return;
-        const text = error instanceof Error ? error.message : String(error);
-        if (/Python EtherCAT|桥接通信|桥接进程/.test(text)) {
-          setBridgeAvailable(false);
-          setSelectedPosition(undefined);
-        }
-        setMessage({ text: error instanceof BridgeRequestError ? text : "暂时无法读取设备状态，请稍后重试。", severity: "error" });
-      } finally {
-        bootstrapInFlight = false;
-        if (active && bootstrapPending) {
-          bootstrapPending = false;
-          void bootstrap();
-        }
-      }
-    };
+    const startup = createBridgeStartup({
+      preferredAdapter: () => window.localStorage.getItem(PREFERRED_ADAPTER_KEY) ?? "",
+      onAdapters: applyAdapters,
+      onScan: applyAutoScan,
+      onLoading: setAdaptersLoading,
+      onError: (text) => {
+        setAdapterLoadError(text);
+        if (text) setMessage({ text, severity: "error" });
+        else setMessage((current) => current?.text.startsWith("无法加载网卡") ? undefined : current);
+      },
+    });
+    reloadAdaptersRef.current = startup.reloadAdapters;
     const eventReady = onBridgeEvent((event: BridgeEvent) => {
-      if (["ready", "host_ready"].includes(event.kind)) {
-        setBridgeAvailable(true);
-        setBridgeExit(undefined);
-        setMessage((current) => current?.text.includes("通信服务") ? undefined : current);
+      if (!active) return;
+      if (event.kind === "host_ready") {
         const generation = event.host_generation
-          ?? (event.data as { host_generation?: number } | undefined)?.host_generation;
-        if (generation !== undefined && generation !== bootstrappedGeneration) bootstrappedGeneration = undefined;
-        void bootstrap();
+          ?? (event.data as { host_generation?: number } | undefined)?.host_generation ?? 0;
+        if (!startup.ready(generation)) return;
+        setAdapters([]);
+        setAdapter("");
+        setBridgeAvailable(true);
+        setBridgeStarting(false);
+        setBridgeExit(undefined);
+        setMessage((current) => current?.text === "暂时无法连接设备，请重启软件后重试。" ? undefined : current);
       }
       if (event.kind === "host_restart_failed") {
+        startup.unavailable();
+        setAdapters([]);
+        setAdapter("");
         setBridgeAvailable(false);
-        setMessage({ text: "通信服务启动失败，软件正在尝试恢复。", severity: "error" });
+        setBridgeStarting(false);
+        console.error("Bridge startup failed", event.data);
+        setMessage({ text: "暂时无法连接设备，请重启软件后重试。", severity: "error" });
       }
       if (event.kind === "heartbeat") {
         // Heartbeat is telemetry only. Command responses and bus_snapshot events
@@ -1131,13 +687,15 @@ export default function App() {
         setMessage({ text: messages.join("；"), severity: unavailable.length ? "error" : "success" });
       }
       if (event.kind === "worker_fatal") {
-        const text = "通信服务已停止，请重新启动软件后连接设备。";
+        const text = "暂时无法连接设备，请重启软件后重试。";
+        console.error("Bridge worker stopped", event.data);
+        startup.unavailable();
         setBridgeAvailable(false);
         operationStore.invalidate("WORKER_FATAL", text);
         setSelectedPosition(undefined);
         setSnapshot(undefined);
         setRegisterProfileOverrides({});
-        setProgress((previous) => previous && previous.percent < 100 ? { ...previous, completed: previous.total, percent: 100, stage: "通信服务已停止", detail: text, tone: "error", cancellable: false } : previous);
+        setProgress((previous) => previous && previous.percent < 100 ? { ...previous, completed: previous.total, percent: 100, stage: "设备连接已中断", detail: text, tone: "error", cancellable: false } : previous);
         setMessage({ text, severity: "error" });
       }
       if (event.kind === "process_data") setSnapshot(event.data as Snapshot);
@@ -1179,26 +737,45 @@ export default function App() {
     }).then((value) => { if (active) unlisten = value; else value(); });
     const exitReady = onBridgeExited((info) => {
       if (!active) return;
+      startup.unavailable();
+      setAdapters([]);
+      setAdapter("");
       setBridgeAvailable(false);
+      setBridgeStarting(false);
       setBridgeExit(info);
-      operationStore.invalidate("PROCESS_EXITED", "通信服务已退出");
+      operationStore.invalidate("PROCESS_EXITED", "设备连接已中断");
       setProgress((previous) => previous && previous.percent < 100 ? {
         ...previous,
         completed: previous.total,
         percent: 100,
-        stage: "通信服务已退出",
-        detail: "通信服务已退出，写入结果可能需要重新确认。",
+        stage: "设备连接已中断",
+        detail: "写入结果尚未确认，请先读取设备确认结果，再继续操作。",
         tone: "error",
         cancellable: false,
       } : previous);
       setSelectedPosition(undefined);
       setSnapshot(undefined);
       setRegisterProfileOverrides({});
-      setMessage({ text: "通信服务已退出，软件将尝试恢复。重新连接后请先读取设备状态，确认此前写入的结果。", severity: "error" });
+      setMessage({ text: "设备连接已中断，请重新连接网卡；如仍无法使用，请重启软件。", severity: "error" });
     }).then((value) => { if (active) unlistenExit = value; else value(); });
-    Promise.all([eventReady, exitReady]).then(() => { if (active) bootstrap(); });
-    return () => { active = false; unlisten?.(); unlistenExit?.(); };
-  }, [applyAdapters, autoScan]);
+    Promise.all([eventReady, exitReady]).then(() => {
+      if (active) startup.subscribed();
+    }).catch((error) => {
+      if (!active) return;
+      startup.unavailable();
+      active = false;
+      startup.dispose();
+      unlisten?.();
+      unlistenExit?.();
+      unlisten = undefined;
+      unlistenExit = undefined;
+      setBridgeAvailable(false);
+      setBridgeStarting(false);
+      console.error("Bridge event subscriptions failed", error);
+      setMessage({ text: "暂时无法连接设备，请重启软件后重试。", severity: "error" });
+    });
+    return () => { active = false; startup.dispose(); reloadAdaptersRef.current = () => undefined; unlisten?.(); unlistenExit?.(); };
+  }, [applyAdapters, applyAutoScan]);
 
   const connect = async () => {
     if (status.connected) await run(() => bridgeRequest("disconnect"), "已断开网卡");
@@ -1372,34 +949,38 @@ export default function App() {
   // Keep page and settings controls on the same persisted reset preference.
   const changeEepromAutoReset = useCallback((value: boolean) => setEepromAutoReset(saveEepromAutoReset(value)), []);
 
+  const changeRegisterProfile = useCallback((profile: string) => {
+    if (slave) setRegisterProfileOverrides(current => ({ ...current, [selectedSlaveKey]: profile }));
+  }, [slave, selectedSlaveKey]);
+
   const content = useMemo(() => {
     const props = { slave, run };
-    if (page === "overview") return <OverviewPage {...props} status={status} busy={busy} stateRequestBusy={stateRequestBusy} refresh={refreshStates} registerProfile={registerProfile} alLanguage={alLanguage} onRegisterProfileChange={(profile) => slave && setRegisterProfileOverrides((current) => ({ ...current, [selectedSlaveKey]: profile }))} />;
+    if (page === "overview") return <OverviewPage {...props} status={status} busy={busy} stateRequestBusy={stateRequestBusy} refresh={refreshStates} registerProfile={registerProfile} alLanguage={alLanguage} onRegisterProfileChange={changeRegisterProfile} />;
     if (page === "registers") return <RegistersPage key={`${status.host_generation}:${status.session_id}:${selectedSlaveKey}:${registerProfile}`} {...props} registerProfile={registerProfile} deviceOperationsBlocked={updating} sessionContext={`${status.host_generation}:${status.session_id}`} />;
     return <EepromPage {...props} status={status} progress={progress} setProgress={setProgress} readResult={eepromReadCache[eepromReadCacheKey]} setReadResult={setSelectedEepromReadResult} initialSelection={eepromDetailSelection} onInitialSelectionConsumed={consumeEepromDetailSelection} autoResetEsc={eepromAutoReset} onAutoResetChange={changeEepromAutoReset} fileDropEnabled={!quickFlashOpen} deviceOperationsBlocked={updating} />;
-  }, [page, registerProfile, selectedSlaveKey, selectedPosition, slave, status, snapshot, progress, refreshStates, run, busy, stateRequestBusy, updating, alLanguage, eepromAutoReset, changeEepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
+  }, [page, changeRegisterProfile, registerProfile, selectedSlaveKey, selectedPosition, slave, status, progress, refreshStates, run, busy, stateRequestBusy, updating, alLanguage, eepromAutoReset, changeEepromAutoReset, quickFlashOpen, eepromReadCache, eepromReadCacheKey, eepromDetailSelection, setSelectedEepromReadResult, consumeEepromDetailSelection]);
 
   return <Box sx={{ display: "flex", height: "100vh", bgcolor: "background.default" }}>
-    <Drawer variant="permanent" PaperProps={{ sx: { width: 56, borderRight: 1, borderColor: "divider", bgcolor: "#FBFCFE", overflow: "hidden" } }}>
-      <Toolbar sx={{ minHeight: "54px !important", px: "7px !important", gap: 0.75 }}>
+    <Drawer variant="permanent" PaperProps={{ sx: { width: 64, borderRight: 1, borderColor: "divider", bgcolor: "#FBFCFE", overflow: "hidden" } }}>
+      <Toolbar sx={{ minHeight: "54px !important", px: "11px !important", gap: 0.75 }}>
         <Box component="img" src={appIconUrl} alt="BenchCAT" sx={{ width: 42, height: 42, borderRadius: 1.2, display: "block", flexShrink: 0 }} />
       </Toolbar>
       <Divider />
-      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={(updateState === "preparing" && item.key !== page) || (eepromExclusive && item.key !== "eeprom")} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 36, mb: 0.3, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28, color: page === item.key ? "primary.main" : "text.secondary" }}>{item.icon}</ListItemIcon></ListItemButton></span></Tooltip>)}</List>
+      <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={(updateState === "preparing" && item.key !== page) || (eepromExclusive && item.key !== "eeprom")} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 58, mb: 0.3, px: 0.3, py: 0.8, flexDirection: "column", gap: 0.45, color: page === item.key ? "primary.main" : "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}>{item.icon}</ListItemIcon><Typography sx={{ fontSize: 11, lineHeight: 1.3, fontWeight: page === item.key ? 700 : 500 }}>{item.label}</Typography></ListItemButton></span></Tooltip>)}</List>
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
-      <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettingsTab(0); setSettings(true); }} sx={{ minHeight: 36, px: 0.85 }}><ListItemIcon sx={{ minWidth: 28 }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
+      <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettings(true); }} sx={{ minHeight: 58, px: 0.3, py: 0.8, flexDirection: "column", color: "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}><SettingsRounded /></ListItemIcon></ListItemButton></Tooltip></List>
     </Drawer>
-    <Box sx={{ ml: "56px", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+    <Box sx={{ ml: "64px", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       <AppBar className="workbench-toolbar" position="static" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "rgba(255,255,255,.96)" }}>
         <Toolbar sx={{ minHeight: "54px !important", columnGap: 0.65, rowGap: 0.65, px: "10px !important", py: 0.45, flexWrap: "wrap", alignContent: "center" }}>
           <Stack sx={{ width: 170, minWidth: 0, flexShrink: 0 }} spacing={0.15}>
             <Stack direction="row" gap={0.6} alignItems="center" flexWrap="wrap">
-              <Chip size="small" color={!bridgeAvailable ? "error" : status.connected ? "success" : "default"} variant={status.connected ? "filled" : "outlined"} label={!bridgeAvailable ? "通信核心不可用" : status.connected ? "网卡已连接" : "网卡未连接"} />
+              <Chip size="small" color={!bridgeAvailable ? bridgeStarting ? "default" : "error" : status.connected ? "success" : "default"} variant={status.connected ? "filled" : "outlined"} label={!bridgeAvailable ? bridgeStarting ? "正在启动" : "连接暂不可用" : status.connected ? "网卡已连接" : "网卡未连接"} />
               {status.mode === "demo" && <Chip size="small" color="warning" label="Demo" />}
               {previewMode && <Chip size="small" variant="outlined" label="预览" />}
             </Stack>
-            <Typography variant="caption" color="text.secondary" noWrap>{!bridgeAvailable ? "通信核心正在恢复" : status.connected ? status.slaves.length ? `已发现 ${status.slaves.length} 个从站` : "暂无从站" : "检测网卡并自动扫描 EtherCAT 从站"}</Typography>
+            <Typography variant="caption" color="text.secondary" noWrap>{!bridgeAvailable ? bridgeStarting ? "正在准备连接，请稍候" : "请重启软件后重试" : status.connected ? status.slaves.length ? `已发现 ${status.slaves.length} 个从站` : "暂无从站" : "检测网卡并自动扫描 EtherCAT 从站"}</Typography>
           </Stack>
           {status.connected && status.slaves.length > 0 && status.slaves.length !== 1 && <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
             <Tooltip title={busStateBlockedReason || `全部从站状态控制 · 当前 ${busState === undefined ? "无状态" : stateLabel(busState)}`}>
@@ -1409,34 +990,33 @@ export default function App() {
             </Tooltip>
           </Box>}
           <Box sx={{ display: "flex", alignItems: "center", alignContent: "center", justifyContent: "flex-end", flex: "0 1 auto", minWidth: 0, ml: "auto", flexWrap: "wrap", gap: 0.65 }}>
-            <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} MenuProps={{ PaperProps: { sx: { width: 270, maxWidth: 270 } } }} value={adapter} disabled={!bridgeAvailable || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name} title={item.description || item.name} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
-            <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || (status.connected ? disconnectBusy : busy) || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
-            <Button size="small" variant="outlined" startIcon={<RefreshRounded className={scanning ? "operation-icon-spinning" : undefined} />} disabled={!bridgeAvailable || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
+            <FormControl size="small" sx={{ width: 270, minWidth: 170 }}><Select displayEmpty inputProps={{ "aria-label": "网卡" }} MenuProps={{ PaperProps: { sx: { width: 270, maxWidth: 270 } } }} value={adapter} disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || status.connected || busy} onChange={(e) => selectAdapter(e.target.value)}>{adapters.map((item) => <MenuItem value={item.name} key={item.name} title={item.description || item.name} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12 }}>{item.description || item.name}</MenuItem>)}</Select></FormControl>
+            <Button size="small" variant={status.connected ? "outlined" : "contained"} color={status.connected ? "error" : "primary"} startIcon={connecting ? <CircularProgress size={18} color="inherit" /> : <UsbRounded />} disabled={!bridgeAvailable || eepromExclusive || (status.connected ? disconnectBusy : busy || adaptersLoading) || (!status.connected && !adapter)} onClick={connect} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>{status.connected ? "断开" : "连接"}</Button>
+            <Button size="small" variant="outlined" startIcon={<RefreshRounded className={scanning ? "operation-icon-spinning" : undefined} />} disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || busy || !status.connected || status.cycle_running} onClick={scan} sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>扫描</Button>
           </Box>
         </Toolbar>
       </AppBar>
-      {communicationErrors.length > 0 && <Alert severity="error" title={communicationErrors.map((item) => item.state_error).join("\n")} sx={{ borderRadius: 0, flexShrink: 0 }}>
+      {adapterLoadError && <Alert severity="error" sx={{ borderRadius: 0, flexShrink: 0 }} action={<Button color="inherit" size="small" disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || busy} onClick={() => reloadAdaptersRef.current()}>重新加载网卡</Button>}>{adapterLoadError}</Alert>}
+      {communicationErrors.length > 0 && <Alert severity="error" sx={{ borderRadius: 0, flexShrink: 0 }}>
         从站 {communicationErrors.map((item) => item.position).join("、")} 通信异常，请检查供电、网线及设备状态。
       </Alert>}
       <Box sx={{ display: "flex", minHeight: 0, flex: 1 }}>
-        {status.slaves.length > 0 && slaveListExpanded && <Box component="aside" sx={{ width: { xs: 210, xl: 224 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}>{status.slaves.some((item) => item.state_error) ? <Chip size="small" label="—" /> : <StateChip state={busState!} />}</Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 32, alignItems: "center" }}>
+        {status.slaves.length > 0 && <Box component="aside" sx={{ width: { xs: 190, xl: 204 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}>{status.slaves.some((item) => item.state_error) ? <Chip size="small" label="—" /> : <StateChip state={busState!} />}</Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 32, alignItems: "center" }}>
                   <Box sx={{ position: "relative", display: "inline-flex" }}>
                     <DeveloperBoardRounded className="slave-state-icon" data-state={item.state_error ? 0 : item.state} sx={{ fontSize: 22 }} />
                     {!item.state_error && Boolean((item.raw_state ?? item.state) & 0x10) && <WarningAmberRounded titleAccess="状态错误" color="error" sx={{ position: "absolute", right: -4, top: -5, fontSize: 13, bgcolor: "background.paper", borderRadius: "50%" }} />}
                   </Box>
-                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${item.state_error ? "通信异常" : item.state === 0 ? "—" : stateLabel(item.state)}${!item.state_error && (item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} IN ${item.input_size ?? "—"}B | OUT ${item.output_size ?? "—"}B`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5 }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5, color: item.state_error ? "error.main" : undefined }} /></ListItemButton>)}</List></Box>}
+                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${item.state_error ? "通信异常" : item.state === 0 ? "—" : stateLabel(item.state)}${!item.state_error && (item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} IN ${item.input_size ?? "—"}B | OUT ${item.output_size ?? "—"}B`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5, title: slaveDisplayName(item) }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5, color: item.state_error ? "error.main" : undefined }} /></ListItemButton>)}</List></Box>}
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, py: page === "overview" ? 1.5 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
-            {/* Match page titles to the overview placement before the slave-list toggle. */}
             {page === "eeprom" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>EEPROM</Typography>}
             {page === "registers" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>寄存器</Typography>}
-            {status.slaves.length > 0 && <Tooltip title={slaveListExpanded ? "收起从站列表" : "展开从站列表"}><IconButton size="small" aria-label={slaveListExpanded ? "收起从站列表" : "展开从站列表"} onClick={() => setSlaveListExpanded((value) => !value)}>{slaveListExpanded ? <ChevronLeftRounded /> : <MenuRounded />}</IconButton></Tooltip>}
             <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slaveDisplayName(slave)}>从站 {slave.position} · {slaveDisplayName(slave)}</Typography>
             {page !== "overview" && (slave.state_error ? <Chip size="small" color="error" label="通信异常" /> : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />)}
             {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refreshStates)}>刷新状态</Button>}
           </Stack>}
-        <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: page === "eeprom" ? "hidden" : "auto", p: { xs: 1.5, xl: 2 } }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto", ...(page === "eeprom" ? { height: "100%", minHeight: 0, display: "flex", flexDirection: "column" } : {}) }}>{bridgeExit && <Alert severity="error" action={bridgeExit.log_path ? <Button color="inherit" size="small" onClick={() => revealPath(bridgeExit.log_path!)}>打开日志</Button> : undefined} sx={{ mb: 1.25 }}><Typography fontWeight={700}>通信服务已退出</Typography><Typography variant="body2">软件将尝试恢复连接，请重新读取设备状态后再操作。</Typography>{bridgeExit.log_path && <Typography variant="caption" className="mono" sx={{ overflowWrap: "anywhere" }}>日志：{bridgeExit.log_path}</Typography>}</Alert>}{content}</Box></Box>
+        <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: page === "eeprom" ? "hidden" : "auto", p: { xs: 1.5, xl: 2 } }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto", ...(page === "eeprom" ? { height: "100%", minHeight: 0, display: "flex", flexDirection: "column" } : {}) }}>{bridgeExit && <Alert severity="error" sx={{ mb: 1.25 }}><Typography fontWeight={700}>设备连接已中断</Typography><Typography variant="body2">请重新连接网卡；如仍无法使用，请重启软件。</Typography></Alert>}<Suspense fallback={<Box sx={{ p: 3 }}><CircularProgress size={24} /></Box>}>{content}</Suspense></Box></Box>
         </Box>
       </Box>
     </Box>
@@ -1452,42 +1032,10 @@ export default function App() {
         <ListItemText primary="烧录 EEPROM" />
       </MenuItem>
     </Menu>
-    <QuickEepromFlashDialog open={quickFlashOpen} slave={slave} status={status} progress={progress} autoResetEsc={eepromAutoReset} setProgress={setProgress} onClose={() => setQuickFlashOpen(false)} onOpenDetails={(selection) => { setQuickFlashOpen(false); setEepromDetailSelection(selection); navigate("eeprom"); }} />
-    <Dialog open={settings} onClose={() => setSettings(false)} fullWidth maxWidth="sm">
-      <DialogTitle sx={{ pb: 1 }}>设置</DialogTitle>
-      <Tabs value={settingsTab} onChange={(_, value) => setSettingsTab(value)} sx={{ px: 2.5, minHeight: 42 }}>
-        <Tab icon={<SettingsRounded fontSize="small" />} iconPosition="start" label="通用" sx={{ minHeight: 42 }} />
-        <Tab icon={<InfoOutlineRounded fontSize="small" />} iconPosition="start" label="关于" sx={{ minHeight: 42 }} />
-      </Tabs>
-      <Divider />
-      <DialogContent sx={{ minHeight: 360 }}>
-        {settingsTab === 0 ? <Stack spacing={2} sx={{ pt: 0.5 }}>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>AL 状态码语言</Typography><Typography variant="body2" color="text.secondary">切换概览页 AL 状态名称、说明与排查建议。</Typography></Box><FormControl size="small" sx={{ width: 150 }}><InputLabel>Language</InputLabel><Select label="Language" value={alLanguage} onChange={(event) => { const value = event.target.value as AlStatusLanguage; setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }}><MenuItem value="zh">中文</MenuItem><MenuItem value="en">English</MenuItem></Select></FormControl></Box>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>自动检查更新</Typography><Typography variant="body2" color="text.secondary">开启后发现新版本会显示更新弹窗；关闭后启动时仅在右下角短暂提示，仍可在“关于”页面手动检查。</Typography></Box><Switch checked={autoCheckUpdates} onChange={(event) => { const enabled = event.target.checked; setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} /></Box>
-        </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25, bgcolor: "#F8FAFF" }}>
-            <Box component="img" src={brandIconUrl} alt="BenchCAT" sx={{ width: 72, height: 72, borderRadius: 1.5, display: "block", flexShrink: 0 }} />
-            <Box sx={{ minWidth: 0, flex: 1 }}><Stack direction="row" alignItems="center" gap={1}><Typography variant="h6">BenchCAT</Typography><Chip size="small" variant="outlined" label={`v${packageInfo.version}`} /></Stack><Typography variant="body2" color="text.secondary">面向 Windows 的 EtherCAT 从站调试与诊断工作台</Typography></Box>
-          </Box>
-          <Typography variant="body2" color="text.secondary">聚焦从站概览、ESC 标准寄存器诊断与 EEPROM 原始读取、BIN 文件导出及 XML/BIN 烧录。硬件通信由独立 Python Bridge 与 Worker 串行执行。</Typography>
-          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1.2 }}>
-            {[["版本", packageInfo.version], ["通信核心", "pySOEM 1.1.13"], ["许可证", "PolyForm NC 1.0"]].map(([label, value]) => <Box key={label} sx={{ p: 1.4, border: 1, borderColor: "divider", borderRadius: 1 }}><Typography variant="caption" color="text.secondary">{label}</Typography><Typography variant="body2" fontWeight={700} sx={{ mt: 0.3 }}>{value}</Typography></Box>)}
-          </Box>
-          <Divider />
-          <Stack direction="row" gap={1} flexWrap="wrap">
-            <Button variant="contained" startIcon={<GitHubIcon />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(PROJECT_URL)}>GitHub 项目</Button>
-            <Button variant="outlined" startIcon={<BugReportRounded />} endIcon={<OpenInNewRounded fontSize="small" />} onClick={() => visit(ISSUES_URL)}>问题反馈</Button>
-            <Button variant="outlined" startIcon={updateState === "checking" ? <CircularProgress size={16} /> : <RefreshRounded />} disabled={updateState === "checking" || updating} onClick={() => void checkUpdate()}>{updateState === "checking" ? "正在检查…" : "检查更新"}</Button>
-          </Stack>
-          {updateState === "latest" && <Alert severity="success">当前已是最新版本。</Alert>}
-          {updateState === "error" && updateError && <Alert severity="warning" action={<Stack direction="row"><Button color="inherit" size="small" onClick={() => visit(DOWNLOAD_URL)}>GitHub 手动下载</Button><Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看详情</Button></Stack>} sx={{ overflowWrap: "anywhere" }}>{updateFailureMessage(updateError)}</Alert>}
-          {availableUpdate && updateState === "available" && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }}>查看更新</Button>}>{ignoredUpdateVersion === availableUpdate.version ? `已忽略 v${availableUpdate.version} 的自动提醒，仍可手动更新。` : `发现 v${availableUpdate.version} 更新。${pendingUpdateReminder ? "设备操作结束后将显示更新弹窗。" : ""}`}</Alert>}
-          {updating && <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>}>{UPDATE_STAGE_LABELS[updateState]}，请保持软件运行。</Alert>}
-          <Typography variant="caption" color="text.secondary">Copyright © BenchCAT contributors</Typography>
-        </Stack>}
-      </DialogContent>
-      <DialogActions><Button onClick={() => setSettings(false)}>完成</Button></DialogActions>
-    </Dialog>
+    <QuickEepromFlashDialog open={quickFlashOpen} slave={slave} onSelectSlave={setSelectedPosition} initialSource={quickFlashSource} onInitialSourceConsumed={consumeQuickFlashSource} onBusyChange={setQuickFlashBusy} status={status} progress={progress} autoResetEsc={eepromAutoReset} setProgress={setProgress} onClose={() => { setQuickFlashOpen(false); setQuickFlashSource(undefined); }} onOpenDetails={(selection) => { setQuickFlashOpen(false); setEepromDetailSelection(selection); navigate("eeprom"); }} />
+    {settings && <Suspense fallback={<Dialog open onClose={() => setSettings(false)} fullWidth maxWidth="sm"><DialogContent><CircularProgress size={24} /></DialogContent></Dialog>}>
+      <SettingsDialog onClose={() => setSettings(false)} alLanguage={alLanguage} onLanguageChange={value => { setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }} autoCheckUpdates={autoCheckUpdates} onAutoCheckChange={enabled => { setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} updateState={updateState} updateError={updateError ? updateFailureMessage(updateError) : undefined} updateStageLabel={updating ? UPDATE_STAGE_LABELS[updateState as UpdateStage] : undefined} updating={updating} availableVersion={availableUpdate?.version} ignoredUpdateVersion={ignoredUpdateVersion} pendingUpdateReminder={pendingUpdateReminder} visit={visit} checkUpdate={checkUpdate} onShowUpdate={() => setUpdateDialogOpen(true)} onShowAvailableUpdate={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }} />
+    </Suspense>}
     <UpdateDialog
       open={updateDialogOpen}
       state={updateState}
@@ -1501,7 +1049,7 @@ export default function App() {
       onRetry={() => { if (updateError?.stage === "checking") void checkUpdate(); else void installUpdate(); }}
       onDownloadPage={() => visit(DOWNLOAD_URL)}
     />
-    <Stack spacing={1} sx={{ position: "fixed", bottom: 24, right: 24, maxWidth: 440, zIndex: (theme) => theme.zIndex.snackbar }}>
+    <Stack spacing={1} sx={{ position: "fixed", ...(quickFlashOpen ? { top: 16, left: "50%", transform: "translateX(-50%)" } : { bottom: 24, right: 24 }), maxWidth: 440, zIndex: (theme) => theme.zIndex.snackbar }}>
     <Snackbar open={!updateDialogOpen && updating} style={{ position: "static", transform: "none" }}>
       <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>} sx={{ width: 440, "& .MuiAlert-message": { flex: 1 } }}>
         <Typography fontWeight={700}>BenchCAT · {updating ? UPDATE_STAGE_LABELS[updateState] : "在线更新"}</Typography>
