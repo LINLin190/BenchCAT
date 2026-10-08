@@ -43,6 +43,35 @@ class FailingStartupBackend(MockBackend):
         raise RuntimeError("backend startup failed")
 
 
+def test_readiness_waits_for_backend_initialization_and_preserves_startup_failure() -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def delayed_backend():
+        entered.set()
+        release.wait(2)
+        return MockBackend()
+
+    worker = EtherCatWorker(delayed_backend)
+    worker.start()
+    try:
+        assert entered.wait(1)
+        with pytest.raises(TimeoutError):
+            worker.wait_ready(timeout_s=0.01)
+        release.set()
+        worker.wait_ready(timeout_s=1)
+        assert worker.submit("enumerate_adapters").result(timeout=1)[0].name == "demo0"
+    finally:
+        release.set()
+        worker.shutdown()
+
+    failed = EtherCatWorker(FailingStartupBackend)
+    failed.start()
+    with pytest.raises(RuntimeError, match="backend startup failed"):
+        failed.wait_ready(timeout_s=1)
+    failed.shutdown()
+
+
 def test_mock_p0_and_worker_serialization() -> None:
     worker = EtherCatWorker(MockBackend)
     worker.start()

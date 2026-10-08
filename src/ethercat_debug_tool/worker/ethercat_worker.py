@@ -70,6 +70,7 @@ class EtherCatWorker:
         self._cycle_positions: set[int] = set()
         self._next_state_check = 0.0
         self._state = WorkerState.STARTING
+        self._startup: Future[None] = Future()
 
     @property
     def state(self) -> WorkerState:
@@ -89,6 +90,9 @@ class EtherCatWorker:
     def start(self) -> None:
         if not self._thread.is_alive():
             self._thread.start()
+
+    def wait_ready(self, timeout_s: float) -> None:
+        self._startup.result(timeout=timeout_s)
 
     def submit(
         self,
@@ -284,6 +288,7 @@ class EtherCatWorker:
             self._backend = self._backend_factory()
         except BaseException as exc:
             self._state = WorkerState.EXITED
+            self._startup.set_exception(exc)
             self._events.put(WorkerEvent("worker_fatal", exc))
             while True:
                 try:
@@ -294,6 +299,7 @@ class EtherCatWorker:
                     task.future.set_exception(RuntimeError(f"EtherCAT Worker failed to start: {exc}"))
             return
         self._state = WorkerState.READY
+        self._startup.set_result(None)
         self._events.put(WorkerEvent("ready", None))
         try:
             while not self._stop.is_set():

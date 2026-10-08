@@ -15,6 +15,7 @@ from typing import Any
 
 from .bridge import BridgeRuntime, _json_value, _structured_error
 from .infrastructure import default_audit_path
+from .infrastructure.library_index import default_library_index_path
 from .models import BackendMode
 from .services.manual_service import read_manual
 
@@ -83,6 +84,7 @@ class WebBridgeService:
             self.writer,  # type: ignore[arg-type]
             BackendMode.REAL,
             audit_path=audit_path or default_audit_path(),
+            library_index_path=default_library_index_path(),
         )
 
     def snapshot(self) -> dict[str, Any]:

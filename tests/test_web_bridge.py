@@ -23,7 +23,7 @@ class _FakeRegistry:
 class _FakeRuntime:
     created_mode: BackendMode | None = None
 
-    def __init__(self, writer: Any, mode: BackendMode, *, audit_path: Any) -> None:
+    def __init__(self, writer: Any, mode: BackendMode, *, audit_path: Any, library_index_path: Any) -> None:
         self.writer = writer
         self.registry = _FakeRegistry()
         self.session_id = 7

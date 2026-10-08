@@ -111,3 +111,62 @@ def test_library_cache_is_bounded(runtime, tmp_path, monkeypatch):
     result = runtime.dispatch("esi_library_list", {"directory": str(tmp_path)})
     assert len(result["entries"]) == 4
     assert len(runtime._library_cache) == 2
+
+
+def test_library_index_reuses_xml_across_restarts_but_selection_is_fresh(tmp_path, monkeypatch):
+    source = tmp_path / "source.xml"
+    source.write_text(
+        '<EtherCATInfo><Vendor><Id>2</Id></Vendor><Descriptions><Devices>'
+        '<Device><Type ProductCode="1" RevisionNo="1">Device</Type>'
+        '<Eeprom><ByteSize>2048</ByteSize><ConfigData>050E</ConfigData></Eeprom>'
+        '</Device></Devices></Descriptions></EtherCATInfo>', encoding="utf-8",
+    )
+    index = tmp_path / "cache" / "index.json"
+    original = EsiParser.parse
+    calls = []
+
+    def counted(parser, path):
+        calls.append(path)
+        return original(parser, path)
+
+    monkeypatch.setattr(EsiParser, "parse", counted)
+    for launch in range(2):
+        runtime = BridgeRuntime(ProgressWriter(), BackendMode.DEMO, library_index_path=index)
+        try:
+            result = runtime.dispatch("esi_library_list", {"directory": str(tmp_path)})
+            assert result["entries"][0]["config_data"] == b"\x05\x0e"
+            assert len(calls) == 1
+            if launch == 1:
+                source.write_text(source.read_text(encoding="utf-8").replace("050E", "800E"), encoding="utf-8")
+                loaded = runtime.dispatch("esi_load", {"path": str(source)})
+                assert loaded["devices"][0].config_data == b"\x80\x0e"
+                assert len(calls) == 2
+                result = runtime.dispatch("esi_library_list", {"directory": str(tmp_path)})
+                assert result["entries"][0]["config_data"] == b"\x80\x0e"
+                assert len(calls) == 3
+                runtime.dispatch("esi_library_list", {"directory": str(tmp_path), "refresh": True})
+                assert len(calls) == 4
+        finally:
+            runtime.shutdown()
+
+
+def test_library_index_prunes_deleted_files_and_ignores_corrupt_cache(tmp_path):
+    import json
+
+    index = tmp_path / "cache" / "index.json"
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"\x01\x02")
+    for launch in range(3):
+        runtime = BridgeRuntime(ProgressWriter(), BackendMode.DEMO, library_index_path=index)
+        try:
+            result = runtime.dispatch("esi_library_list", {"directory": str(tmp_path)})
+            assert len(result["entries"]) == (0 if launch == 1 else 1)
+            persisted = json.loads(index.read_text(encoding="utf-8"))
+            assert len(persisted["sources"]) == (0 if launch == 1 else 1)
+        finally:
+            runtime.shutdown()
+        if launch == 0:
+            source.unlink()
+        elif launch == 1:
+            index.write_text("{corrupted", encoding="utf-8")
+            source.write_bytes(b"\x03\x04")

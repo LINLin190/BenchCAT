@@ -35,6 +35,7 @@ from .esi import EsiParser
 from .esi.config_editor import EsiConfigSaveError, save_config_data
 from .framing import FrameError, IncrementalFrameReader, write_frame
 from .infrastructure import AuditLogger, default_audit_path
+from .infrastructure.library_index import LibraryIndex, default_library_index_path
 from .master_state import MasterStateMachine, StaleMasterSession
 from .models import AccessSemantics, BackendMode, EtherCatState, OperationProgress, PdoDirection, SlaveInfo
 from .services.eeprom_service import EepromService, compare_images
@@ -344,6 +345,7 @@ class BridgeRuntime:
         mode: BackendMode = BackendMode.REAL,
         *,
         audit_path: Path | None = None,
+        library_index_path: Path | None = None,
         rediscovery_timeout_s: float = 3.0,
         rediscovery_poll_s: float = 0.1,
     ) -> None:
@@ -358,6 +360,7 @@ class BridgeRuntime:
         self._asset_lock = threading.Lock()
         self._library_lock = threading.Lock()
         self._library_cache: dict[Path, tuple[tuple[int, int], list[dict[str, Any]], str | None]] = {}
+        self._library_index = LibraryIndex(library_index_path, MAX_STORED_LIBRARY_SOURCES)
         self._last_progress: tuple[str, str, int | None, int, float] | None = None
         self.profiles = ProfileRegistry()
         self.audit = AuditLogger(audit_path)
@@ -482,7 +485,8 @@ class BridgeRuntime:
                         "worker_fatal",
                     }:
                         self._publish_snapshot()
-                    self.writer.event(event.kind, event.payload, event.session_id)
+                    # Worker initialization is distinct from complete bridge readiness.
+                    self.writer.event("worker_ready" if event.kind == "ready" else event.kind, event.payload, event.session_id)
                 except StaleMasterSession:
                     continue
                 except BaseException:
@@ -666,10 +670,13 @@ class BridgeRuntime:
         cached = self._library_cache.get(source)
         if not refresh and cached is not None and cached[0] == stamp:
             return cached[1], cached[2]
+        indexed = None if refresh else self._library_index.get(source, stamp)
         entries: list[dict[str, Any]] = []
         error = None
         try:
-            if source.suffix.lower() == ".bin":
+            if indexed is not None:
+                entries = indexed
+            elif source.suffix.lower() == ".bin":
                 if not stat.st_size:
                     raise ValueError("烧录文件不能为空")
                 validate_eeprom_range(0, stat.st_size + stat.st_size % 2)
@@ -698,6 +705,10 @@ class BridgeRuntime:
             self._library_cache[source] = (stamp, entries, error)
             if len(self._library_cache) > MAX_STORED_LIBRARY_SOURCES:
                 self._library_cache.pop(next(iter(self._library_cache)))
+            if error is None:
+                self._library_index.remember(source, stamp, entries)
+            else:
+                self._library_index.forget(source)
         return entries, error
 
     def _audited(self, action: str, details: dict[str, Any], operation: Any) -> Any:
@@ -1541,6 +1552,7 @@ class BridgeRuntime:
             sources = {item for item in library.iterdir() if item.is_file() and item.suffix.lower() in {".xml", ".bin"}}
             # Serialize concurrent listings and prune removed files from this directory.
             with self._library_lock:
+                self._library_index.prune(library, sources)
                 for cached_path in list(self._library_cache):
                     if cached_path.parent == library and cached_path not in sources:
                         self._library_cache.pop(cached_path)
@@ -1552,6 +1564,7 @@ class BridgeRuntime:
                             errors.append({"path": str(source), "error": error})
                     except Exception as exc:
                         errors.append({"path": str(source), "error": str(exc)})
+                self._library_index.flush()
             return {"directory": str(library), "entries": entries, "errors": errors}
         if method == "esi_load":
             document = EsiParser().parse(Path(params["path"]))
@@ -1574,6 +1587,8 @@ class BridgeRuntime:
             # Explicit saves invalidate even when filesystem timestamps are preserved.
             with self._library_lock:
                 self._library_cache.pop(Path(document.path).resolve(), None)
+                self._library_index.forget(Path(document.path).resolve())
+                self._library_index.flush()
             return {
                 "document_id": document_id,
                 "path": document.path,
@@ -1915,14 +1930,17 @@ def main() -> int:
     reader = IncrementalFrameReader(registry.max_frame_bytes)
     writer = JsonWriter(response_stream, registry.max_frame_bytes)
     mode = BackendMode(os.environ.get("BENCHCAT_MODE", BackendMode.REAL.value))
-    runtime = BridgeRuntime(writer, mode, audit_path=default_audit_path())
+    runtime = BridgeRuntime(writer, mode, audit_path=default_audit_path(), library_index_path=default_library_index_path())
+    try:
+        runtime.worker.wait_ready(timeout_s=10.0)
+    except BaseException:
+        runtime.shutdown()
+        request_stream.close()
+        response_stream.close()
+        raise
     stopped = threading.Event()
     heartbeat = threading.Thread(target=_heartbeat, args=(runtime, writer, stopped), daemon=True)
     heartbeat.start()
-    writer.event(
-        "ready",
-        {"mode": runtime.mode.value, "protocol_version": registry.protocol_version},
-    )
     pools = {
         "control": ThreadPoolExecutor(max_workers=2, thread_name_prefix="Bridge control"),
         "metadata": ThreadPoolExecutor(max_workers=2, thread_name_prefix="Bridge metadata"),
@@ -1935,6 +1953,10 @@ def main() -> int:
         "metadata": threading.BoundedSemaphore(registry.metadata_queue),
         "hardware": threading.BoundedSemaphore(registry.hardware_queue),
     }
+    writer.event(
+        "ready",
+        {"mode": runtime.mode.value, "protocol_version": registry.protocol_version},
+    )
     try:
         while True:
             try:
