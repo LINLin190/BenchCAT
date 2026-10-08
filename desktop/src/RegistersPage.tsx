@@ -36,6 +36,7 @@ interface RegisterCatalog { catalog: RegisterDefinition[] | null; catalog_versio
 interface CachedRegisters { catalog: RegisterDefinition[]; catalogVersion: string; details: Map<string, RegisterDefinition>; values: Record<string, RegisterValue>; errors: Record<string, string>; snapshot?: RegisterSnapshot }
 const snapshots = new Map<string, CachedRegisters>();
 let cachedSession = "";
+let registerPageVisited = false;
 // Load the PDF engine only when the user opens a reference manual.
 const PdfManualViewer = lazy(() => import("./PdfManualViewer"));
 
@@ -247,7 +248,7 @@ interface RegisterTableProps {
   definitions: RegisterDefinition[]; values: Record<string, RegisterValue>; changes: Record<string, ValueChange>;
   errors: Record<string, string>; favorites: Set<string>; selectedKey: string; favoriteFeedback?: string;
   format: ValueFormat; monitor: boolean; writing: boolean; reading: boolean; scope: string;
-  loading: boolean; emptyText: string; detailsVisible: boolean;
+  loading: boolean; emptyText: string; detailsVisible: boolean; animateDetails: boolean;
   onSelect: RegisterRowProps["onSelect"]; onFavorite: RegisterRowProps["onFavorite"];
 }
 const registerRowHeight = 36;
@@ -256,7 +257,7 @@ const registerOverscan = 8;
 
 /** Keep only viewport rows mounted while spacer rows preserve the full scroll range. */
 const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, values, changes, errors, favorites, selectedKey,
-  favoriteFeedback, format, monitor, writing, reading, scope, loading, emptyText, detailsVisible, onSelect, onFavorite }: RegisterTableProps) {
+  favoriteFeedback, format, monitor, writing, reading, scope, loading, emptyText, detailsVisible, animateDetails, onSelect, onFavorite }: RegisterTableProps) {
   const container = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   useLayoutEffect(() => {
@@ -299,7 +300,7 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
     {/* Adjust the value column position with the detail panel while keeping header and cells aligned. */}
     <Table stickyHeader size="small" aria-rowcount={definitions.length + 1} sx={{ tableLayout: "fixed", "& td, & th": { fontSize: 12, py: 0.5, borderColor: "#EEF1F6", boxSizing: "border-box", height: registerRowHeight }, "& th": { py: 0, height: registerHeaderHeight } }}>
       <TableHead><TableRow aria-rowindex={1}>
-        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: detailsVisible ? 192 : 320, transition: `width ${detailsVisible ? 180 : 140}ms ease-out`, "@media (prefers-reduced-motion: reduce)": { transition: "none" } }}>当前值</TableCell>
+        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: detailsVisible ? 192 : 320, transition: animateDetails ? `width ${detailsVisible ? 180 : 140}ms ease-out` : "none", "@media (prefers-reduced-motion: reduce)": { transition: "none" } }}>当前值</TableCell>
         <TableCell sx={{ width: 58 }}>权限</TableCell><TableCell sx={{ width: 58 }}>宽度</TableCell><TableCell sx={{ width: 32 }} />
       </TableRow></TableHead>
       <TableBody>
@@ -320,15 +321,15 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
 });
 
 /** Retain the last details through exit without keeping the panel interactive. */
-function RegisterDetailsPanel({ open, children }: { open: boolean; children: ReactNode }) {
+function RegisterDetailsPanel({ open, animate, children }: { open: boolean; animate: boolean; children: ReactNode }) {
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const content = useRef<ReactNode>(null);
   if (open) content.current = children;
   return <Collapse in={open} orientation="horizontal" easing="ease-out" appear mountOnEnter unmountOnExit
-    timeout={reduceMotion ? 0 : { enter: 180, exit: 140 }}
+    timeout={reduceMotion || !animate ? 0 : { enter: 180, exit: 140 }}
     sx={{ flexShrink: 0, height: "100%", "& .MuiCollapse-wrapper, & .MuiCollapse-wrapperInner": { height: "100%" } }}>
     <Box inert={!open} aria-hidden={!open} sx={{ width: 352, pl: 1.5, height: "100%", boxSizing: "border-box",
-      animation: reduceMotion ? "none" : `${open ? "register-details-enter" : "register-details-exit"} ${open ? 180 : 140}ms ease-out both`,
+      animation: reduceMotion || !animate ? "none" : `${open ? "register-details-enter" : "register-details-exit"} ${open ? 180 : 140}ms ease-out both`,
       "@keyframes register-details-enter": { from: { opacity: 0, transform: "translateX(12px)" }, to: { opacity: 1, transform: "translateX(0)" } },
       "@keyframes register-details-exit": { from: { opacity: 1, transform: "translateX(0)" }, to: { opacity: 0, transform: "translateX(12px)" } },
     }}>{open ? children : content.current}</Box>
@@ -336,6 +337,8 @@ function RegisterDetailsPanel({ open, children }: { open: boolean; children: Rea
 }
 /** A session snapshot serves all list views; only explicit monitoring repeats reads. */
 export const RegistersPage = memo(function RegistersPage({ slave, run, onError, registerProfile, deviceOperationsBlocked, sessionContext }: Props) {
+  const [animateDetails, setAnimateDetails] = useState(() => !registerPageVisited);
+  useEffect(() => { registerPageVisited = true; }, []);
   const outerTheme = useTheme();
   // The nested theme also reaches portal menus and dialogs, without affecting other pages.
   const registerTheme = useMemo(() => createTheme(outerTheme, {
@@ -970,12 +973,12 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   // Stable row callbacks dispatch to the current page logic without stale session state.
   const rowActions = useRef({ select: selectDefinition });
   rowActions.current = { select: selectDefinition };
-  const selectRow = useCallback((definition: RegisterDefinition) => { void rowActions.current.select(definition); }, []);
-  // Select once per device context so closing details remains a deliberate choice.
-  useEffect(() => {
+  const selectRow = useCallback((definition: RegisterDefinition) => { setAnimateDetails(true); void rowActions.current.select(definition); }, []);
+  // Select before paint on re-entry; only the first page visit animates automatically.
+  useLayoutEffect(() => {
     if (defaultSelectionDone.current || monitor || writing || deviceOperationsBlocked || !displayed.length) return;
     defaultSelectionDone.current = true;
-    if (!selected) selectRow(displayed[0]);
+    if (!selected) void rowActions.current.select(displayed[0]);
   }, [context, displayed, monitor, writing, deviceOperationsBlocked, selected, selectRow]);
   const favoriteRow = useCallback((definition: RegisterDefinition, monitoring: boolean, favorite: boolean) => {
     const key = definitionKey(definition);
@@ -1015,7 +1018,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
     <Box sx={{ display: "flex", height: monitor ? "calc(100vh - 199px)" : "calc(100vh - 161px)", minHeight: 380 }}>
       <Card variant="outlined" sx={{ flex: 1, minWidth: 0, overflow: "hidden", borderRadius: 1.5, display: "flex", flexDirection: "column", boxShadow: "none" }}>
         <VirtualRegisterTable definitions={displayed} values={values} changes={changes} errors={errors} favorites={favorites}
-          selectedKey={selectedKey} favoriteFeedback={favoriteFeedback} format={format} monitor={monitor} writing={writing} reading={reading} detailsVisible={Boolean(selected)}
+          selectedKey={selectedKey} favoriteFeedback={favoriteFeedback} format={format} monitor={monitor} writing={writing} reading={reading} detailsVisible={Boolean(selected)} animateDetails={animateDetails}
           scope={`${monitor}:${view}:${group}:${deferredQuery}:${showReservedAddresses}`} loading={catalogLoading}
           emptyText={monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
           onSelect={selectRow} onFavorite={favoriteRow} />
@@ -1024,13 +1027,13 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
           <Typography fontSize={11} color={pageError ? "error.main" : "text.secondary"}>{reading ? "正在读取…" : snapshotInfo ? `${snapshotInfo.cancelled ? "读取已取消 · " : ""}${new Date(snapshotInfo.timestamp * 1000).toLocaleTimeString("zh-CN", { hour12: false })} · ${snapshotInfo.duration_ms.toFixed(1)} ms` : "尚未读取"}</Typography>
         </Stack>
       </Card>
-      <RegisterDetailsPanel open={Boolean(selected)}>{selected && <Card variant="outlined" sx={{ height: "100%", minWidth: 0, overflow: "auto", borderRadius: 1.5, boxShadow: "none" }}><Stack spacing={1.75} sx={{ p: 2 }}>
+      <RegisterDetailsPanel open={Boolean(selected)} animate={animateDetails}>{selected && <Card variant="outlined" sx={{ height: "100%", minWidth: 0, overflow: "auto", borderRadius: 1.5, boxShadow: "none" }}><Stack spacing={1.75} sx={{ p: 2 }}>
         <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={0.5}><Box minWidth={0}>
           <Typography fontSize={14} fontWeight={500} sx={{ overflowWrap: "anywhere" }}>{registerDisplayName(selected)}</Typography>
           {registerDisplayName(selected) !== registerLabel(selected.name) && <Typography fontSize={11} color="text.secondary" sx={{ mt: 0.25 }}>{registerLabel(selected.name)}</Typography>}
           <Typography fontSize={12} color="text.secondary" sx={{ mt: 0.5 }}><Box component="span" className="mono" sx={{ fontWeight: 650, color: "text.primary" }}>{selected.address_text ?? hex(selected.address)}</Box> · {registerWidth(selected)} B · <RegisterAccess access={selected.master_access ?? selected.access} /></Typography>
           {(!ecatAccessible(selected) || selected.address_space !== "esc_core") && <Typography fontSize={11} color="text.secondary">{groupLabels[functionGroup(selected)] ?? selected.address_space_label}{!ecatAccessible(selected) ? <Tooltip title={unavailableReason(selected)}><Box component="span"> · ECAT不可访问</Box></Tooltip> : " · 手动读取"}</Typography>}
-        </Box><IconButton size="small" aria-label="关闭寄存器详情" disabled={writing} onClick={() => { requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}><CloseRounded sx={{ fontSize: 17 }} /></IconButton></Stack>
+        </Box><IconButton size="small" aria-label="关闭寄存器详情" disabled={writing} onClick={() => { setAnimateDetails(true); requestSequence.current += 1; setSelected(undefined); setWriteContext(undefined); }}><CloseRounded sx={{ fontSize: 17 }} /></IconButton></Stack>
         <Box sx={{ bgcolor: "#F6F8FC", borderRadius: 1, p: 1.5 }}>
           <Stack direction="row" alignItems="center" justifyContent="space-between"><Typography fontSize={11} color="text.secondary" sx={{ ml: "14px" }}>{errors[selectedKey] ? "上次读取值" : "当前值"}</Typography><Stack direction="row" spacing={0.25}>
             <Tooltip title={readHint(selected) || "刷新此寄存器"}><span><IconButton size="small" aria-label="刷新此寄存器" disabled={controlsBlocked || !canRead(selected) || detailLoading || Boolean(detailError) || selected.is_reserved} onClick={() => { setWatching(false); setWriteError(""); setWriteMessage(""); enqueueReads([selected]); }}><RefreshRounded sx={{ fontSize: 17 }} /></IconButton></span></Tooltip>
