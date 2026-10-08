@@ -53,6 +53,7 @@ import {
   Typography,
 } from "@mui/material";
 import {
+  AutoStoriesRounded,
   CloseRounded,
   DashboardRounded,
   DeveloperBoardRounded,
@@ -105,6 +106,7 @@ import { checkForUpdate, type AvailableUpdate } from "./updater";
 const RegistersPage = lazy(() => import("./RegistersPage").then(module => ({ default: module.RegistersPage })));
 const EepromPage = lazy(() => import("./EepromPage").then(module => ({ default: module.EepromPage })));
 const SettingsDialog = lazy(() => import("./SettingsDialog").then(module => ({ default: module.SettingsDialog })));
+const FeatureGuideDialog = lazy(() => import("./FeatureGuideDialog").then(module => ({ default: module.FeatureGuideDialog })));
 
 const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
 
@@ -472,6 +474,7 @@ export default function App() {
   const [bridgeExit, setBridgeExit] = useState<BridgeExitInfo>();
   const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" | "warning"; dismissed?: boolean }>();
   const [settings, setSettings] = useState(false);
+  const [featureGuideOpen, setFeatureGuideOpen] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>("idle");
   const [availableUpdate, setAvailableUpdate] = useState<AvailableUpdate>();
   const [updateProgress, setUpdateProgress] = useState({ downloaded: 0, total: 0 });
@@ -971,7 +974,10 @@ export default function App() {
       <List sx={{ px: 0.6, pt: 1.25 }}>{pages.map((item) => <Tooltip key={item.key} title={item.label} placement="right"><span><ListItemButton aria-label={item.label} disabled={(updateState === "preparing" && item.key !== page) || (eepromExclusive && item.key !== "eeprom")} selected={page === item.key} onClick={() => navigate(item.key)} key={item.key} sx={{ minHeight: 52, mb: 0.3, px: 0.3, py: 0.6, flexDirection: "column", gap: 0.45, color: page === item.key ? "primary.main" : "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}>{item.icon}</ListItemIcon><Typography sx={{ fontSize: 11, lineHeight: 1.3, fontWeight: page === item.key ? 700 : 500 }}>{item.label}</Typography></ListItemButton></span></Tooltip>)}</List>
       <Box sx={{ flexGrow: 1 }} />
       <Divider />
-      <List sx={{ p: 0.6 }}><Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettings(true); }} sx={{ width: 42, height: 42, minHeight: 42, mx: "auto", p: 0, justifyContent: "center", color: "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}><SettingsRounded sx={{ fontSize: 21 }} /></ListItemIcon></ListItemButton></Tooltip></List>
+      <List sx={{ p: 0.6 }}>
+        <Tooltip title="功能导览" placement="right"><ListItemButton aria-label="功能导览" onClick={() => setFeatureGuideOpen(true)} sx={{ minHeight: 52, mb: 0.3, px: 0.3, py: 0.6, flexDirection: "column", gap: 0.45, color: "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}><AutoStoriesRounded sx={{ fontSize: 21 }} /></ListItemIcon><Typography sx={{ fontSize: 11, lineHeight: 1.3 }}>导览</Typography></ListItemButton></Tooltip>
+        <Tooltip title={"设置"} placement="right"><ListItemButton aria-label="设置" onClick={() => { setSettings(true); }} sx={{ width: 42, height: 42, minHeight: 42, mx: "auto", p: 0, justifyContent: "center", color: "text.secondary" }}><ListItemIcon sx={{ minWidth: 0, color: "inherit" }}><SettingsRounded sx={{ fontSize: 21 }} /></ListItemIcon></ListItemButton></Tooltip>
+      </List>
     </Drawer>
     <Box sx={{ ml: "64px", flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
       <AppBar className="workbench-toolbar" position="static" color="inherit" elevation={0} sx={{ borderBottom: 1, borderColor: "divider", bgcolor: "rgba(255,255,255,.96)" }}>
@@ -1036,7 +1042,10 @@ export default function App() {
     </Menu>
     <QuickEepromFlashDialog open={quickFlashOpen} slave={slave} onSelectSlave={setSelectedPosition} initialSource={quickFlashSource} onInitialSourceConsumed={consumeQuickFlashSource} onBusyChange={setQuickFlashBusy} status={status} progress={progress} autoResetEsc={eepromAutoReset} setProgress={setProgress} onClose={() => { setQuickFlashOpen(false); setQuickFlashSource(undefined); }} onOpenDetails={(selection) => { setQuickFlashOpen(false); setEepromDetailSelection(selection); navigate("eeprom"); }} />
     {settings && <Suspense fallback={<Dialog open onClose={() => setSettings(false)} fullWidth maxWidth="sm"><DialogContent><CircularProgress size={24} /></DialogContent></Dialog>}>
-      <SettingsDialog onClose={() => setSettings(false)} alLanguage={alLanguage} onLanguageChange={value => { setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }} autoCheckUpdates={autoCheckUpdates} onAutoCheckChange={enabled => { setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} updateState={updateState} updateError={updateError ? updateFailureMessage(updateError) : undefined} updateStageLabel={updating ? UPDATE_STAGE_LABELS[updateState as UpdateStage] : undefined} updating={updating} availableVersion={availableUpdate?.version} ignoredUpdateVersion={ignoredUpdateVersion} pendingUpdateReminder={pendingUpdateReminder} visit={visit} checkUpdate={checkUpdate} onShowUpdate={() => setUpdateDialogOpen(true)} onShowAvailableUpdate={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }} />
+      <SettingsDialog onClose={() => setSettings(false)} onOpenGuide={() => { setSettings(false); setFeatureGuideOpen(true); }} alLanguage={alLanguage} onLanguageChange={value => { setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }} autoCheckUpdates={autoCheckUpdates} onAutoCheckChange={enabled => { setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} updateState={updateState} updateError={updateError ? updateFailureMessage(updateError) : undefined} updateStageLabel={updating ? UPDATE_STAGE_LABELS[updateState as UpdateStage] : undefined} updating={updating} availableVersion={availableUpdate?.version} ignoredUpdateVersion={ignoredUpdateVersion} pendingUpdateReminder={pendingUpdateReminder} visit={visit} checkUpdate={checkUpdate} onShowUpdate={() => setUpdateDialogOpen(true)} onShowAvailableUpdate={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }} />
+    </Suspense>}
+    {featureGuideOpen && <Suspense fallback={<Dialog open onClose={() => setFeatureGuideOpen(false)} fullWidth maxWidth="lg"><DialogContent><CircularProgress size={24} /></DialogContent></Dialog>}>
+      <FeatureGuideDialog onClose={() => setFeatureGuideOpen(false)} />
     </Suspense>}
     <UpdateDialog
       open={updateDialogOpen}

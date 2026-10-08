@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider, FormControl, InputLabel, MenuItem, Select, Stack, Switch, Tab, Tabs, Typography } from "@mui/material";
-import { BugReportRounded, GitHub as GitHubIcon, InfoOutlineRounded, OpenInNewRounded, RefreshRounded, SettingsRounded } from "@mui/icons-material";
+import { AutoStoriesRounded, BugReportRounded, GitHub as GitHubIcon, InfoOutlineRounded, OpenInNewRounded, RefreshRounded, SettingsRounded } from "@mui/icons-material";
 import packageInfo from "../package.json";
 import type { AlStatusLanguage } from "./alStatus";
 const brandIconUrl = new URL("./assets/BenchCAT.png", import.meta.url).href;
@@ -9,6 +9,7 @@ const DOWNLOAD_URL = `${PROJECT_URL}/releases/latest`;
 const ISSUES_URL = `${PROJECT_URL}/issues`;
 interface Props {
   onClose: () => void;
+  onOpenGuide: () => void;
   alLanguage: AlStatusLanguage;
   onLanguageChange: (value: AlStatusLanguage) => void;
   autoCheckUpdates: boolean;
@@ -25,7 +26,7 @@ interface Props {
   onShowUpdate: () => void;
   onShowAvailableUpdate: () => void;
 }
-export function SettingsDialog({ onClose, alLanguage, onLanguageChange, autoCheckUpdates, onAutoCheckChange, updateState, updateError, updateStageLabel, updating, availableVersion, ignoredUpdateVersion, pendingUpdateReminder, visit, checkUpdate, onShowUpdate, onShowAvailableUpdate }: Props) {
+export function SettingsDialog({ onClose, onOpenGuide, alLanguage, onLanguageChange, autoCheckUpdates, onAutoCheckChange, updateState, updateError, updateStageLabel, updating, availableVersion, ignoredUpdateVersion, pendingUpdateReminder, visit, checkUpdate, onShowUpdate, onShowAvailableUpdate }: Props) {
   const [settingsTab, setSettingsTab] = useState(0);
   return <Dialog open onClose={onClose} fullWidth maxWidth="sm">
       <DialogTitle sx={{ pb: 1 }}>设置</DialogTitle>
@@ -36,6 +37,7 @@ export function SettingsDialog({ onClose, alLanguage, onLanguageChange, autoChec
       <Divider />
       <DialogContent sx={{ minHeight: 360 }}>
         {settingsTab === 0 ? <Stack spacing={2} sx={{ pt: 0.5 }}>
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>功能导览</Typography><Typography variant="body2" color="text.secondary">了解快捷烧录、XML/BIN 拖入与寄存器参考手册。</Typography></Box><Button variant="outlined" startIcon={<AutoStoriesRounded />} onClick={onOpenGuide} sx={{ flexShrink: 0 }}>查看演示</Button></Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>AL 状态码语言</Typography><Typography variant="body2" color="text.secondary">切换概览页 AL 状态名称、说明与排查建议。</Typography></Box><FormControl size="small" sx={{ width: 150 }}><InputLabel>Language</InputLabel><Select label="Language" value={alLanguage} onChange={(event) => onLanguageChange(event.target.value as AlStatusLanguage)}><MenuItem value="zh">中文</MenuItem><MenuItem value="en">English</MenuItem></Select></FormControl></Box>
           <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 1.25 }}><Box><Typography fontWeight={700}>自动检查更新</Typography><Typography variant="body2" color="text.secondary">开启后发现新版本会显示更新弹窗；关闭后启动时仅在右下角短暂提示，仍可在“关于”页面手动检查。</Typography></Box><Switch checked={autoCheckUpdates} onChange={(event) => onAutoCheckChange(event.target.checked)} /></Box>
         </Stack> : <Stack spacing={2} sx={{ pt: 0.5 }}>
