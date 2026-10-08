@@ -91,7 +91,12 @@ export function requiresManualRead(definition: RegisterDefinition): boolean {
 }
 
 /** Rank exact addresses before containing ranges, address prefixes and text matches. */
-export function registerSearchRank(definition: RegisterDefinition, input: string): number {
+export function registerSearchText(definition: RegisterDefinition): string {
+  return [definition.name, definition.official_name, definition.description, definition.group,
+    registerDisplayName(definition), ...(definition.aliases ?? [])].join(" ").toLowerCase();
+}
+
+export function registerSearchRank(definition: RegisterDefinition, input: string, searchText?: string): number {
   const text = input.trim().toLowerCase();
   if (!text) return 0;
   const range = /^(0x[\da-f]+|[\da-f]+)\s*[-~～]\s*(0x[\da-f]+|[\da-f]+)$/i.exec(text);
@@ -106,8 +111,7 @@ export function registerSearchRank(definition: RegisterDefinition, input: string
     // Normalize leading zeros so 14, 014 and 0x0014 share the same address prefix.
     if (definition.address.toString(16).startsWith(address.toString(16))) return 2;
   }
-  return [definition.name, definition.official_name, definition.description, definition.group,
-    registerDisplayName(definition), ...(definition.aliases ?? [])].join(" ").toLowerCase().includes(text) ? 3 : Infinity;
+  return (searchText ?? registerSearchText(definition)).includes(text) ? 3 : Infinity;
 }
 
 /** Keep boolean searches consistent with the list's address relevance ordering. */

@@ -31,15 +31,42 @@ let sessionId: number | undefined;
 let operations: ReadonlyMap<string, ManagedOperation> = new Map();
 let updateInProgress = false;
 const listeners = new Set<() => void>();
+const activityListeners = new Set<() => void>();
+interface OperationActivity {
+  stateRequestBusy: boolean;
+  hardwareBusy: boolean;
+  scanning: boolean;
+  connecting: boolean;
+  configSaveBusy: boolean;
+  disconnectHardwareBusy: boolean;
+}
+let activity: OperationActivity = { stateRequestBusy: false, hardwareBusy: false, scanning: false, connecting: false, configSaveBusy: false, disconnectHardwareBusy: false };
 
 function publish(next: Map<string, ManagedOperation>) {
   operations = next;
   listeners.forEach((listener) => listener());
+  const nextActivity: OperationActivity = { stateRequestBusy: false, hardwareBusy: false, scanning: false, connecting: false, configSaveBusy: false, disconnectHardwareBusy: false };
+  for (const op of next.values()) {
+    if (terminal.has(op.phase)) continue;
+    nextActivity.stateRequestBusy ||= op.method === "request_state";
+    nextActivity.hardwareBusy ||= op.lane === "hardware" && !["register_watch", "request_state"].includes(op.method);
+    nextActivity.scanning ||= ["scan", "auto_scan"].includes(op.method);
+    nextActivity.connecting ||= ["connect", "disconnect"].includes(op.method);
+    nextActivity.configSaveBusy ||= op.method === "esi_config_save";
+    nextActivity.disconnectHardwareBusy ||= op.lane === "hardware" && !["register_snapshot", "register_watch", "request_state"].includes(op.method);
+  }
+  // Routine request transitions must not redraw the application shell.
+  if ((Object.keys(activity) as (keyof OperationActivity)[]).some((key) => activity[key] !== nextActivity[key])) {
+    activity = nextActivity;
+    activityListeners.forEach((listener) => listener());
+  }
 }
 
 export const operationStore = {
   subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener); },
   snapshot() { return operations; },
+  subscribeActivity(listener: () => void) { activityListeners.add(listener); return () => activityListeners.delete(listener); },
+  activitySnapshot() { return activity; },
   get(id: string) { return operations.get(id); },
   context() { return { pageGeneration, hostGeneration, sessionId }; },
   setUpdateInProgress(value: boolean) { updateInProgress = value; },
@@ -83,11 +110,13 @@ export const operationStore = {
   },
   invalidate(code: string, message: string, predicate: (op: ManagedOperation) => boolean = () => true) {
     const next = new Map(operations);
+    let changed = false;
     for (const [id, op] of next) if (!terminal.has(op.phase) && predicate(op)) {
       const phase: OperationPhase = op.mutating ? "unknown" : "failed";
       next.set(id, { ...op, phase, error: { code, message, operation_result: phase } });
+      changed = true;
     }
-    publish(next);
+    if (changed) publish(next);
   },
   active(method?: string) { return [...operations.values()].some((op) => !terminal.has(op.phase) && (!method || op.method === method)); },
   activeHardware() { return [...operations.values()].some((op) => !terminal.has(op.phase) && op.lane === "hardware" && op.method !== "register_watch"); },

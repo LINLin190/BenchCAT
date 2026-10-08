@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Box, Button, Chip, Collapse, IconButton, InputAdornment, List, ListItemButton, Popover, Stack, Tab, Tabs, TextField, Tooltip, Typography } from "@mui/material";
 import { CloseRounded, DeleteOutlineRounded, ExpandMoreRounded, FolderOpenRounded, RefreshRounded, SearchRounded, StarOutlineRounded, StarRounded } from "@mui/icons-material";
 import { BridgeRequestError, bridgeRequest, revealPath } from "./api";
@@ -40,9 +40,11 @@ export const EepromSources = memo(function EepromSources({ recent, current, disa
     return () => { cancelled = true; };
   }, [active, revision]);
   const entries = useMemo(() => fixedEsiEntries(fixed, library.entries), [fixed, library]);
-  const search = query.trim().toLowerCase();
-  const filteredRecent = useMemo(() => recent.filter(path => path.toLowerCase().includes(search)), [recent, search]);
-  const filteredFixed = useMemo(() => entries.filter(entry => `${entry.path} ${entry.type_name} ${entry.device_name} ${entry.product_code.toString(16)} ${hex(entry.product_code, 8)}`.toLowerCase().includes(search)), [entries, search]);
+  const search = useDeferredValue(query).trim().toLowerCase();
+  const recentSearch = useMemo(() => recent.map(path => ({ path, text: path.toLowerCase() })), [recent]);
+  const fixedSearch = useMemo(() => entries.map(entry => ({ entry, text: `${entry.path} ${entry.type_name} ${entry.device_name} ${entry.product_code.toString(16)} ${hex(entry.product_code, 8)}`.toLowerCase() })), [entries]);
+  const filteredRecent = useMemo(() => recentSearch.filter(item => item.text.includes(search)).map(item => item.path), [recentSearch, search]);
+  const filteredFixed = useMemo(() => fixedSearch.filter(item => item.text.includes(search)).map(item => item.entry), [fixedSearch, search]);
   const fixedIndex = useMemo(() => eepromSourceIndex(entries), [entries]);
   const recentIndex = useMemo(() => eepromSourceIndex(filteredRecent.map(path => ({ path }))), [filteredRecent]);
   const filteredIndex = useMemo(() => eepromSourceIndex(filteredFixed), [filteredFixed]);

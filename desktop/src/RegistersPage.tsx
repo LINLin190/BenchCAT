@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { lazy, memo, Suspense, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Accordion, AccordionDetails, AccordionSummary, Alert, Box, Button, Card, Checkbox,
   CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
@@ -17,7 +17,7 @@ import { operationStore } from "./operationStore";
 import { hex, type RegisterDefinition, type RegisterManualReference, type SlaveInfo } from "./types";
 import {
   decodeRegisterFields, definitionKey, encodeRegisterInput, formatRegisterBinary, formatRegisterValue,
-  requiresManualRead, isCommonRegister, registerSearchRank, parseRegisterAddress, registerDisplayName, registerMeaning,
+  requiresManualRead, isCommonRegister, registerSearchRank, registerSearchText, parseRegisterAddress, registerDisplayName, registerMeaning,
   registerAccessDescription, registerAccessLabel, registerManuals, registerNumber, registerWidth, type RegisterValue, type ValueFormat,
 } from "./registerValues";
 
@@ -161,7 +161,6 @@ function canRead(definition: RegisterDefinition): boolean {
 
 /** Keep communication errors near the affected register. */
 function failureText(error: unknown): string {
-  if (error instanceof BridgeRequestError && !error.failure.session_invalidated) return error.failure.message;
   return error instanceof Error ? error.message : "操作未完成，请检查从站连接。";
 }
 
@@ -512,21 +511,22 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
     });
     return [...catalog.filter((item) => !memorySpaces.includes(item.address_space ?? "")), ...overviews];
   }, [catalog, view, group, registerProfile]);
-  // Calculate relevance once per row, then keep matching addresses ahead of text.
+  const deferredQuery = useDeferredValue(query);
+  const searchCatalog = useMemo(() => listCatalog.map(item => ({ item, itemGroup: functionGroup(item), searchText: registerSearchText(item) })), [listCatalog]);
+  // Keep typing urgent while list filtering and ranking use cached search text.
   const filtered = useMemo(() => {
-    const text = query.trim().toLowerCase();
-    return listCatalog.flatMap((item) => {
-      const itemGroup = functionGroup(item);
+    const text = deferredQuery.trim().toLowerCase();
+    return searchCatalog.flatMap(({ item, itemGroup, searchText }) => {
       if (!ecatAccessible(item) && !isMemoryOverview(item) && !(referenceGroups.includes(group) && itemGroup === group)) return [];
       if (!showReservedAddresses && item.is_reserved) return [];
       if (view === "favorites" && !favorites.has(definitionKey(item))) return [];
       if (!text && view === "common" && !isCommonRegister(item)) return [];
       if (group && itemGroup !== group) return [];
-      const addressRank = registerSearchRank(item, text);
+      const addressRank = registerSearchRank(item, text, searchText);
       const rank = Number.isFinite(addressRank) ? addressRank : text && (groupLabels[itemGroup] ?? "").includes(text) ? 3 : Infinity;
       return Number.isFinite(rank) ? [{ definition: item, rank }] : [];
     }).sort((left, right) => left.rank - right.rank || left.definition.address - right.definition.address).map((item) => item.definition);
-  }, [listCatalog, view, group, query, favorites, showReservedAddresses]);
+  }, [searchCatalog, view, group, deferredQuery, favorites, showReservedAddresses]);
   const displayed = monitor ? pinned : filtered;
   const selectedKey = selected ? definitionKey(selected) : "";
   // Reset conditional tables on selection; reset status is the normal read interpretation.
@@ -979,7 +979,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, registerP
       <Card variant="outlined" sx={{ minWidth: 0, overflow: "hidden", borderRadius: 1.5, display: "flex", flexDirection: "column", boxShadow: "none" }}>
         <VirtualRegisterTable definitions={displayed} values={values} changes={changes} errors={errors} favorites={favorites}
           selectedKey={selectedKey} favoriteFeedback={favoriteFeedback} format={format} monitor={monitor} writing={writing} reading={reading} detailsVisible={Boolean(selected)}
-          scope={`${monitor}:${view}:${group}:${query}:${showReservedAddresses}`} loading={catalogLoading}
+          scope={`${monitor}:${view}:${group}:${deferredQuery}:${showReservedAddresses}`} loading={catalogLoading}
           emptyText={monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
           onSelect={selectRow} onFavorite={favoriteRow} />
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.25, height: 30, flexShrink: 0, borderTop: 1, borderColor: "divider", color: "text.secondary" }}>
