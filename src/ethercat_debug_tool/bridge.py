@@ -26,6 +26,7 @@ from .backends.mock import MockBackend
 from .backends.pysoem_backend import (
     AlControlWriteError,
     PysoemBackend,
+    StateReadFailure,
     StateRequestFailure,
     StateTransitionTimeoutError,
 )
@@ -226,6 +227,11 @@ class EepromExclusiveError(RuntimeError):
 class StateRequestDisplayError(CommunicationError):
     """A state request failure phrased for the ordinary user notification."""
 
+    def __init__(self, message: str, details: dict[str, Any] | None = None, operation_result: str = "failed") -> None:
+        super().__init__(message)
+        self.details = details
+        self.operation_result = operation_result
+
 
 _OPERATION_LABELS = {
     "enumerate_adapters": "检测网卡",
@@ -253,6 +259,8 @@ def _user_error_message(exc: BaseException, code: str, method: str, mutating: bo
         return str(exc)
     if isinstance(exc, StateRequestDisplayError):
         return str(exc)
+    if isinstance(exc, StateReadFailure):
+        return "刷新从站状态未完成；请查看从站状态详情。"
     if code == "CANCELLED":
         return "操作已取消"
     if code == "EEPROM_BUSY":
@@ -283,7 +291,7 @@ def _user_error_message(exc: BaseException, code: str, method: str, mutating: bo
         return f"无法确认{action}的结果。请先刷新设备状态，确认结果后再操作。"
     if code == "VALIDATION":
         return f"{action}未完成。请检查输入和当前操作条件。"
-    return f"{action}未完成。请检查网络连接和设备供电；如果反复出现，请重新扫描设备或重启软件。"
+    return f"{action}未完成。请查看错误详情和当前操作条件。"
 
 
 def _structured_error(
@@ -295,7 +303,11 @@ def _structured_error(
     session_id: int,
     snapshot: Any | None = None,
 ) -> dict[str, Any]:
-    if exc.__class__.__name__ == "EepromOperationCancelled":
+    if isinstance(exc, StateRequestDisplayError):
+        code = "STATE_REQUEST_FAILED"
+    elif isinstance(exc, StateReadFailure):
+        code = "STATE_READ_FAILED"
+    elif exc.__class__.__name__ == "EepromOperationCancelled":
         code = "CANCELLED"
     elif isinstance(exc, EepromExclusiveError):
         code = "EEPROM_BUSY"
@@ -315,6 +327,9 @@ def _structured_error(
         "message": str(exc),
         "user_message": _user_error_message(exc, code, method, mutating),
         "category": (
+            "configuration" if isinstance(exc, StateRequestDisplayError) and exc.details
+            and exc.details.get("phase") in {"initialization", "pdo_mapping"} else
+            "state" if code in {"STATE_REQUEST_FAILED", "STATE_READ_FAILED"} else
             "validation" if code == "VALIDATION" else "busy" if code == "EEPROM_BUSY" else "transport"
         ),
         "recoverable": code not in {"WORKER_STALLED"},
@@ -324,6 +339,9 @@ def _structured_error(
         "method": method,
         "session_id": session_id,
     }
+    if isinstance(exc, StateRequestDisplayError):
+        error["details"] = exc.details
+        error["operation_result"] = exc.operation_result
     if snapshot is not None:
         error["snapshot"] = snapshot
     return error
@@ -494,6 +512,13 @@ class BridgeRuntime:
                     # terminate the only thread forwarding Worker state changes.
                     continue
 
+    def _record_state_read_failure(self, exc: BaseException, *, expected_session: int | None = None) -> None:
+        if isinstance(exc, StateReadFailure):
+            if self.master_state.states_updated(exc.slaves, expected_session=expected_session, preserve_error=True):
+                self.write_plans.clear()
+        else:
+            self.master_state.state_read_failed(str(exc), expected_session=expected_session)
+
     def _idle_monitor_loop(self) -> None:
         while not self._stopped.wait(0.5):
             try:
@@ -516,7 +541,7 @@ class BridgeRuntime:
             except Exception as exc:
                 if self._stopped.is_set() or self._worker_stalled:
                     return
-                self.master_state.state_read_failed(str(exc), expected_session=before.session_id)
+                self._record_state_read_failure(exc, expected_session=before.session_id)
                 slaves = list(self.master_state.snapshot().slaves)
             if self._stopped.is_set() or tuple(slaves) == before.slaves:
                 return
@@ -527,7 +552,7 @@ class BridgeRuntime:
             unavailable = sorted(current_errors - previous_errors)
             restored = sorted(previous_errors - current_errors)
             if unavailable or restored:
-                self.writer.event("slave_communication_changed", {
+                self.writer.event("slave_state_observation_changed", {
                     "unavailable": unavailable, "restored": restored,
                 }, before.session_id)
         finally:
@@ -1057,7 +1082,7 @@ class BridgeRuntime:
                 # Discovery remains valid even when a follow-up state read has
                 # a transient transport failure. Keep the scanned topology and
                 # surface the read failure in the same published snapshot.
-                self.master_state.state_read_failed(str(exc))
+                self._record_state_read_failure(exc)
             else:
                 if self.master_state.states_updated(refreshed):
                     self.write_plans.clear()
@@ -1068,7 +1093,7 @@ class BridgeRuntime:
             try:
                 slaves = list(self._submit("read_states", **({"refresh_eeprom": True} if params.get("refresh_eeprom") else {})))
             except BaseException as exc:
-                self.master_state.state_read_failed(str(exc))
+                self._record_state_read_failure(exc)
                 self._publish_snapshot()
                 raise
             if self.master_state.states_updated(slaves):
@@ -1081,12 +1106,12 @@ class BridgeRuntime:
             position = int(params["position"])
             try:
                 slaves = list(self._submit("clear_error", position, DEFAULT_STATE_TRANSITION_TIMEOUT_US, timeout=60))
-            except BaseException as exc:
+            except BaseException:
                 if not self._worker_stalled:
                     try:
                         self._dispatch_serial("read_states", {})
-                    except BaseException:
-                        self.master_state.state_read_failed(str(exc))
+                    except BaseException as refresh_error:
+                        self._record_state_read_failure(refresh_error)
                         self._publish_snapshot()
                 raise
             if self.master_state.states_updated(slaves):
@@ -1109,7 +1134,8 @@ class BridgeRuntime:
                     ):
                         return slaves
                 self._dispatch_serial("stop_cycle", {})
-            starting_states = {slave.position: slave.state for slave in self.slaves}
+            starting_states = {slave.position: slave.state for slave in self.slaves
+                               if not slave.state_error and slave.state is not EtherCatState.NONE}
             current: list[SlaveInfo] | None = None
             try:
                 slaves = list(self._submit(
@@ -1122,89 +1148,58 @@ class BridgeRuntime:
                     raise
                 try:
                     current = list(self._submit("read_states"))
-                except BaseException:
-                    self.master_state.state_read_failed("无法读取从站状态")
+                except BaseException as refresh_error:
+                    self._record_state_read_failure(refresh_error)
+                    current = list(self.slaves)
                 else:
                     if self.master_state.states_updated(current):
                         self.write_plans.clear()
                 self._publish_snapshot()
                 failure = exc if isinstance(exc, StateRequestFailure) else None
-                if current is None and failure is not None:
-                    # Use only observations made during this request, never stale cached states.
-                    current = [
-                        dataclasses.replace(
-                            slave, state=EtherCatState(failure.observed[slave.position][0] & 0x0F),
-                            raw_state=failure.observed[slave.position][0],
-                            al_status=failure.observed[slave.position][1], state_error=None,
-                        )
-                        for slave in self.slaves if slave.position in failure.observed
-                    ] or None
-                if current is not None:
-                    failed = [
-                        slave for slave in current
-                        if (slave.position == failure.position if failure is not None and failure.position is not None
-                            else position is None or slave.position == position)
-                        and slave.state_error is None
-                        and (failure is not None or slave.state is not state
-                             or (slave.raw_state or 0) & 0x10 or slave.al_status)
-                    ]
-                    if failed:
-                        write_unconfirmed = isinstance(exc, AlControlWriteError)
-                        timed_out = isinstance(exc, StateTransitionTimeoutError)
+                targets = [slave for slave in (current if current is not None else self.slaves)
+                           if (slave.position == failure.position if failure is not None and failure.position is not None
+                               else position is None or slave.position == position)]
+                phase = failure.phase if failure is not None else "transition"
+                details = {
+                    "phase": phase, "target": int(state),
+                    "positions": [slave.position for slave in targets],
+                    "initial_states": {str(key): int(value) for key, value in
+                                       (failure.initial_states if failure is not None else starting_states).items()},
+                    "observations": [{"position": key, "raw_state": raw, "al_status": code}
+                                     for key, (raw, code) in (failure.observed.items() if failure is not None else ())],
+                    "cause": str(exc),
+                }
+                timed_out = isinstance(exc, StateTransitionTimeoutError) or failure is not None and failure.timed_out
+                write_unconfirmed = isinstance(exc, AlControlWriteError) or failure is not None and failure.write_failed
+                timeout_ms = (failure.timeout_us if failure is not None else MANUAL_STATE_REQUEST_TIMEOUT_US) / 1000
 
-                        def describe(slave: SlaveInfo) -> str:
-                            source = starting_states.get(slave.position, slave.state)
-                            step = state
-                            al_code = slave.al_status
-                            if failure is not None:
-                                source = failure.sources.get(slave.position, source)
-                                step = failure.target
-                                al_code = failure.observed.get(slave.position, (0, 0))[1] or al_code
-                            prefix = f"从站 {slave.position}："
-                            if failure is not None:
-                                duration = failure.timeout_us // 1000
-                                if failure.phase == "refresh":
-                                    outcome = f"{prefix}已进入 {step.label}；设备状态信息刷新未完成"
-                                elif failure.timed_out:
-                                    initial = failure.initial_states.get(
-                                        slave.position, starting_states.get(slave.position, source),
-                                    )
-                                    outcome = (f"{prefix}等待 {initial.label}→{state.label}；"
-                                               f"转换 {duration} ms 后超时；当前为 {slave.state.label}")
-                                elif failure.read_failed:
-                                    outcome = f"{prefix}请求 {state.label} 未完成；状态转换所需的设备信息读取失败"
-                                elif failure.phase in {"initialization", "pdo_mapping", "acknowledgement"}:
-                                    action = {
-                                        "initialization": "设备初始化",
-                                        "pdo_mapping": "PDO 配置",
-                                        "acknowledgement": "清除原有状态错误",
-                                    }[failure.phase]
-                                    outcome = (f"{prefix}请求 {state.label} 未完成；{action}未完成，"
-                                               f"当前为 {slave.state.label}")
-                                elif failure.write_failed:
-                                    outcome = (f"{prefix}请求 {state.label} 未完成；状态请求写入失败，"
-                                               f"当前为 {slave.state.label}")
-                                elif failure.phase == "transition" and al_code:
-                                    outcome = f"{prefix}未进入 {step.label}，当前为 {slave.state.label}"
-                                else:
-                                    outcome = f"{prefix}请求 {state.label} 未完成，当前为 {slave.state.label}"
-                            elif write_unconfirmed:
-                                outcome = f"{prefix}请求 {state.label} 未完成；状态请求写入失败，当前为 {slave.state.label}"
-                            elif timed_out:
-                                transition = f"{starting_states.get(slave.position, source).label}→{state.label}"
-                                outcome = (f"{prefix}等待 {transition}；"
-                                           f"转换 {MANUAL_STATE_REQUEST_TIMEOUT_US // 1000} ms 后超时；"
-                                           f"当前为 {slave.state.label}")
-                            else:
-                                outcome = f"{prefix}请求 {state.label} 未完成，当前为 {slave.state.label}"
-                            if al_code:
-                                return f"{outcome}；AL 错误码 0x{al_code:04X}（{al_status_info(al_code).name}）"
-                            return outcome
+                def describe(slave: SlaveInfo) -> str:
+                    prefix = f"从站 {slave.position}：{state.label} 请求未完成"
+                    # Failed reads retain cached AL values; only report the latest observation.
+                    al_code = slave.observed_al_status if slave.state_error else slave.al_status
+                    current_label = "未知状态" if slave.state_error else slave.state.label
+                    state_separator = "" if slave.state_error else " "
+                    if slave.state_error and slave.raw_state is not None:
+                        current_label += f"(0x{slave.raw_state & 0x0F:02X})"
+                    if al_code:
+                        name = al_status_info(al_code).name
+                        if name == "未知AL状态码":
+                            name = "未知状态码"
+                        return f"{prefix}；当前为{state_separator}{current_label}；AL 错误码 0x{al_code:04X}（{name}）"
+                    if timed_out:
+                        return f"{prefix}；{timeout_ms:g}ms后状态切换超时"
+                    if write_unconfirmed:
+                        return f"{prefix}；无法确认请求结果"
+                    if slave.state_error and slave.raw_state is None:
+                        return f"{prefix}；无法读取从站状态"
+                    return f"{prefix}；当前为{state_separator}{current_label}"
 
-                        raise StateRequestDisplayError("；".join(describe(slave) for slave in failed)) from exc
-                if current is None:
-                    raise StateRequestDisplayError(f"无法读取从站状态，不能确认是否进入 {state.label}") from exc
-                raise StateRequestDisplayError(f"无法确认从站是否进入 {state.label}，请刷新从站状态") from exc
+                message = "；".join(describe(slave) for slave in targets) or f"{state.label} 请求未完成；无法读取从站状态"
+                unconfirmed = (phase == "refresh" or phase not in {"initialization", "pdo_mapping", "acknowledgement"}
+                               and (current is None or any(slave.state_error for slave in targets)
+                                    or isinstance(exc, AlControlWriteError)
+                                    or failure is not None and (failure.write_failed or failure.read_failed)))
+                raise StateRequestDisplayError(message, details, "unknown" if unconfirmed else "failed") from exc
             self.master_state.states_updated(slaves)
             self._publish_snapshot()
             return slaves
@@ -1280,8 +1275,8 @@ class BridgeRuntime:
                     raise
                 try:
                     slaves = list(self._submit("read_states"))
-                except BaseException:
-                    self.master_state.state_read_failed(str(exc))
+                except BaseException as refresh_error:
+                    self._record_state_read_failure(refresh_error)
                 else:
                     self.master_state.cycle_faulted(str(exc), slaves)
                 self._publish_snapshot()

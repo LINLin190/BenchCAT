@@ -42,6 +42,11 @@ export interface SlaveInfo {
   identity_valid?: boolean | null;
   scan_errors?: string[];
   state_error?: string | null;
+  state_error_kind?: "invalid_state" | "read_failed" | "no_response" | "link_disconnected" | null;
+  observed_al_status?: number | null;
+  last_confirmed_state?: number | null;
+  last_confirmed_raw_state?: number | null;
+  last_confirmed_al_status?: number | null;
 }
 
 export interface WorkbenchStatus {

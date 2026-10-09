@@ -35,6 +35,9 @@ def test_probe_is_read_only_and_continues_after_one_slave_times_out():
     initial = backend._slaves[0]
     states = backend.probe_states()
     assert states[0].state_error and states[0].state == initial.state
+    assert states[0].state_error_kind == "no_response"
+    assert states[0].raw_state is None and states[0].observed_al_status is None
+    assert states[0].last_confirmed_state == initial.state
     assert states[1].state is EtherCatState.PRE_OP
     assert states[1].raw_state == 0x12 and states[1].al_status == 0x11
     assert not states[1].state_error
@@ -49,18 +52,43 @@ def test_probe_is_read_only_and_continues_after_one_slave_times_out():
     assert restored[0].identity == initial.identity
 
 
-@pytest.mark.parametrize("values", [
-    [(b"\x02\x00", 0), (b"\x00\x00", 1)],
-    [(b"\x02", 1), (b"\x00\x00", 1)],
-    [(b"\x00\x00", 1), (b"\x00\x00", 1)],
+@pytest.mark.parametrize("values,kind", [
+    ([(b"\x02\x00", 0), (b"\x00\x00", 1)], "no_response"),
+    ([(b"\x02", 1), (b"\x00\x00", 1)], "read_failed"),
+    ([(b"\x00\x00", 1), (b"\x00\x00", 1)], "invalid_state"),
+    ([(b"\x00\x16", 1), (b"\x00\x16", 1)], "invalid_state"),
 ])
-def test_probe_never_presents_invalid_responses_as_online(values):
+def test_probe_never_presents_invalid_responses_as_online(values, kind):
     backend = PysoemBackend()
     backend._master = SimpleNamespace()
     backend._connected = True
     backend._slaves = MockBackend()._slaves[:1]
     backend._passive = SimpleNamespace(read_many=lambda *args: values)
-    assert backend.probe_states()[0].state_error
+    info = backend.probe_states()[0]
+    assert info.state_error
+    assert info.state_error_kind == kind
+    if kind == "invalid_state":
+        assert info.raw_state == int.from_bytes(values[0][0], "little")
+        assert info.observed_al_status == int.from_bytes(values[1][0], "little")
+
+
+def test_invalid_state_keeps_last_confirmation_across_probes_and_clears_on_recovery():
+    backend = PysoemBackend()
+    backend._master = SimpleNamespace()
+    backend._connected = True
+    initial = replace(MockBackend()._slaves[0], state=EtherCatState.PRE_OP, raw_state=2, al_status=0)
+    backend._slaves = [initial]
+    values = [(b"\x00\x16", 1), (b"\x00\x16", 1)]
+    backend._passive = SimpleNamespace(read_many=lambda *args: values)
+    for _ in range(2):
+        info = backend.probe_states()[0]
+        assert info.last_confirmed_state is EtherCatState.PRE_OP
+        assert info.last_confirmed_raw_state == 2 and info.last_confirmed_al_status == 0
+        assert info.raw_state == 0x1600 and info.observed_al_status == 0x1600
+    values[:] = [(b"\x04\x00", 1), (b"\x00\x00", 1)]
+    info = backend.probe_states()[0]
+    assert info.state is EtherCatState.SAFE_OP and info.last_confirmed_state is EtherCatState.SAFE_OP
+    assert info.state_error is None and info.state_error_kind is None
 
 
 class Writer:
@@ -70,7 +98,7 @@ class Writer:
 
     def event(self, kind, payload, session_id=None):
         self.events.append((kind, payload, session_id))
-        if kind == "slave_communication_changed":
+        if kind == "slave_state_observation_changed":
             self.changed.set()
 
 
@@ -114,7 +142,7 @@ def test_idle_monitor_preserves_session_and_only_notifies_changes(monkeypatch, t
         assert not runtime.slaves[0].state_error
         assert runtime.session_id == session
         changes = [(payload, sid) for kind, payload, sid in writer.events
-                   if kind == "slave_communication_changed"]
+                   if kind == "slave_state_observation_changed"]
         assert changes == [({"unavailable": [1], "restored": []}, session),
                            ({"unavailable": [], "restored": [1]}, session)]
     finally:

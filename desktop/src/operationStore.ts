@@ -19,6 +19,17 @@ export interface BridgeFailure {
   operation_result?: "failed" | "unknown";
   session_invalidated?: boolean;
   method?: string;
+  category?: string;
+  details?: StateRequestDetails | null;
+}
+
+export interface StateRequestDetails {
+  phase: string;
+  target: number;
+  positions: number[];
+  initial_states: Record<string, number>;
+  observations: { position: number; raw_state: number; al_status: number }[];
+  cause: string;
 }
 
 type Spec = { lane: ManagedOperation["lane"]; mutating: boolean };
@@ -125,7 +136,7 @@ export const operationStore = {
 export function normalizeBridgeFailure(error: unknown): BridgeFailure {
   if (error && typeof error === "object" && "message" in error) {
     const value = error as Partial<BridgeFailure>;
-    return { code: value.code ?? "UNKNOWN", message: String(value.message), user_message: value.user_message, operation_result: value.operation_result, session_invalidated: value.session_invalidated, method: value.method };
+    return { code: value.code ?? "UNKNOWN", message: String(value.message), user_message: value.user_message, operation_result: value.operation_result, session_invalidated: value.session_invalidated, method: value.method, category: value.category, details: value.details };
   }
   return { code: "UNKNOWN", message: error instanceof Error ? error.message : String(error) };
 }

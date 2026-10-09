@@ -80,6 +80,11 @@ class SlaveInfo:
     identity_valid: bool | None = None
     scan_errors: tuple[str, ...] = ()
     state_error: str | None = None
+    state_error_kind: str | None = None
+    observed_al_status: int | None = None
+    last_confirmed_state: EtherCatState | None = None
+    last_confirmed_raw_state: int | None = None
+    last_confirmed_al_status: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

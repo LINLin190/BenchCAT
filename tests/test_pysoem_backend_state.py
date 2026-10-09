@@ -88,6 +88,10 @@ def test_read_states_reuses_static_scan_information(monkeypatch) -> None:
             "E253",
             "LAN9253_COMPATIBLE",
             raw_state=8,
+            observed_al_status=0,
+            last_confirmed_state=EtherCatState.OP,
+            last_confirmed_raw_state=8,
+            last_confirmed_al_status=0,
         )
     ]
 

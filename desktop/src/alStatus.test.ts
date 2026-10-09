@@ -14,7 +14,7 @@ describe("AL status catalog", () => {
 
   it("distinguishes vendor-specific and unknown standard values", () => {
     expect(alStatusInfo(0x8001).name).toBe("厂商自定义 AL 状态码");
-    expect(alStatusInfo(0x0003).name).toBe("未收录的 AL 状态码");
+    expect(alStatusInfo(0x0003).name).toBe("未知AL状态码");
   });
 
   it("provides English display text for standard and vendor codes", () => {

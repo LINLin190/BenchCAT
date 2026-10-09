@@ -467,7 +467,7 @@ def test_status_and_eeprom_io_ignore_stale_native_slave_context() -> None:
 def test_invalid_al_status_does_not_replace_last_known_state_with_none() -> None:
     device, transport, _ = backend(0x0F, 2)
     transport.state = 0
-    with pytest.raises(Exception, match="AL status 0x0000 无效"):
+    with pytest.raises(Exception, match="AL 状态值无效：0x0000"):
         device.read_states()
     assert device._slaves[0].state is EtherCatState.PRE_OP
 

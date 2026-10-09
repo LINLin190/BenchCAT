@@ -26,6 +26,7 @@ from .passive_discovery import (
     NpcapEthercatTransport,
     PassiveDiscoveryError,
     PassiveMediaDisconnected,
+    PassiveNoResponse,
     PassiveSlave,
     _sm_sizes,
     decode_native_text,
@@ -52,6 +53,42 @@ class StateRegisterReadError(CommunicationError):
     """A state-control register could not be read."""
 
 
+class StateValueError(StateRegisterReadError):
+    """A responding slave returned an invalid AL state value."""
+
+
+class StateReadFailure(CommunicationError):
+    """Retain per-slave observations when a state refresh is incomplete."""
+
+    def __init__(self, slaves: list[SlaveInfo]) -> None:
+        super().__init__("；".join(f"从站 {slave.position}：{slave.state_error}"
+                               for slave in slaves if slave.state_error))
+        self.slaves = slaves
+
+
+def _state_observation(
+    info: SlaveInfo, raw: int | None, code: int | None, error: Exception | None = None,
+) -> SlaveInfo:
+    if error is None and raw is not None and (raw & 0x0F) not in {1, 2, 3, 4, 8}:
+        error = StateValueError(f"AL 状态值无效：0x{raw:04X}")
+    if error is None and raw is not None and code is not None:
+        return replace(info, state=EtherCatState(raw & 0x0F), raw_state=raw, al_status=code,
+                       state_error=None, state_error_kind=None, observed_al_status=code,
+                       last_confirmed_state=EtherCatState(raw & 0x0F),
+                       last_confirmed_raw_state=raw, last_confirmed_al_status=code)
+    kind = ("invalid_state" if isinstance(error, StateValueError) else
+            "link_disconnected" if isinstance(error, PassiveMediaDisconnected) else
+            "no_response" if isinstance(error, PassiveNoResponse) else "read_failed")
+    # Cached states remain useful for control bookkeeping, never as current observations.
+    confirmed = info.state if not info.state_error and info.state is not EtherCatState.NONE else info.last_confirmed_state
+    return replace(info, raw_state=raw, observed_al_status=code,
+                   al_status=code if code is not None else info.al_status,
+                   state_error=str(error), state_error_kind=kind,
+                   last_confirmed_state=confirmed,
+                   last_confirmed_raw_state=info.raw_state if not info.state_error else info.last_confirmed_raw_state,
+                   last_confirmed_al_status=info.al_status if not info.state_error else info.last_confirmed_al_status)
+
+
 @dataclass(slots=True)
 class _StateRequest:
     timeout_us: int
@@ -69,6 +106,7 @@ class _StateRequest:
         self.sources = {
             position: EtherCatState(self.observed[position][0] & 0x0F)
             for position in positions if position in self.observed
+            and (self.observed[position][0] & 0x0F) in {1, 2, 3, 4, 8}
         }
 
     def remaining_us(self) -> int:
@@ -678,7 +716,7 @@ class PysoemBackend:
         except ValueError:
             state = EtherCatState.NONE
         chip_model, family = _chip_from_identification_registers(item.esc_type, item.chip_id)
-        return SlaveInfo(
+        info = SlaveInfo(
             item.position,
             item.name or f"Slave {item.position}",
             SlaveIdentity(*item.identity),
@@ -703,10 +741,13 @@ class PysoemBackend:
             eeprom_capacity=item.eeprom_capacity,
             identity_valid=item.identity_valid,
             scan_errors=item.scan_errors,
-            state_error="AL 状态或状态码读取无效" if state is EtherCatState.NONE or any(
-                "0x0130" in error or "0x0134" in error for error in item.scan_errors
-            ) else None,
         )
+        read_errors = [error for error in item.scan_errors if "0x0130" in error or "0x0134" in error]
+        raw = None if any("0x0130" in error for error in read_errors) else item.state
+        code = None if any("0x0134" in error for error in read_errors) else item.al_status
+        if read_errors or state is EtherCatState.NONE:
+            info = replace(info, state_error="尚未取得有效状态读数")
+        return _state_observation(info, raw, code, CommunicationError("；".join(read_errors)) if read_errors else None)
 
     def read_states(self, refresh_eeprom: bool = False) -> list[SlaveInfo]:
         master = self._require_master()
@@ -716,27 +757,28 @@ class PysoemBackend:
             try:
                 states: list[SlaveInfo] = []
                 for index, info in enumerate(self._slaves):
+                    raw_state = al_code = None
+                    read_error = None
                     for attempt in range(3):
+                        raw_state = al_code = None
                         try:
                             raw, raw_wkc = self._passive.aprd(index + 1, 0x0130, 2)
+                            raw_state = int.from_bytes(raw, "little") if raw_wkc == 1 and len(raw) == 2 else None
                             code, code_wkc = self._passive.aprd(index + 1, 0x0134, 2)
+                            al_code = int.from_bytes(code, "little") if code_wkc == 1 and len(code) == 2 else None
                             if raw_wkc != 1 or code_wkc != 1 or len(raw) != 2 or len(code) != 2:
-                                raise CommunicationError(f"从站 {index + 1} 状态读取 WKC 无效")
-                            raw_state = int.from_bytes(raw, "little")
+                                error_type = PassiveNoResponse if raw_wkc == 0 or code_wkc == 0 else StateRegisterReadError
+                                raise error_type(f"状态读取响应无效：AL Status WKC={raw_wkc}, 长度={len(raw)}/2；"
+                                                 f"AL Code WKC={code_wkc}, 长度={len(code)}/2")
                             if (raw_state & 0x0F) not in {1, 2, 3, 4, 8}:
-                                raise CommunicationError(f"从站 {index + 1} AL status 0x{raw_state:04X} 无效")
+                                raise StateValueError(f"AL 状态值无效：0x{raw_state:04X}")
                             break
-                        except (CommunicationError, PassiveDiscoveryError):
+                        except (CommunicationError, PassiveDiscoveryError, OSError) as exc:
                             if attempt == 2:
-                                raise
+                                read_error = exc
+                                break
                             time.sleep(0.02)
-                    states.append(replace(
-                        info,
-                        state=EtherCatState(raw_state & 0x0F),
-                        raw_state=raw_state,
-                        al_status=int.from_bytes(code, "little"),
-                        state_error=None,
-                    ))
+                    states.append(_state_observation(info, raw_state, al_code, read_error))
                 self._slaves = [self._sm_info(info) for info in states]
                 if refresh_eeprom:
                     refreshed = []
@@ -748,7 +790,11 @@ class PysoemBackend:
                         else:
                             refreshed.append(replace(info, eeprom_status=status, eeprom_status_error=None))
                     self._slaves = refreshed
+                if any(info.state_error for info in self._slaves):
+                    raise StateReadFailure(list(self._slaves))
                 return list(self._slaves)
+            except StateReadFailure:
+                raise
             except Exception as exc:
                 raise CommunicationError(f"读取从站状态失败：{exc}") from exc
         self._ensure_operational()
@@ -758,13 +804,7 @@ class PysoemBackend:
         else:
             refreshed: list[SlaveInfo] = []
             for cached, slave in zip(self._slaves, master.slaves, strict=True):
-                try:
-                    state = EtherCatState(int(slave.state) & 0x0F)
-                except ValueError:
-                    state = EtherCatState.NONE
-                refreshed.append(replace(
-                    cached, state=state, al_status=int(slave.al_status), raw_state=int(slave.state)
-                ))
+                refreshed.append(_state_observation(cached, int(slave.state), int(slave.al_status)))
             self._slaves = refreshed
         if refresh_eeprom:
             self._slaves = [
@@ -779,22 +819,23 @@ class PysoemBackend:
             raise CommunicationError("被动状态探测通道不可用")
         states = []
         for info in self._slaves:
+            raw = code = None
             try:
                 # One read-only frame per slave; never initialize SOEM or retry a probe.
                 values = self._passive.read_many(
                     0x01, 1 - info.position, [(0x0130, 2), (0x0134, 2)], 2000
                 )
-                if len(values) != 2 or any(wkc != 1 or len(data) != 2 for data, wkc in values):
-                    raise CommunicationError("状态探测无有效响应（WKC 或数据长度异常）")
-                raw = int.from_bytes(values[0][0], "little")
-                if (raw & 0x0F) not in {1, 2, 3, 4, 8}:
-                    raise CommunicationError(f"AL 状态无效：0x{raw:04X}")
-                states.append(replace(
-                    info, state=EtherCatState(raw & 0x0F), raw_state=raw,
-                    al_status=int.from_bytes(values[1][0], "little"), state_error=None,
-                ))
+                if len(values) != 2:
+                    raise StateRegisterReadError("状态探测返回的寄存器数量异常")
+                raw = int.from_bytes(values[0][0], "little") if values[0][1] == 1 and len(values[0][0]) == 2 else None
+                code = int.from_bytes(values[1][0], "little") if values[1][1] == 1 and len(values[1][0]) == 2 else None
+                if any(wkc != 1 or len(data) != 2 for data, wkc in values):
+                    error_type = PassiveNoResponse if any(wkc == 0 for _, wkc in values) else StateRegisterReadError
+                    raise error_type(f"状态探测响应无效：WKC={[wkc for _, wkc in values]}，"
+                                     f"长度={[len(data) for data, _ in values]}")
+                states.append(_state_observation(info, raw, code))
             except (CommunicationError, PassiveDiscoveryError, OSError) as exc:
-                states.append(replace(info, state_error=f"从站 {info.position} 通信异常：{exc}"))
+                states.append(_state_observation(info, raw, code, exc))
         self._slaves = states
         return list(states)
 
@@ -832,8 +873,10 @@ class PysoemBackend:
             request.remaining_us()
         raw = self._read_passive_register(position, 0x0130, 2)
         code = self._read_passive_register(position, 0x0134, 2)
+        if request is not None:
+            request.observed[position] = (raw, code)
         if (raw & 0x0F) not in {1, 2, 3, 4, 8}:
-            raise StateRegisterReadError(f"从站 {position} AL status 0x{raw:04X} 无效")
+            raise StateValueError(f"从站 {position} AL 状态值无效：0x{raw:04X}")
         if request is not None:
             request.initial_states.setdefault(position, EtherCatState(raw & 0x0F))
             request.sources.setdefault(position, EtherCatState(raw & 0x0F))

@@ -259,7 +259,13 @@ class MasterStateMachine:
             self._replace(
                 phase=self._phase,
                 adapter=self._adapter,
-                slaves=tuple(replace(slave, state_error=message) for slave in self._slaves),
+                slaves=tuple(replace(
+                    slave, state_error=message, state_error_kind="read_failed",
+                    raw_state=None, observed_al_status=None,
+                    last_confirmed_state=slave.state if not slave.state_error and slave.state is not EtherCatState.NONE else slave.last_confirmed_state,
+                    last_confirmed_raw_state=slave.raw_state if not slave.state_error else slave.last_confirmed_raw_state,
+                    last_confirmed_al_status=slave.al_status if not slave.state_error else slave.last_confirmed_al_status,
+                ) for slave in self._slaves),
                 last_error=message,
             )
 

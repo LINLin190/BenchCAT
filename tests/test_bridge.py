@@ -11,6 +11,7 @@ import pytest
 
 from ethercat_debug_tool.backends.pysoem_backend import (
     AlControlWriteError,
+    StateReadFailure,
     StateRegisterReadError,
     StateRequestFailure,
     StateTransitionTimeoutError,
@@ -857,11 +858,12 @@ def test_state_request_failure_reports_al_error_without_raw_transport_detail(mon
         assert "SAFE-OP" in message
         assert "AL 状态 0x0001" not in message
         assert "APWR" not in message and "WKC" not in message
-        assert "状态请求写入失败" in message
         if al_code:
             assert "AL 错误码 0x0011" in message
+            assert "无法确认请求结果" not in message
         else:
             assert "AL 错误码" not in message
+            assert message == "从站 1：SAFE-OP 请求未完成；无法确认请求结果"
     finally:
         runtime.shutdown()
 
@@ -882,30 +884,30 @@ def test_state_request_timeout_uses_actual_wait_and_transition(monkeypatch):
         monkeypatch.setattr(runtime, "_submit", time_out)
         with pytest.raises(StateRequestDisplayError) as caught:
             runtime.dispatch("request_state", {"position": 1, "state": int(EtherCatState.PRE_OP)})
-        assert str(caught.value) == "从站 1：等待 INIT→PRE-OP；转换 2000 ms 后超时；当前为 INIT"
+        assert str(caught.value) == "从站 1：PRE-OP 请求未完成；2000ms后状态切换超时"
     finally:
         runtime.shutdown()
 
 
 @pytest.mark.parametrize("phase,cause,requested,step,current,expected", [
     ("transition", StateTransitionTimeoutError("pending PDI"), 4, 2, 1,
-     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 INIT"),
+     "从站 1：SAFE-OP 请求未完成；2000ms后状态切换超时"),
     ("transition", StateTransitionTimeoutError("target state not reached"), 4, 4, 2,
-     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 PRE-OP"),
+     "从站 1：SAFE-OP 请求未完成；2000ms后状态切换超时"),
     ("pdo_mapping", StateTransitionTimeoutError("mapping deadline reached"), 4, 4, 2,
-     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 PRE-OP"),
+     "从站 1：SAFE-OP 请求未完成；2000ms后状态切换超时"),
     ("initialization", StateTransitionTimeoutError("initialization deadline reached"), 4, 2, 1,
-     "从站 1：等待 INIT→SAFE-OP；转换 2000 ms 后超时；当前为 INIT"),
+     "从站 1：SAFE-OP 请求未完成；2000ms后状态切换超时"),
     ("transition", StateTransitionTimeoutError("pending PDI"), 2, 2, 1,
-     "从站 1：等待 INIT→PRE-OP；转换 2000 ms 后超时；当前为 INIT"),
+     "从站 1：PRE-OP 请求未完成；2000ms后状态切换超时"),
     ("initialization", RuntimeError("native initialization failed"), 4, 2, 1,
-     "从站 1：请求 SAFE-OP 未完成；设备初始化未完成，当前为 INIT"),
+     "从站 1：SAFE-OP 请求未完成；当前为 INIT"),
     ("pdo_mapping", RuntimeError("config_map failed"), 4, 4, 2,
-     "从站 1：请求 SAFE-OP 未完成；PDO 配置未完成，当前为 PRE-OP"),
+     "从站 1：SAFE-OP 请求未完成；当前为 PRE-OP"),
     ("transition", StateRegisterReadError("APRD WKC=0"), 2, 2, 1,
-     "从站 1：请求 PRE-OP 未完成；状态转换所需的设备信息读取失败"),
+     "从站 1：PRE-OP 请求未完成；当前为 INIT"),
     ("refresh", RuntimeError("state read failed"), 2, 2, 2,
-     "从站 1：已进入 PRE-OP；设备状态信息刷新未完成"),
+     "从站 1：PRE-OP 请求未完成；当前为 PRE-OP"),
 ])
 def test_manual_state_failure_reports_actual_stage(monkeypatch, phase, cause, requested, step, current, expected):
     runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
@@ -929,6 +931,7 @@ def test_manual_state_failure_reports_actual_stage(monkeypatch, phase, cause, re
         with pytest.raises(StateRequestDisplayError) as caught:
             runtime.dispatch("request_state", {"position": 1, "state": requested})
         assert str(caught.value) == expected
+        assert caught.value.details["phase"] == phase
     finally:
         runtime.shutdown()
 
@@ -957,8 +960,11 @@ def test_manual_state_failure_keeps_al_code_when_later_refresh_clears_or_fails(m
         monkeypatch.setattr(runtime, "_submit", fail_request)
         with pytest.raises(StateRequestDisplayError) as caught:
             runtime.dispatch("request_state", {"position": 1, "state": 2})
-        assert "AL 错误码 0x0016" in str(caught.value)
-        assert "AL 状态" not in str(caught.value)
+        assert caught.value.details["observations"] == [{"position": 1, "raw_state": 0x11, "al_status": 0x0016}]
+        assert "AL 错误码 0x0016" not in str(caught.value)
+        if refresh_fails:
+            assert str(caught.value) == "从站 1：PRE-OP 请求未完成；无法读取从站状态"
+            assert runtime.slaves[0].state_error_kind == "read_failed"
     finally:
         runtime.shutdown()
 
@@ -982,6 +988,46 @@ def test_manual_state_request_keeps_worker_failure_as_service_error(monkeypatch)
         )
         assert error["code"] == "WORKER_STALLED"
         assert "通信服务无响应" in error["user_message"]
+    finally:
+        runtime.shutdown()
+
+
+@pytest.mark.parametrize("raw_state,state_nibble,al_code", [(0x1600, "0x00", 0x1600), (0x1606, "0x06", 0x1600), (0x1606, "0x06", 0)])
+def test_pdo_failure_with_invalid_refresh_keeps_stage_and_per_slave_observations(monkeypatch, raw_state, state_nibble, al_code):
+    runtime = BridgeRuntime(RecordingWriter(), BackendMode.DEMO)
+    try:
+        runtime.dispatch("auto_scan", {"preferred_adapter": "demo0"})
+        initial = list(runtime.slaves)
+        request = _StateRequest(2_000_000, time.monotonic() + 2, EtherCatState.SAFE_OP)
+        request.initial_states = {1: EtherCatState.PRE_OP}
+        request.observed = {1: (2, 0)}
+        request.begin("pdo_mapping", EtherCatState.SAFE_OP, (1,))
+        invalid = replace(initial[0], state=EtherCatState.PRE_OP, raw_state=raw_state,
+                          al_status=al_code, observed_al_status=al_code,
+                          state_error=f"AL 状态值无效：0x{raw_state:04X}", state_error_kind="invalid_state",
+                          last_confirmed_state=EtherCatState.PRE_OP)
+
+        def fail(operation, *args, **kwargs):
+            if operation == "request_state":
+                raise StateRequestFailure(request, RuntimeError("config_map failed"))
+            if operation == "read_states":
+                raise StateReadFailure([invalid, *initial[1:]])
+            pytest.fail(operation)
+
+        monkeypatch.setattr(runtime, "_submit", fail)
+        with pytest.raises(StateRequestDisplayError) as caught:
+            runtime.dispatch("request_state", {"position": 1, "state": 4})
+        error = _structured_error(caught.value, request_id=1, method="request_state",
+                                  spec=runtime.registry.require("request_state"), session_id=runtime.session_id)
+        expected = f"从站 1：SAFE-OP 请求未完成；当前为未知状态({state_nibble})"
+        if al_code:
+            expected += "；AL 错误码 0x1600（未知状态码）"
+        assert error["user_message"] == expected
+        assert "网络" not in error["user_message"] and "供电" not in error["user_message"]
+        assert error["code"] == "STATE_REQUEST_FAILED" and error["category"] == "configuration"
+        assert error["operation_result"] == "failed" and error["details"]["phase"] == "pdo_mapping"
+        assert runtime.slaves[0] == invalid
+        assert runtime.slaves[1:] == initial[1:]
     finally:
         runtime.shutdown()
 

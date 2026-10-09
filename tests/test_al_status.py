@@ -9,6 +9,6 @@ def test_shared_al_status_catalog_is_complete_and_actionable() -> None:
 
 
 def test_al_status_fallback_distinguishes_vendor_specific_values() -> None:
-    assert al_status_info(0x0003).name == "未收录的 AL 状态码"
+    assert al_status_info(0x0003).name == "未知AL状态码"
     assert al_status_info(0x8001).name == "厂商自定义 AL 状态码"
 
