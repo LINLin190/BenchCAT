@@ -160,7 +160,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
   if (esi && !loading) sourceRequestRef.current = { path: esi.path, ordinal: ordinal >= 0 ? ordinal : undefined, configData };
 
   // Discard generated targets when the source or selected slave changes.
-  const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig: string) => {
+  const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig: string, automatic = false) => {
     const requestId = ++requestRef.current;
     const context = contextKey;
     generatedConfigRef.current = effectiveConfig;
@@ -172,7 +172,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
         ordinal: selectedOrdinal,
         config_data: effectiveConfig,
         position: slave?.position,
-      });
+      }, { file: document.path, device: deviceDisplayName(document.devices[selectedOrdinal]), automatic });
       if (requestRef.current === requestId && contextRef.current === context) {
         targetContextRef.current = context;
         setTarget(value);
@@ -183,7 +183,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
   }, [contextKey, slave?.position]);
 
   // XML keeps its Device selection and temporary ConfigData override.
-  const loadXml = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
+  const loadXml = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string, record = true) => {
     sourceRequestRef.current = { path, ordinal: preferredOrdinal, configData: overrideConfig };
     setSourcePath(path);
     const loadId = ++loadRequestRef.current;
@@ -197,7 +197,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
     setLoading(true);
     setResult(undefined);
     try {
-      const document = await bridgeRequest<EsiResult>("esi_load", { path });
+      const document = await bridgeRequest<EsiResult>("esi_load", { path }, { history: record, position: slave?.position });
       if (loadRequestRef.current !== loadId || contextRef.current !== context) return;
       writeRecentEsi([document.path, ...loadRecentEsi()]);
       const matches = slave?.identity_valid !== false && slave ? document.devices.map((device, index) =>
@@ -214,7 +214,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
       setOrdinal(selectedOrdinal);
       setOriginalConfigData(original);
       setConfigData(effective);
-      if (selectedOrdinal >= 0) await generate(document, selectedOrdinal, effective);
+      if (selectedOrdinal >= 0) await generate(document, selectedOrdinal, effective, !record);
     } catch (error) {
       if (loadRequestRef.current === loadId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法打开所选 XML，请检查文件。");
     } finally {
@@ -223,8 +223,8 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
   }, [contextKey, generate, slave]);
 
   // BIN selection freezes the original bytes in the same target store as XML.
-  const loadFile = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
-    if (!isBinFile(path)) return loadXml(path, preferredOrdinal, overrideConfig);
+  const loadFile = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string, record = true) => {
+    if (!isBinFile(path)) return loadXml(path, preferredOrdinal, overrideConfig, record);
     sourceRequestRef.current = { path };
     setSourcePath(path);
     const loadId = ++loadRequestRef.current;
@@ -235,7 +235,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
     setConfigData(""); setOriginalConfigData(""); setGenerationError("");
     setLoading(true); setResult(undefined);
     try {
-      const value = await bridgeRequest<EepromBinTarget>("eeprom_bin_load", { path, position: slave?.position });
+      const value = await bridgeRequest<EepromBinTarget>("eeprom_bin_load", { path, position: slave?.position }, { history: record });
       if (loadRequestRef.current === loadId && contextRef.current === context) {
         targetContextRef.current = context;
         setBin(value);
@@ -294,7 +294,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
       setOriginalConfigData("");
     } else if (status.host_generation > 0 && sourceRequestRef.current && (clockChanged || bin || loading)) {
       const source = sourceRequestRef.current;
-      void loadFile(source.path, source.ordinal, source.configData);
+      void loadFile(source.path, source.ordinal, source.configData, false);
     }
     // A slave switch keeps the XML draft; generation binds a fresh target to that slave.
   }, [contextKey, open, slave, status.host_generation, initialSource, bin, loading, loadFile]);
@@ -326,7 +326,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
   useEffect(() => {
     if (!open || configSaving || !esi || ordinal < 0 || !parsedConfig.formatted || parsedConfig.formatted === generatedConfigRef.current) return;
     setTarget(undefined);
-    const timer = window.setTimeout(() => void generate(esi, ordinal, parsedConfig.formatted!), 250);
+    const timer = window.setTimeout(() => void generate(esi, ordinal, parsedConfig.formatted!, true), 250);
     return () => window.clearTimeout(timer);
   }, [configData, configSaving, esi, generate, open, ordinal, parsedConfig.formatted]);
 
@@ -342,7 +342,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
     try {
       const saved = await bridgeRequest<EsiResult>("esi_config_save", {
         document_id: esi.document_id, ordinal: selectedOrdinal, config_data: parsedConfig.formatted,
-      });
+      }, { file: esi.path, device: deviceDisplayName(esi.devices[selectedOrdinal]), configBefore: deviceConfigData(esi.devices[selectedOrdinal]) });
       if (loadRequestRef.current !== loadId || contextRef.current !== context || openedContextRef.current !== context) return;
       const savedConfig = deviceConfigData(saved.devices[selectedOrdinal]);
       writeRecentEsi([saved.path, ...loadRecentEsi()]);
@@ -403,7 +403,7 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
     setResult(undefined);
     setProgress({ operation: "eeprom-flash", stage: "准备", completed: 0, total: 100, percent: 0, detail: "准备写入与完整回读", tone: "info", cancellable: true });
     try {
-      const payload = await bridgeRequest<FlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc });
+      const payload = await bridgeRequest<FlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc }, { file: bin?.path ?? esi?.path, device: bin ? "原始 BIN" : deviceDisplayName(currentDevice), size: flashTarget.size });
       if (!payload.success) {
         const text = payload.result.image_verification;
         setResult({ severity: "error", text });

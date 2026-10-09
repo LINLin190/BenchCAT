@@ -37,7 +37,6 @@ import {
   Menu,
   MenuItem,
   Select,
-  Snackbar,
   Stack,
   Tab,
   Table,
@@ -89,6 +88,9 @@ import {
 import { minimumBusState } from "./busState";
 import { operationStore, type BridgeFailure } from "./operationStore";
 import { currentAlCode, isSlaveStateUnknown, showSlaveIoSizes, slaveStateLabel } from "./slaveState";
+import { messageHistory } from "./messageHistory";
+import { MessageHistoryPanel } from "./MessageHistoryPanel";
+import { cycleFaultHistory } from "./bridgeHistory";
 import { createBridgeStartup } from "./bridgeStartup";
 import { loadEepromAutoReset, saveEepromAutoReset } from "./eepromConfig";
 import { QuickEepromFlashDialog, type EepromDetailSelection, type EepromProgressState, type EepromLaunchSource } from "./QuickEepromFlashDialog";
@@ -113,6 +115,7 @@ const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
 
 type PageKey = "overview" | "registers" | "eeprom";
 type Run = <T>(operation: () => Promise<T>, success?: string, statePositions?: number[]) => Promise<T | undefined>;
+interface ToastMessage { text: string; severity: "success" | "error" | "info" | "warning"; record?: boolean; id?: number; historyId?: number }
 const PREFERRED_ADAPTER_KEY = "benchcat.preferred-adapter";
 const AL_LANGUAGE_KEY = "benchcat.al-language";
 const AUTO_UPDATE_KEY = "benchcat.auto-check-updates";
@@ -147,10 +150,6 @@ const controllableStates = [1, 2, 4, 8];
 
 function isEepromOperation(operation?: string): boolean {
   return Boolean(operation?.startsWith("eeprom"));
-}
-
-function cycleFaultMessage(_data: unknown): string {
-  return "周期通信已中断，无法继续交换数据。请刷新从站状态后再操作。";
 }
 
 function defaultRegisterProfile(chipModel: string | undefined): string {
@@ -326,7 +325,7 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
     setSwitchingProfile(profile);
     try {
       const result = await run(
-        () => bridgeRequest<{ succeeded: boolean; slaves: SlaveInfo[] }>("reconfig", { position: slave.position }),
+        () => bridgeRequest<{ succeeded: boolean; slaves: SlaveInfo[] }>("reconfig", { position: slave.position }, { profileChange: { from: registerProfile, to: profile } }),
         `从站 ${slave.position} 已完成重配置，ESC 型号切换为 ${escModelLabel(slave.chip_model, profile)}`,
       );
       if (result) onRegisterProfileChange(profile);
@@ -403,6 +402,15 @@ function CoePage({ slave, run }: { slave?: SlaveInfo; run: Run }) {
   const [subindex, setSubindex] = useState("0");
   const [data, setData] = useState("");
   const load = () => slave && run(() => bridgeRequest<Record<string, unknown>[]>("object_dictionary", { position: slave.position }).then((value) => { setRows(value); return value; }));
+  const writeSdo = () => slave && run(async () => {
+    const result = await bridgeRequest<{ verified: boolean }>("sdo_write", { position: slave.position, index: Number(index), subindex: Number(subindex), data });
+    if (!result.verified) {
+      const error = new BridgeRequestError({ code: "SDO_WRITE_MISMATCH", message: "SDO readback mismatch", user_message: `从站 ${slave.position}：SDO 写入未完成；写入值与回读值不一致` });
+      error.historyRecorded = true;
+      throw error;
+    }
+    return result;
+  }, "写入完成；回读一致");
   useEffect(() => { setRows([]); }, [slave?.position]);
   if (!slave) return <><PageTitle title="CoE 对象" subtitle="在线对象字典与 SDO 访问" /><EmptyState text="请先选择从站" /></>;
   return (
@@ -416,7 +424,7 @@ function CoePage({ slave, run }: { slave?: SlaveInfo; run: Run }) {
             <TextField label="SubIndex" value={subindex} onChange={(e) => setSubindex(e.target.value)} size="small" sx={{ width: 130 }} inputProps={{ className: "mono" }} />
             <TextField label="HEX 数据（写入）" value={data} onChange={(e) => setData(e.target.value)} size="small" fullWidth inputProps={{ className: "mono" }} />
             <Button variant="outlined" onClick={() => run(() => bridgeRequest<{ data: string }>("sdo_read", { position: slave.position, index: Number(index), subindex: Number(subindex) }).then((value) => { setData(value.data); return value; }), "读取完成")}>读取</Button>
-            <Button variant="contained" disabled={!data.trim()} onClick={() => run(() => bridgeRequest("sdo_write", { position: slave.position, index: Number(index), subindex: Number(subindex), data }), "写入并回读验证完成")}>写入并验证</Button>
+            <Button variant="contained" disabled={!data.trim()} onClick={writeSdo}>写入并验证</Button>
           </Stack>
         </CardContent></Card>
         <Card sx={cardSx}><TableContainer sx={{ maxHeight: "calc(100vh - 390px)" }}><Table stickyHeader size="small"><TableHead><TableRow>{["Index", "Sub", "名称", "类型", "位宽", "访问", "来源"].map((h) => <TableCell key={h}>{h}</TableCell>)}</TableRow></TableHead><TableBody>
@@ -469,7 +477,24 @@ export default function App() {
   const [bridgeAvailable, setBridgeAvailable] = useState(false);
   const [bridgeStarting, setBridgeStarting] = useState(true);
   const [bridgeExit, setBridgeExit] = useState<BridgeExitInfo>();
-  const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" | "warning"; dismissed?: boolean }>();
+  const [messages, setMessages] = useState<Array<ToastMessage & { id: number }>>([]);
+  const toastSequence = useRef(0);
+  const backgroundErrorRecorded = useRef(false);
+  const cycleFaultRecorded = useRef(false);
+  const setMessage = useCallback((value: ToastMessage) => {
+    let historyId = value.historyId;
+    if (value.record !== false && (value.severity === "error" || value.severity === "warning")) {
+      const [text, ...remaining] = value.text.split("。");
+      const reason = remaining.filter(Boolean).join("。");
+      historyId = messageHistory.append({ operation: "通知", result: value.severity, text, reason: reason || undefined, details: reason ? [value.text] : undefined })?.id;
+    } else if (!historyId && (value.severity === "error" || value.severity === "warning")) {
+      const latest = messageHistory.snapshot().entries[0];
+      if (latest && Date.now() - latest.time < 1000 && [latest.text, latest.reason, ...(latest.details ?? [])].includes(value.text)) historyId = latest.id;
+    }
+    const id = ++toastSequence.current;
+    setMessages(queue => [...queue, { ...value, historyId, id }]);
+  }, []);
+  const consumeMessages = useCallback((throughId: number) => setMessages(queue => queue.filter(message => message.id > throughId)), []);
   const [stateFailures, setStateFailures] = useState<Record<number, BridgeFailure>>({});
   const [settings, setSettings] = useState(false);
   const [featureGuideOpen, setFeatureGuideOpen] = useState(false);
@@ -513,6 +538,21 @@ export default function App() {
     : hardwareBusy || stateRequestBusy ? "设备操作进行中，完成后即可更新。" : "";
   const busState = status.slaves.some(isSlaveStateUnknown) ? undefined : minimumBusState(status.slaves);
   const linkDisconnected = status.slaves.some((item) => item.state_error_kind === "link_disconnected");
+  useEffect(() => { if (status.cycle_running) cycleFaultRecorded.current = false; }, [status.cycle_running]);
+  const connectionObservation = useRef<{ service?: boolean; link?: boolean }>({});
+  const serviceFault = useRef<{ text: string; details: string[] }>({ text: "通信服务不可用，请重新启动软件。", details: [] });
+  useEffect(() => {
+    const previous = connectionObservation.current;
+    if (!bridgeStarting) {
+      if (!bridgeAvailable && previous.service !== false) messageHistory.append({ operation: "通信服务", result: "error", text: serviceFault.current.text.split("。")[0], details: serviceFault.current.details });
+      previous.service = bridgeAvailable;
+    }
+    if (status.connected) {
+      const context = status.adapter ? `网卡：${adapters.find(adapter => adapter.name === status.adapter)?.description || status.adapter}` : undefined;
+      if (linkDisconnected && previous.link !== false) messageHistory.append({ operation: "网卡链路", result: "error", text: "网卡链路未连接", context });
+      previous.link = !linkDisconnected;
+    } else previous.link = undefined;
+  }, [bridgeStarting, bridgeAvailable, status.connected, status.adapter, linkDisconnected, adapters]);
   const busStateBlockedReason = !bridgeAvailable
     ? "暂时无法连接设备，请重启软件后重试。"
     : !status.connected
@@ -572,20 +612,18 @@ export default function App() {
     await bridgeRequest<WorkbenchStatus>("status");
   }, []);
 
-  const reportRegisterError = useCallback((text: string) => setMessage({ text, severity: "error" }), []);
-
-  // Preserve the text and severity until the snackbar finishes its exit animation.
-  const closeMessage = () => setMessage((current) => current ? { ...current, dismissed: true } : current);
+  const reportRegisterError = useCallback((text: string) => setMessage({ text, severity: "error", record: false }), [setMessage]);
 
   const run: Run = useCallback(async (operation, success, statePositions) => {
     const clock = operationStore.context();
     try {
       const result = await operation();
+      backgroundErrorRecorded.current = false;
       const currentClock = operationStore.context();
       if (statePositions && clock.hostGeneration === currentClock.hostGeneration && clock.sessionId === currentClock.sessionId) {
         setStateFailures(current => Object.fromEntries(Object.entries(current).filter(([position]) => !statePositions.includes(Number(position)))));
       }
-      if (success) setMessage({ text: success, severity: "success" });
+      if (success) setMessage({ text: success, severity: "success", record: false });
       return result;
     } catch (error) {
       const text = error instanceof BridgeRequestError ? error.message : "操作未完成，请检查当前连接和操作条件。";
@@ -595,12 +633,12 @@ export default function App() {
       const sameSession = clock.hostGeneration === currentClock.hostGeneration && clock.sessionId === currentClock.sessionId;
       const positions = statePositions && sameSession && !cancelled ? failure?.details?.positions ?? statePositions : [];
       if (failure && positions.length) setStateFailures(current => ({ ...current, ...Object.fromEntries(positions.map(position => [position, failure])) }));
-      setMessage({ text: cancelled ? `已取消：${text}` : text, severity: cancelled ? "info" : "error" });
+      setMessage({ text: cancelled ? `已取消：${text}` : text, severity: cancelled ? "info" : "error", record: !(error instanceof BridgeRequestError && error.historyRecorded) });
       if (cancelled) return undefined;
       if (!statePositions) setProgress((previous) => previous ? { ...previous, stage: "操作失败", detail: text, tone: "error" } : previous);
       return undefined;
     }
-  }, []);
+  }, [setMessage]);
 
   const refreshStates = useCallback(async () => {
     if (!status.connected || !status.slaves.length) {
@@ -623,7 +661,7 @@ export default function App() {
       if (result.selected_adapter) window.localStorage.setItem(PREFERRED_ADAPTER_KEY, result.selected_adapter);
       const adapterName = result.adapters.find((item) => item.name === result.selected_adapter)?.description
         || result.selected_adapter;
-      setMessage({ text: `已在 ${adapterName} 上发现 ${result.slaves.length} 个从站`, severity: "success" });
+      setMessage({ text: `已在 ${adapterName} 上发现 ${result.slaves.length} 个从站`, severity: "success", record: false });
       return;
     }
 
@@ -633,13 +671,13 @@ export default function App() {
     const failed = result.attempts.filter((attempt) => attempt.error);
     const openedWithoutSlaves = result.attempts.filter((attempt) => !attempt.error && attempt.slave_count === 0);
     if (failed.length && failed.length === result.attempts.length) {
-      setMessage({ text: "网卡扫描未完成。请检查网卡连接；如果反复出现，请记录操作步骤并反馈。", severity: "error" });
+      setMessage({ text: "网卡扫描未完成。请检查网卡连接；如果反复出现，请记录操作步骤并反馈。", severity: "error", record: false });
     } else if (failed.length && openedWithoutSlaves.length) {
-      setMessage({ text: "未扫描到从站，部分网卡的扫描也未完成。请检查网卡连接后重试。", severity: "warning" });
+      setMessage({ text: "未扫描到从站，部分网卡的扫描也未完成。请检查网卡连接后重试。", severity: "warning", record: false });
     } else if (openedWithoutSlaves.length) {
-      setMessage({ text: "未扫描到从站", severity: "info" });
+      setMessage({ text: "未扫描到从站", severity: "info", record: false });
     } else {
-      setMessage({ text: "自动扫描未发现从站。请确认设备已连接并通电，再重新扫描。", severity: "info" });
+      setMessage({ text: "自动扫描未发现从站。请确认设备已连接并通电，再重新扫描。", severity: "info", record: false });
     }
   }, []);
 
@@ -660,8 +698,6 @@ export default function App() {
       onLoading: setAdaptersLoading,
       onError: (text) => {
         setAdapterLoadError(text);
-        if (text) setMessage({ text, severity: "error" });
-        else setMessage((current) => current?.text.startsWith("无法加载网卡") ? undefined : current);
       },
     });
     reloadAdaptersRef.current = startup.reloadAdapters;
@@ -676,25 +712,33 @@ export default function App() {
         setBridgeAvailable(true);
         setBridgeStarting(false);
         setBridgeExit(undefined);
-        setMessage((current) => current?.text === "暂时无法连接设备，请重启软件后重试。" ? undefined : current);
+        backgroundErrorRecorded.current = false;
+        setMessages(queue => queue.filter(message => message.text !== "暂时无法连接设备，请重启软件后重试。"));
       }
       if (event.kind === "host_restart_failed") {
+        const data = event.data as { message?: string; reason?: string } | undefined;
+        serviceFault.current = { text: "通信服务未能启动，请重新启动软件。", details: [data?.message, data?.reason].filter((text): text is string => Boolean(text)) };
         startup.unavailable();
         setAdapters([]);
         setAdapter("");
         setBridgeAvailable(false);
         setBridgeStarting(false);
         console.error("Bridge startup failed", event.data);
-        setMessage({ text: "暂时无法连接设备，请重启软件后重试。", severity: "error" });
       }
       if (event.kind === "heartbeat") {
         // Heartbeat is telemetry only. Command responses and bus_snapshot events
         // are the authoritative source of EtherCAT session and state.
       }
-      if (event.kind === "cycle_fault") setMessage({ text: cycleFaultMessage(event.data), severity: "error" });
+      if (event.kind === "cycle_fault" && !cycleFaultRecorded.current) {
+        cycleFaultRecorded.current = true;
+        const fault = messageHistory.append(cycleFaultHistory(event.data));
+        setMessage({ text: "周期通信已中断，无法继续交换数据。请刷新从站状态后再操作。", severity: "error", record: false, historyId: fault?.id });
+      }
       // Background observations update the snapshot without replacing operation notifications.
       if (event.kind === "worker_fatal") {
-        const text = "暂时无法连接设备，请重启软件后重试。";
+        const text = "通信服务已停止，请重新启动软件。";
+        const data = event.data as { message?: string; reason?: string } | undefined;
+        serviceFault.current = { text, details: (typeof event.data === "string" ? [event.data] : [data?.message, data?.reason]).filter((text): text is string => Boolean(text)) };
         console.error("Bridge worker stopped", event.data);
         startup.unavailable();
         setBridgeAvailable(false);
@@ -702,8 +746,7 @@ export default function App() {
         setSelectedPosition(undefined);
         setSnapshot(undefined);
         setRegisterProfileOverrides({});
-        setProgress((previous) => previous && previous.percent < 100 ? { ...previous, completed: previous.total, percent: 100, stage: "设备连接已中断", detail: text, tone: "error", cancellable: false } : previous);
-        setMessage({ text, severity: "error" });
+        setProgress((previous) => previous && previous.percent < 100 ? { ...previous, completed: previous.total, percent: 100, stage: "通信服务已停止", detail: text, tone: "error", cancellable: false } : previous);
       }
       if (event.kind === "process_data") setSnapshot(event.data as Snapshot);
       if (event.kind === "scan_discovered") {
@@ -720,7 +763,7 @@ export default function App() {
           setSelectedPosition((current) => current !== undefined && discovered.some((item) => item.position === current)
             ? current
             : discovered[0].position);
-          setMessage({ text: `已发现 ${discovered.length} 个从站，正在读取设备信息…`, severity: "info" });
+          setMessage({ text: `已发现 ${discovered.length} 个从站，正在读取设备信息…`, severity: "info", record: false });
         }
       }
       if (event.kind === "progress") {
@@ -740,22 +783,27 @@ export default function App() {
           return { ...next, stage: labels[next.stage] ?? next.stage, percent: Math.max(previous?.percent ?? 0, calculated), tone: "info" };
         });
       }
-      if (event.kind === "error") setMessage({ text: "后台操作遇到问题。请刷新状态；如果反复出现，请记录操作步骤并反馈。", severity: "error" });
+      if (event.kind === "error" && !operationStore.active() && !backgroundErrorRecorded.current) {
+        backgroundErrorRecorded.current = true;
+        setMessage({ text: "后台操作遇到问题。请刷新状态；如果反复出现，请记录操作步骤并反馈。", severity: "error" });
+      }
     }).then((value) => { if (active) unlisten = value; else value(); });
     const exitReady = onBridgeExited((info) => {
       if (!active) return;
+      serviceFault.current = { text: "通信服务已停止，请重新启动软件。", details: [info.message, info.reason,
+        info.exit_code !== undefined ? `退出码：${info.exit_code}` : undefined, info.log_path ? `日志路径：${info.log_path}` : undefined].filter((text): text is string => Boolean(text)) };
       startup.unavailable();
       setAdapters([]);
       setAdapter("");
       setBridgeAvailable(false);
       setBridgeStarting(false);
       setBridgeExit(info);
-      operationStore.invalidate("PROCESS_EXITED", "设备连接已中断");
+      operationStore.invalidate("PROCESS_EXITED", "通信服务已停止");
       setProgress((previous) => previous && previous.percent < 100 ? {
         ...previous,
         completed: previous.total,
         percent: 100,
-        stage: "设备连接已中断",
+        stage: "通信服务已停止",
         detail: "写入结果尚未确认，请先读取设备确认结果，再继续操作。",
         tone: "error",
         cancellable: false,
@@ -763,7 +811,6 @@ export default function App() {
       setSelectedPosition(undefined);
       setSnapshot(undefined);
       setRegisterProfileOverrides({});
-      setMessage({ text: "设备连接已中断，请重新连接网卡；如仍无法使用，请重启软件。", severity: "error" });
     }).then((value) => { if (active) unlistenExit = value; else value(); });
     Promise.all([eventReady, exitReady]).then(() => {
       if (active) startup.subscribed();
@@ -779,7 +826,6 @@ export default function App() {
       setBridgeAvailable(false);
       setBridgeStarting(false);
       console.error("Bridge event subscriptions failed", error);
-      setMessage({ text: "暂时无法连接设备，请重启软件后重试。", severity: "error" });
     });
     return () => { active = false; startup.dispose(); reloadAdaptersRef.current = () => undefined; unlisten?.(); unlistenExit?.(); };
   }, [applyAdapters, applyAutoScan]);
@@ -905,7 +951,7 @@ export default function App() {
   }, [checkUpdate]);
   const scan = async () => {
     const found = await run(() => bridgeRequest<SlaveInfo[]>("scan"));
-    if (found) setMessage({ text: found.length ? `扫描完成，发现 ${found.length} 个从站` : "未扫描到从站", severity: found.length ? "success" : "info" });
+    if (found) setMessage({ text: found.length ? `扫描完成，发现 ${found.length} 个从站` : "未扫描到从站", severity: found.length ? "success" : "info", record: false });
   };
   const requestBusState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: 0, state }),
@@ -1070,22 +1116,17 @@ export default function App() {
       onRetry={() => { if (updateError?.stage === "checking") void checkUpdate(); else void installUpdate(); }}
       onDownloadPage={() => visit(DOWNLOAD_URL)}
     />
-    <Stack spacing={1} sx={{ position: "fixed", ...(quickFlashOpen ? { top: 16, left: "50%", transform: "translateX(-50%)" } : { bottom: 24, right: 24 }), maxWidth: 440, zIndex: (theme) => theme.zIndex.snackbar }}>
-    <Snackbar open={!updateDialogOpen && updating} style={{ position: "static", transform: "none" }}>
-      <Alert severity="info" action={<Button color="inherit" size="small" onClick={() => setUpdateDialogOpen(true)}>查看进度</Button>} sx={{ width: 440, "& .MuiAlert-message": { flex: 1 } }}>
-        <Typography fontWeight={700}>BenchCAT · {updating ? UPDATE_STAGE_LABELS[updateState] : "在线更新"}</Typography>
-        {updateState === "downloading" ? <>
-          <Typography variant="body2">{formatBytes(updateProgress.downloaded)}{updateProgress.total > 0 ? ` / ${formatBytes(updateProgress.total)} · ${Math.min(100, Math.round(updateProgress.downloaded / updateProgress.total * 100))}%` : ""}</Typography>
-          <LinearProgress aria-label="后台下载进度" variant={updateProgress.total > 0 ? "determinate" : "indeterminate"} value={updateProgress.total > 0 ? Math.min(100, updateProgress.downloaded / updateProgress.total * 100) : undefined} sx={{ mt: 1 }} />
-        </> : <Typography variant="body2">{updateState === "installing" ? "即将退出并交由 Windows 安装器继续。" : "正在停止通信并断开设备…"}</Typography>}
-      </Alert>
-    </Snackbar>
-    <Snackbar open={Boolean(progress && !isEepromOperation(progress.operation))} autoHideDuration={progress?.percent === 100 ? 6000 : null} onClose={(_, reason) => { if (reason !== "clickaway" && progress?.percent === 100) setProgress(undefined); }} style={{ position: "static", transform: "none" }}>
-      <Alert severity={progress?.tone === "error" ? "error" : progress?.tone === "success" ? "success" : "info"} variant="filled" action={progress && progress.percent < 100 && progress.cancellable !== false ? <Button color="inherit" size="small" onClick={() => bridgeRequest("cancel")}>取消</Button> : undefined} sx={{ width: 440, alignItems: "center" }}>
-        <Typography fontWeight={750}>{progress?.stage}</Typography><Typography variant="body2">{progress?.detail}</Typography>{progress && <LinearProgress color="inherit" variant="determinate" value={progress.percent} sx={{ mt: 1, height: 5, borderRadius: 8, bgcolor: "rgba(255,255,255,.25)" }} />}
-      </Alert>
-    </Snackbar>
-    <Snackbar open={Boolean(message && !message.dismissed)} autoHideDuration={5000} onClose={closeMessage} style={{ position: "static", transform: "none" }}><Alert severity={message?.severity} variant="filled" onClose={closeMessage} sx={{ overflowWrap: "anywhere" }}>{message?.text}</Alert></Snackbar>
-    </Stack>
+    <MessageHistoryPanel messages={messages} onMessagesConsumed={consumeMessages} progress={!updateDialogOpen && updating ? {
+      key: "online-update", title: UPDATE_STAGE_LABELS[updateState], severity: "info", running: true,
+      detail: updateState === "downloading" ? `${formatBytes(updateProgress.downloaded)}${updateProgress.total > 0 ? ` / ${formatBytes(updateProgress.total)}` : ""}`
+        : updateState === "installing" ? "即将退出并打开安装器" : "正在停止通信并断开设备",
+      percent: updateState === "downloading" && updateProgress.total > 0 ? Math.min(100, updateProgress.downloaded / updateProgress.total * 100) : undefined,
+      actionLabel: "详情", onAction: () => setUpdateDialogOpen(true),
+    } : progress && !isEepromOperation(progress.operation) ? {
+      key: `${progress.operation}:${progress.percent < 100 ? "running" : `finished:${progress.tone}`}`,
+      title: progress.stage, detail: progress.detail, severity: progress.tone ?? "info", percent: progress.percent, running: progress.percent < 100,
+      actionLabel: "取消", onAction: progress.percent < 100 && progress.cancellable !== false ? () => { void bridgeRequest("cancel"); } : undefined,
+      onDismiss: () => setProgress(undefined),
+    } : undefined} />
   </Box>;
 }

@@ -4,6 +4,7 @@ import type { AdapterInfo, BridgeEvent, BridgeExitInfo, WorkbenchStatus } from "
 import { normalizeBridgeFailure, operationStore } from "./operationStore";
 import { acceptsSessionEvent, acceptsSnapshot } from "./snapshotClock";
 import { reconcileBusSnapshot } from "./busSnapshot";
+import { createHistoryRequest, type HistoryOptions } from "./bridgeHistory";
 
 const isTauri = "__TAURI_INTERNALS__" in window;
 
@@ -69,6 +70,7 @@ function statusSnapshot(envelope: BridgeEnvelope<unknown>): WorkbenchStatus {
 
 const snapshotHandlers = new Set<SnapshotHandler>();
 let latestSnapshot: WorkbenchStatus | undefined;
+let knownAdapters: AdapterInfo[] = [];
 
 function publishSnapshot(snapshot: WorkbenchStatus | undefined, sourceOperationId?: string) {
   if (!snapshot) return;
@@ -121,6 +123,7 @@ const connectionErrorMessages: Record<string, string> = {
 export class BridgeRequestError extends Error {
   readonly code: string;
   readonly failure: ReturnType<typeof normalizeBridgeFailure>;
+  historyRecorded = false;
 
   constructor(failure: ReturnType<typeof normalizeBridgeFailure>) {
     const connectionMessage = connectionErrorMessages[failure.code];
@@ -179,8 +182,22 @@ function consumeBridgeEvent(handler: Handler, event: BridgeEvent) {
   handler(event);
 }
 
-export async function bridgeRequest<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+export async function bridgeRequest<T>(method: string, params: Record<string, unknown> = {}, historyOptions: HistoryOptions = {}): Promise<T> {
   const operation = operationStore.begin(method);
+  const before = latestSnapshot;
+  const adapterName = String(params.adapter ?? before?.adapter ?? "");
+  let history: ReturnType<typeof createHistoryRequest>;
+  try {
+    history = createHistoryRequest(method, params, before, {
+      adapterLabel: knownAdapters.find(adapter => adapter.name === adapterName)?.description,
+      ...historyOptions, operationId: operation.id.split("-").at(-1),
+    });
+  } catch (historyError) { console.error("Unable to begin operation history", historyError); }
+  // History is observational and must never change the outcome of a device command.
+  const finishHistory = (result?: unknown, error?: BridgeRequestError, snapshot?: WorkbenchStatus) => {
+    try { history?.finish(result, error, snapshot); }
+    catch (historyError) { console.error("Unable to record operation history", historyError); }
+  };
   operationStore.transition(operation.id, "running");
   try {
     const envelope = isTauri
@@ -192,15 +209,25 @@ export async function bridgeRequest<T>(method: string, params: Record<string, un
     const current = operationStore.get(operation.id);
     if (current?.phase !== "running") throw current?.error ?? new Error("操作上下文已失效");
     operationStore.transition(operation.id, "completed");
+    if (method === "enumerate_adapters") knownAdapters = result as AdapterInfo[];
+    else if (method === "auto_scan") knownAdapters = (result as { adapters: AdapterInfo[] }).adapters;
+    finishHistory(result, undefined, envelope.snapshot);
     return result as T;
   } catch (error) {
+    const responseSnapshot = error && typeof error === "object" && "snapshot" in error
+      ? (error as { snapshot?: WorkbenchStatus }).snapshot : undefined;
     if (error && typeof error === "object" && "snapshot" in error) {
       publishSnapshot((error as { snapshot?: WorkbenchStatus }).snapshot, operation.id);
     }
     const failure = normalizeBridgeFailure(error);
     operationStore.transition(operation.id, failure.operation_result === "unknown" ? "unknown" : failure.code === "CANCELLED" ? "cancelled" : "failed", failure);
     if (failure.session_invalidated) operationStore.invalidate(failure.code, failure.message);
-    throw new BridgeRequestError(failure);
+    const requestError = new BridgeRequestError(failure);
+    const freshSnapshot = responseSnapshot ?? (latestSnapshot && before && latestSnapshot.host_generation === before.host_generation
+      && latestSnapshot.session_id === before.session_id && latestSnapshot.revision > before.revision ? latestSnapshot : undefined);
+    finishHistory(undefined, requestError, freshSnapshot);
+    requestError.historyRecorded = Boolean(history) || historyOptions.history === false;
+    throw requestError;
   }
 }
 

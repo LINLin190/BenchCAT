@@ -166,14 +166,14 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
   }, [contextKey]);
 
   // Generate a new XML target whenever its selected Device or ConfigData changes.
-  const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig?: string) => {
+  const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig?: string, automatic = false) => {
     const requestId = ++generationRequestRef.current;
     const context = contextKey;
     const normalized = normalizeConfigData(effectiveConfig ?? deviceConfigData(document.devices[selectedOrdinal])).formatted;
     generatedConfigRef.current = normalized ?? "";
     setTarget(undefined); setOperationResult(undefined); setGenerationError("");
     const value = await run(async () => {
-      try { return await bridgeRequest<TargetResult>("sii_generate", { document_id: document.document_id, ordinal: selectedOrdinal, position: slave?.position, ...(normalized ? { config_data: normalized } : {}) }); }
+      try { return await bridgeRequest<TargetResult>("sii_generate", { document_id: document.document_id, ordinal: selectedOrdinal, position: slave?.position, ...(normalized ? { config_data: normalized } : {}) }, { file: document.path, device: esiDeviceDisplayName(document.devices[selectedOrdinal]), automatic }); }
       catch (error) {
         if (generationRequestRef.current === requestId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法生成烧录目标，请检查所选 XML。");
         throw error;
@@ -185,14 +185,14 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
     }
   }, [contextKey, run, slave?.position]);
 
-  const loadXml = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
+  const loadXml = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string, record = true) => {
     const loadId = ++loadRequestRef.current;
     const context = contextKey;
     generationRequestRef.current += 1;
     generatedConfigRef.current = "";
     setTarget(undefined); setEsi(undefined); setBin(undefined); setGenerationError("");
     setConfigEditing(false); setConfigSaveError(""); setOperationResult(undefined);
-    const document = await run(() => bridgeRequest<EsiResult>("esi_load", { path }));
+    const document = await run(() => bridgeRequest<EsiResult>("esi_load", { path }, { history: record, position: slave?.position }));
     if (document && loadRequestRef.current === loadId && contextRef.current === context) {
       setRecentEsi(writeRecentEsi([document.path, ...loadRecentEsi()]));
       const matches = slave && slave.identity_valid !== false ? document.devices.map((device, index) =>
@@ -202,12 +202,12 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
       const original = deviceConfigData(document.devices[selectedOrdinal]);
       const effective = normalizeConfigData(overrideConfig ?? original).formatted ?? original;
       setEsi(document); setOrdinal(selectedOrdinal); setConfigData(effective);
-      if (selectedOrdinal >= 0) await generate(document, selectedOrdinal, effective);
+      if (selectedOrdinal >= 0) await generate(document, selectedOrdinal, effective, !record);
     }
   }, [contextKey, generate, run, slaveIdentityKey(slave)]);
   // Load BIN bytes into a frozen target; XML follows the existing Device workflow.
-  const loadFile = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string) => {
-    if (!isBinFile(path)) return loadXml(path, preferredOrdinal, overrideConfig);
+  const loadFile = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string, record = true) => {
+    if (!isBinFile(path)) return loadXml(path, preferredOrdinal, overrideConfig, record);
     const loadId = ++loadRequestRef.current;
     const context = contextKey;
     generationRequestRef.current += 1;
@@ -216,7 +216,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
     setConfigData(""); setGenerationError(""); setOperationResult(undefined);
     setConfigEditing(false); setConfigSaveError("");
     const value = await run(async () => {
-      try { return await bridgeRequest<EepromBinTarget>("eeprom_bin_load", { path, position: slave?.position }); }
+      try { return await bridgeRequest<EepromBinTarget>("eeprom_bin_load", { path, position: slave?.position }, { history: record }); }
       catch (error) {
         if (loadRequestRef.current === loadId && contextRef.current === context) setGenerationError(error instanceof BridgeRequestError ? error.message : "无法加载所选 BIN。");
         throw error;
@@ -232,7 +232,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
   useEffect(() => {
     if (!initialSelection) return;
     onInitialSelectionConsumed();
-    void loadFile(initialSelection.path, initialSelection.ordinal, initialSelection.configData);
+    void loadFile(initialSelection.path, initialSelection.ordinal, initialSelection.configData, false);
   }, [initialSelection, loadFile, onInitialSelectionConsumed]);
   // XML and BIN use one picker and one programming button.
   const selectFile = useCallback(async () => {
@@ -257,7 +257,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
   useEffect(() => {
     if (configEditing || configSaving || !esi || ordinal < 0 || !configDataResult.formatted || configDataResult.formatted === generatedConfigRef.current) return;
     setTarget(undefined);
-    const timer = window.setTimeout(() => void generate(esi, ordinal, configDataResult.formatted!), 250);
+    const timer = window.setTimeout(() => void generate(esi, ordinal, configDataResult.formatted!, true), 250);
     return () => window.clearTimeout(timer);
   }, [configData, configDataResult.formatted, configEditing, configSaving, esi, generate, ordinal]);
   // Selecting another Device starts from its original XML configuration.
@@ -281,7 +281,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
     try {
       const saved = await run(async () => {
         try {
-          return await bridgeRequest<EsiResult>("esi_config_save", { document_id: esi.document_id, ordinal: selectedOrdinal, config_data: configDataResult.formatted });
+          return await bridgeRequest<EsiResult>("esi_config_save", { document_id: esi.document_id, ordinal: selectedOrdinal, config_data: configDataResult.formatted }, { file: esi.path, device: esiDeviceDisplayName(esi.devices[selectedOrdinal]), configBefore: deviceConfigData(esi.devices[selectedOrdinal]) });
         } catch (error) {
           if (contextRef.current === context && loadRequestRef.current === requestId) setConfigSaveError(error instanceof BridgeRequestError ? error.message : "无法保存 XML，请检查文件写入权限。");
           throw error;
@@ -357,7 +357,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
     if (!canFlash || !slave || !flashTarget) return;
     // A write attempt can change bytes even when it fails; discard the old read snapshot.
     setReadResult(undefined); setConfigurationChanged(true);
-    return operation(() => bridgeRequest<EepromFlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc }), autoResetEsc ? "烧录完成" : "烧录完成，未复位 ESC", "烧录失败");
+    return operation(() => bridgeRequest<EepromFlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc }, { file: bin?.path ?? esi?.path, device: bin ? "原始 BIN" : currentDevice ? esiDeviceDisplayName(currentDevice) : undefined, size: flashTarget.size }), autoResetEsc ? "烧录完成" : "烧录完成，未复位 ESC", "烧录失败");
   };
 
   // Prefer a complete read snapshot; shorter reads cannot describe the configuration area.

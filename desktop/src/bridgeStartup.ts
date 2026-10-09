@@ -1,5 +1,6 @@
 import { bridgeRequest } from "./api";
 import type { AdapterInfo, AutoScanResult, WorkbenchStatus } from "./types";
+import { messageHistory } from "./messageHistory";
 
 interface StartupHandlers {
   preferredAdapter: () => string;
@@ -46,13 +47,14 @@ export function createBridgeStartup(handlers: StartupHandlers) {
         handlers.onScan(result);
       } else {
         stage = "加载网卡列表";
-        const adapters = await bridgeRequest<AdapterInfo[]>("enumerate_adapters");
+        const adapters = await bridgeRequest<AdapterInfo[]>("enumerate_adapters", {}, { history: reloadAdapters });
         if (!isCurrent()) return;
         handlers.onAdapters(adapters, status.adapter ?? undefined);
       }
       if (isCurrent()) completedGeneration = expectedGeneration;
     } catch (error) {
       if (!isCurrent()) return;
+      if (reloadAdapters && stage === "读取设备状态") messageHistory.append({ operation: "刷新网卡", result: "error", text: error instanceof Error ? error.message : "网卡列表刷新未完成" });
       console.error("Bridge device initialization failed", { stage, expectedGeneration, receivedGeneration, error });
       handlers.onError("无法加载网卡，请重新加载网卡；如仍无法使用，请重启软件。");
     } finally {

@@ -12,6 +12,7 @@ import {
   PlaylistAddRounded, RefreshRounded, SearchRounded, StarBorderRounded, StarRounded,
 } from "@mui/icons-material";
 import { BridgeRequestError, bridgeRequest } from "./api";
+import { messageHistory, type MessageInput } from "./messageHistory";
 import type { ManualTarget } from "./PdfManualViewer";
 import { operationStore } from "./operationStore";
 import { hex, type RegisterDefinition, type RegisterManualReference, type SlaveInfo } from "./types";
@@ -662,7 +663,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
             automatic: jobs.every((job) => job.automatic),
             // Full acquisition is resolved by the backend catalog, without repeating every range in the request.
             requests: readAll ? [] : jobs.map((job) => ({ address: job.definition.address, size: registerWidth(job.definition), definition_id: job.definition.definition_id })),
-          });
+          }, { history: notifyPartialFailure || jobs.some(job => !job.automatic) });
           if (!mounted.current || contextRef.current !== requestedContext) break;
           acceptCatalog(result.catalog, result.catalog_version);
           acceptValues(result.catalog ?? (readAll ? catalog : jobs.map((job) => job.definition)), result.values, requestedContext);
@@ -776,6 +777,30 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
     setPinned((current) => current.some((item) => definitionKey(item) === definitionKey(definition)) ? current : [...current, definition]);
   };
   const pollKey = pinned.map(definitionKey).join("|");
+  const monitorSession = useRef<{ context: string; signature: string; started: number; input: MessageInput } | undefined>(undefined);
+  const stopMonitorHistory = (reason: string, result: MessageInput["result"] = "info", details: string[] = []) => {
+    const session = monitorSession.current;
+    if (!session) return;
+    monitorSession.current = undefined;
+    messageHistory.append({ ...session.input, result, text: `寄存器监视${result === "error" ? "异常停止" : result === "cancelled" ? "已取消" : "已停止"}；${reason}`,
+      durationMs: Math.max(0, Date.now() - session.started), details: [...(session.input.details ?? []), ...details] });
+  };
+  useEffect(() => {
+    const active = monitor && watching && slave && !deviceOperationsBlocked && pinned.length > 0;
+    if (monitorSession.current && (!active || monitorSession.current.context !== context)) stopMonitorHistory(deviceOperationsBlocked ? "设备操作暂不可用" : "监视已暂停或目标已变化");
+    if (active && !monitorSession.current) {
+      const input: MessageInput = { operation: "寄存器监视", result: "started", text: `从站 ${slave.position}：寄存器监视已启动；监视 ${pinned.length} 项；间隔 ${intervalMs}ms`,
+        context: `从站 ${slave.position} · ${slave.name}`, operationId: `M-${crypto.randomUUID().slice(0, 8)}`,
+        details: pinned.map(item => `地址 ${hex(item.address, 4)}；长度 ${registerWidth(item)} B；${item.name}`) };
+      monitorSession.current = { context, signature: `${pollKey}:${intervalMs}`, started: Date.now(), input };
+      messageHistory.append(input);
+    } else if (active && monitorSession.current && monitorSession.current.signature !== `${pollKey}:${intervalMs}`) {
+      monitorSession.current.signature = `${pollKey}:${intervalMs}`;
+      monitorSession.current.input = { ...monitorSession.current.input, details: pinned.map(item => `地址 ${hex(item.address, 4)}；长度 ${registerWidth(item)} B；${item.name}`) };
+      messageHistory.append({ ...monitorSession.current.input, result: "info", text: `从站 ${slave.position}：监视参数已更新；监视 ${pinned.length} 项；间隔 ${intervalMs}ms` });
+    }
+  }, [monitor, watching, context, deviceOperationsBlocked, pollKey, intervalMs]);
+  useEffect(() => () => stopMonitorHistory("页面或从站已切换"), []);
   useEffect(() => {
     if (!monitor || !watching || !slave || deviceOperationsBlocked || !pinned.length) return;
     let active = true, timer: number | undefined, requestId: string | undefined;
@@ -795,10 +820,14 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
           acceptValues(pinned, result.values, requestedContext);
           setErrors((current) => ({ ...current, ...result.errors }));
           setSnapshotInfo(result);
-          if (result.error || Object.keys(result.errors).length) { setWatching(false); setPageError("寄存器监视已暂停，请检查从站连接后重新开始监视。"); }
+          if (result.error || Object.keys(result.errors).length) {
+            stopMonitorHistory(result.error || "部分寄存器读取失败", "error", Object.entries(result.errors).map(([address, error]) => `${address}：${error}`));
+            setWatching(false); setPageError("寄存器监视已暂停，请检查从站连接后重新开始监视。");
+          } else if (result.cancelled) { stopMonitorHistory("读取已取消", "cancelled"); setWatching(false); }
         }
       } catch (error) {
         if (active && contextRef.current === requestedContext) {
+          stopMonitorHistory(failureText(error), "error");
           setWatching(false); setPageError(failureText(error));
           setErrors((current) => ({ ...current, ...Object.fromEntries(pinned.map((item) => [definitionKey(item), failureText(error)])) }));
         }
@@ -867,7 +896,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
           });
           if (!mounted.current || contextRef.current !== requestedContext) throw new BridgeRequestError({ code: "SESSION_CHANGED", message: "目标从站已变化。", user_message: "目标从站已变化，请重新选择寄存器。" });
           if (target.access === "RW" && target.current && registerNumber(prepared.plan.current) !== registerNumber(target.current)) throw new BridgeRequestError({ code: "REGISTER_CHANGED", message: "当前值已变化。", user_message: "当前值已变化，请刷新后再写入。" });
-          const result = await bridgeRequest<WriteResult>("register_execute_write", { plan_id: prepared.plan_id });
+          const result = await bridgeRequest<WriteResult>("register_execute_write", { plan_id: prepared.plan_id }, { position: slave.position, address: target.address, size: target.width, data: writeBytes });
           if (!mounted.current || contextRef.current !== requestedContext) return;
           dirtyRef.current = false;
           if (result.readback) {
@@ -925,8 +954,10 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
     if (!selectedValue) return;
     const requestedContext = context;
     const requestedSequence = requestSequence.current;
-    const copiedValue = await run(async () => { await navigator.clipboard.writeText(formatRegisterValue(selectedValue.data, format)); return true; }, "已复制寄存器值");
-    if (copiedValue && mounted.current && contextRef.current === requestedContext && requestSequence.current === requestedSequence) setCopied(true);
+    try {
+      await navigator.clipboard.writeText(formatRegisterValue(selectedValue.data, format));
+      if (mounted.current && contextRef.current === requestedContext && requestSequence.current === requestedSequence) setCopied(true);
+    } catch { onError("无法复制寄存器值，请选中文字后手动复制。"); }
   };
 
   /** Keep invalid drafts intact when changing numeric presentation. */
