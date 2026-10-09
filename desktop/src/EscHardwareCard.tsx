@@ -18,8 +18,9 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
   const decoded = slave.esc_hardware ? decodeEscHardware(profile, slave.esc_hardware) : undefined;
   const eepromSize = decoded?.fields.find((field) => field.name === "EEPROM_SIZE_STRAP" || field.name === "E2PSIZE");
   return (
-    <Card variant="outlined">
+    <Card variant="outlined" className="ov-diagnostic-card">
     <CardContent className="ov-card-body">
+      <div className="ov-card-summary">
       <CardHeading title="设备与硬件" />
       {identity}
       <Typography className="ov-section-title">ESC 硬件信息</Typography>
@@ -51,7 +52,9 @@ export function EscHardwareCard({ slave, profile, modelControl, modelNote, ident
           <Typography variant="body2" className="mono ov-strong ov-hexline">{decoded.bytes.join(" ")}</Typography>
         </Stack>
 
-        {decoded.mismatch && slave.chip_model !== "E252" && <Alert severity="warning" sx={{ mt: 0.75 }}>芯片标识与所选型号不一致，请核对 ESC 型号；不会自动切换或重配置。</Alert>}
+      </>}
+      </div>
+      {decoded && <>
         <span className="ov-card-tail">{disclosure.button}</span>
         <Collapse in={disclosure.expanded} id={disclosure.controls}>
           <TableContainer sx={{ mt: 0.75 }}>

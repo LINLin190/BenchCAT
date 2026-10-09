@@ -364,6 +364,7 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
               </Box>
             </CardContent></Card>
 
+            <Box className="overview-diagnostics">
             <EscHardwareCard
               key={`${slave.position}-${registerProfile}`}
               slave={slave}
@@ -388,6 +389,7 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
               </Typography>}
             />
             <OverviewEeprom key={`eeprom-${slave.position}`} slave={slave} profile={registerProfile} />
+            </Box>
           </Box>
         </Stack>
       )}

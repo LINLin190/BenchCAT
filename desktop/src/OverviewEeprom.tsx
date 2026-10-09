@@ -32,8 +32,9 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
   const disclosure = useDisclosure("详情", "eeprom-details");
 
   return (
-    <Card variant="outlined">
+    <Card variant="outlined" className="ov-diagnostic-card">
       <CardContent className="ov-card-body">
+        <div className="ov-card-summary">
         <CardHeading title="EEPROM 诊断" />
         {slave.sii_status === "blank" ? <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>EEPROM 未烧录，可读取原始数据或烧录。</Typography>
           : slave.sii_error && <Alert severity="warning" sx={{ mb: 1 }}>EEPROM 设备信息未能完整读取或解析，仍可读取原始数据。</Alert>}
@@ -85,6 +86,7 @@ export function OverviewEeprom({ slave, profile }: { slave: SlaveInfo; profile: 
               </TableContainer>
             </>}
           </section>
+        </div>
         </div>
         <span className="ov-card-tail">{disclosure.button}</span>
         {/* Detail: the prefix word decode and the control/status bit fields. */}
