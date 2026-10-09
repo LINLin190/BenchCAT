@@ -4,7 +4,7 @@ import {
   CircularProgress, Collapse, Dialog, DialogActions, DialogContent, DialogTitle, Divider,
   FormControl, FormControlLabel, IconButton, Menu, MenuItem, Select, Stack,
   Link, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs,
-  TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography, useMediaQuery,
+  TextField, ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from "@mui/material";
 import { createTheme, ThemeProvider, useTheme } from "@mui/material/styles";
 import {
@@ -312,7 +312,7 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
     {/* Adjust the value column position with the detail panel while keeping header and cells aligned. */}
     <Table stickyHeader size="small" aria-rowcount={definitions.length + 1} sx={{ tableLayout: "fixed", "& td, & th": { fontSize: 12, py: 0.5, borderColor: "#EEF1F6", boxSizing: "border-box", height: registerRowHeight }, "& th": { py: 0, height: registerHeaderHeight } }}>
       <TableHead><TableRow aria-rowindex={1}>
-        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: detailsVisible ? 192 : 320, transition: animateDetails ? `width ${detailsVisible ? 180 : 140}ms ease-out` : "none", "@media (prefers-reduced-motion: reduce)": { transition: "none" } }}>当前值</TableCell>
+        <TableCell sx={{ width: 90 }}>地址</TableCell><TableCell>寄存器</TableCell><TableCell sx={{ width: detailsVisible ? 192 : 320, transition: animateDetails ? `width ${detailsVisible ? 180 : 140}ms ease-out` : "none" }}>当前值</TableCell>
         <TableCell sx={{ width: 58 }}>权限</TableCell><TableCell sx={{ width: 58 }}>宽度</TableCell><TableCell sx={{ width: 32 }} />
       </TableRow></TableHead>
       <TableBody>
@@ -334,14 +334,13 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
 
 /** Retain the last details through exit without keeping the panel interactive. */
 function RegisterDetailsPanel({ open, animate, children }: { open: boolean; animate: boolean; children: ReactNode }) {
-  const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const content = useRef<ReactNode>(null);
   if (open) content.current = children;
   return <Collapse in={open} orientation="horizontal" easing="ease-out" appear mountOnEnter unmountOnExit
-    timeout={reduceMotion || !animate ? 0 : { enter: 180, exit: 140 }}
+    timeout={!animate ? 0 : { enter: 180, exit: 140 }}
     sx={{ flexShrink: 0, height: "100%", "& .MuiCollapse-wrapper, & .MuiCollapse-wrapperInner": { height: "100%" } }}>
     <Box inert={!open} aria-hidden={!open} sx={{ width: 352, pl: 1.5, height: "100%", boxSizing: "border-box",
-      animation: reduceMotion || !animate ? "none" : `${open ? "register-details-enter" : "register-details-exit"} ${open ? 180 : 140}ms ease-out both`,
+      animation: !animate ? "none" : `${open ? "register-details-enter" : "register-details-exit"} ${open ? 180 : 140}ms ease-out both`,
       "@keyframes register-details-enter": { from: { opacity: 0, transform: "translateX(12px)" }, to: { opacity: 1, transform: "translateX(0)" } },
       "@keyframes register-details-exit": { from: { opacity: 1, transform: "translateX(0)" }, to: { opacity: 0, transform: "translateX(12px)" } },
     }}>{open ? children : content.current}</Box>
@@ -364,7 +363,6 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
         styleOverrides: { root: {
           transition: "background-color 120ms ease-out, color 120ms ease-out, box-shadow 120ms ease-out",
           "&.Mui-focusVisible": { outline: "2px solid #365CCF", outlineOffset: 2 },
-          "@media (prefers-reduced-motion: reduce)": { transition: "none" },
         } },
       },
       MuiButton: { styleOverrides: { root: {
@@ -373,12 +371,10 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
         "&.MuiButton-contained:active:not(.Mui-disabled)": { backgroundColor: "#2846A6", boxShadow: "inset 0 2px 3px #17203330" },
         "&.MuiButton-containedError:active:not(.Mui-disabled)": { backgroundColor: "#A82F39" },
         "&.MuiButton-outlinedError:active:not(.Mui-disabled)": { backgroundColor: "#FFF0F1" },
-        "@media (prefers-reduced-motion: reduce)": { transition: "none" },
       } } },
       MuiIconButton: { styleOverrides: { root: {
         transition: "background-color 120ms ease-out, color 120ms ease-out",
         "&:active:not(.Mui-disabled)": { backgroundColor: "#E9EEFF" },
-        "@media (prefers-reduced-motion: reduce)": { transition: "none" },
       } } },
     },
   }), [outerTheme]);

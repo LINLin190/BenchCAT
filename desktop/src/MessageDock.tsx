@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Box, Button, IconButton, LinearProgress, Paper, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
+import { Box, Button, IconButton, LinearProgress, Paper, Tooltip, Typography, useTheme } from "@mui/material";
 import { CheckCircleOutlineRounded, CloseRounded, ErrorOutlineRounded, InfoOutlined, NotificationsNoneRounded, WarningAmberRounded } from "@mui/icons-material";
 import type { HistoryMessage } from "./messageHistory";
 
@@ -30,7 +30,6 @@ const icon = { info: InfoOutlined, success: CheckCircleOutlineRounded, warning: 
 type DockMode = "idle" | "notice" | "history";
 
 function useDockMorph(ref: RefObject<HTMLDivElement | null>, mode: DockMode, width: number, height: number, onSettled: (open: boolean) => void) {
-  const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const [settled, setSettled] = useState(true);
   const motion = useRef({ size: [dockSize.collapsed, dockSize.height, 18], velocity: [0, 0, 0], mode: "idle" as DockMode,
     holdUntil: 0, leavingHistory: false });
@@ -52,7 +51,7 @@ function useDockMorph(ref: RefObject<HTMLDivElement | null>, mode: DockMode, wid
     const stiffness = mode === "history" ? 500 : state.leavingHistory ? 640 : 280;
     const damping = mode === "history" ? 42 : state.leavingHistory ? 48 : 28;
     const paint = () => ["width", "height", "radius"].forEach((name, index) => element.style.setProperty(`--dock-${name}`, `${state.size[index]}px`));
-    if (reducedMotion || !entering && !retracting && target.every((value, axis) => value === state.size[axis] && state.velocity[axis] === 0)) {
+    if (!entering && !retracting && target.every((value, axis) => value === state.size[axis] && state.velocity[axis] === 0)) {
       state.size = target; state.velocity = [0, 0, 0]; state.leavingHistory = false;
       paint(); setSettled(true); completion.current(mode === "history"); return;
     }
@@ -83,7 +82,7 @@ function useDockMorph(ref: RefObject<HTMLDivElement | null>, mode: DockMode, wid
     };
     paint(); frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
-  }, [ref, mode, width, height, reducedMotion]);
+  }, [ref, mode, width, height]);
   return settled;
 }
 
@@ -286,7 +285,7 @@ export function MessageDock({ entries, unread, unreadErrors, messages, onMessage
       bgcolor: "background.paper", boxShadow: open ? "0 12px 48px rgba(23,32,51,.16), 0 2px 8px rgba(23,32,51,.04)" : expanded ? "0 4px 20px rgba(23,32,51,.12)" : "0 2px 10px rgba(23,32,51,.08)", zIndex: theme => theme.zIndex.drawer + 1,
       transition: "box-shadow 320ms ease, border-color 180ms ease",
       "& .dock-dismiss": { opacity: hovered || focused ? 1 : 0 },
-      "@media (prefers-reduced-motion: reduce)": { transition: "none", "& .dock-reveal, & .dock-history, & .dock-history > * > *": { transition: "none", transform: "none" }, "& .dock-content": { animation: "none" }, "& .dock-outgoing": { opacity: 0 } } }}>
+      }}>
     {/* Keep the history layout fixed while its shared shell changes shape. */}
     <Box className="dock-history" inert={!open} aria-hidden={!open} sx={{ position: "absolute", right: 0, bottom: 0,
       width: 518, height: 578, maxWidth: "calc(100vw - 50px)", maxHeight: "calc(100vh - 34px)",
@@ -313,7 +312,7 @@ export function MessageDock({ entries, unread, unreadErrors, messages, onMessage
           opacity: open ? 0 : 1, pointerEvents: open ? "none" : "auto",
           transition: `width 260ms ${dockEase}, right 260ms ${dockEase}, height 220ms ease, gap 180ms ease, ${open ? "opacity 80ms ease" : "opacity 160ms ease 200ms"}`,
           "&:hover": { bgcolor: "#F8F9FC" }, "&.Mui-focusVisible": { outlineOffset: -3 },
-          "@media (prefers-reduced-motion: reduce)": { transition: "none", "& .dock-label": { transition: "none" } } }}>
+        }}>
         <Box sx={{ position: "relative", display: "flex" }}><NotificationsNoneRounded sx={{ fontSize: 17, color: "text.secondary" }} />
           {!!unread && <Box sx={{ position: "absolute", right: -2, top: -1, width: 5, height: 5, borderRadius: "50%", bgcolor: unreadErrors ? "error.main" : "warning.main", border: "1px solid white" }} />}
         </Box><Box component="span" className="dock-label" sx={{ overflow: "hidden", maxWidth: expanded ? 0 : 48, opacity: expanded ? 0 : 1, flexShrink: 0, lineHeight: 1,

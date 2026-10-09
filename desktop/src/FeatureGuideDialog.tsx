@@ -260,7 +260,7 @@ function DemoScene({ topic, step }: { topic: GuideTopic; step: number }) {
 export function FeatureGuideDialog({ onClose }: { onClose: () => void }) {
   const [topic, setTopic] = useState<GuideTopic>("slave");
   const [step, setStep] = useState(0);
-  const [playing, setPlaying] = useState(() => !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  const [playing, setPlaying] = useState(true);
   const guide = guides[topic];
   const cursor = cursorPosition(topic, step);
 
@@ -275,7 +275,7 @@ export function FeatureGuideDialog({ onClose }: { onClose: () => void }) {
     return () => window.clearTimeout(timer);
   }, [playing, step, guide]);
 
-  const selectTopic = (value: GuideTopic) => { setTopic(value); setStep(0); setPlaying(!window.matchMedia("(prefers-reduced-motion: reduce)").matches); };
+  const selectTopic = (value: GuideTopic) => { setTopic(value); setStep(0); setPlaying(true); };
   const replay = () => { setStep(0); setPlaying(true); };
 
   return <Dialog open onClose={onClose} fullWidth maxWidth="lg" aria-labelledby="feature-guide-title" PaperProps={{ sx: { width: "calc(100% - 32px)", maxWidth: 1200, height: 940, maxHeight: "calc(100% - 32px)", m: 2, borderRadius: 2 } }}>
