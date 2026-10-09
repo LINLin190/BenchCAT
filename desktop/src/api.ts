@@ -105,15 +105,15 @@ export function subscribeBusSnapshot(handler: SnapshotHandler): () => void {
 }
 
 const connectionErrorMessages: Record<string, string> = {
-  BRIDGE_STARTING: "正在准备连接，请稍候。",
-  BRIDGE_START_FAILED: "暂时无法连接设备，请重启软件后重试。",
-  BRIDGE_UNAVAILABLE: "暂时无法连接设备，请重启软件后重试。",
-  PROTOCOL: "暂时无法连接设备，请重新加载网卡或重启软件。",
-  PROCESS_EXITED: "设备连接已中断，请重新连接网卡或重启软件。",
-  TRANSPORT_WRITE: "设备连接已中断，请重新连接网卡或重启软件。",
-  HOST_TIMEOUT: "设备暂时没有响应，请检查网卡连接；如仍无法使用，请重启软件。",
-  WORKER_STALLED: "设备暂时没有响应，请检查网卡连接；如仍无法使用，请重启软件。",
-  WORKER_FATAL: "暂时无法连接设备，请重启软件后重试。",
+  BRIDGE_STARTING: "通信服务正在启动，请稍候。",
+  BRIDGE_START_FAILED: "通信服务未能启动，请重新启动软件。",
+  BRIDGE_UNAVAILABLE: "通信服务不可用，请重新启动软件。",
+  PROTOCOL: "通信服务返回的信息不完整，请重新启动软件。",
+  PROCESS_EXITED: "通信服务已停止，请重新启动软件。",
+  TRANSPORT_WRITE: "无法向通信服务发送请求，请重新启动软件。",
+  HOST_TIMEOUT: "通信服务响应超时，请重新启动软件。",
+  WORKER_STALLED: "通信服务无响应，请重新启动软件。",
+  WORKER_FATAL: "通信服务已停止，请重新启动软件。",
   GENERATION_CHANGED: "连接状态已变化，请重新连接网卡后再操作。",
   GENERATION_SUPERSEDED: "连接状态已变化，请重新连接网卡后再操作。",
 };

@@ -87,7 +87,8 @@ import {
   type AdapterInfo,
 } from "./api";
 import { minimumBusState } from "./busState";
-import { operationStore } from "./operationStore";
+import { operationStore, type BridgeFailure } from "./operationStore";
+import { currentAlCode, isSlaveStateUnknown, showSlaveIoSizes, slaveStateLabel } from "./slaveState";
 import { createBridgeStartup } from "./bridgeStartup";
 import { loadEepromAutoReset, saveEepromAutoReset } from "./eepromConfig";
 import { QuickEepromFlashDialog, type EepromDetailSelection, type EepromProgressState, type EepromLaunchSource } from "./QuickEepromFlashDialog";
@@ -111,7 +112,7 @@ const FeatureGuideDialog = lazy(() => import("./FeatureGuideDialog").then(module
 const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
 
 type PageKey = "overview" | "registers" | "eeprom";
-type Run = <T>(operation: () => Promise<T>, success?: string) => Promise<T | undefined>;
+type Run = <T>(operation: () => Promise<T>, success?: string, statePositions?: number[]) => Promise<T | undefined>;
 const PREFERRED_ADAPTER_KEY = "benchcat.preferred-adapter";
 const AL_LANGUAGE_KEY = "benchcat.al-language";
 const AUTO_UPDATE_KEY = "benchcat.auto-check-updates";
@@ -314,6 +315,7 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
   const [switchingProfile, setSwitchingProfile] = useState<string>();
   const requestState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: slave?.position ?? 0, state }),
+    undefined, slave ? [slave.position] : [],
   );
   const repair = (method: "recover", success: string) => slave && run(
     () => bridgeRequest<{ slaves: SlaveInfo[] }>(method, { position: slave.position }),
@@ -332,26 +334,27 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
       setSwitchingProfile(undefined);
     }
   };
-  const alInfo = alStatusInfo(slave?.al_status ?? 0, alLanguage);
+  const alCode = slave ? currentAlCode(slave) : undefined;
+  const alInfo = alStatusInfo(alCode ?? 0, alLanguage);
   return (
     <>
       {!slave && <PageTitle title="设备概览" subtitle="总线状态与设备信息" actions={<Button disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refresh)}>刷新状态</Button>} />}
       {!slave ? <EmptyState text="连接并扫描后，在左侧选择一个从站" /> : (
         <Stack spacing={1.25} className="overview-cards">
-          {Boolean(slave.scan_errors?.length) && <Alert severity="warning">部分设备信息未能读取，可重新扫描。</Alert>}
+          {slave.scan_errors?.some(error => !error.includes("0x0130") && !error.includes("0x0134") && !error.includes("AL 状态值")) && <Alert severity="warning">部分设备信息未能读取，可重新扫描。</Alert>}
           <Box className="overview-grid">
             <Card sx={cardSx} className="ov-runtime"><CardContent className="ov-card-body">
               <CardHeading title="状态" />
               <Box className="ov-runtime-facts">
                 <Typography className="section-label">当前状态</Typography>
-                {slave.state_error ? <Chip size="small" color="error" label="通信异常" /> : slave.state === 0 ? <Chip size="small" label="—" /> : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />}
+                {isSlaveStateUnknown(slave) ? <Chip size="small" color="warning" label="未知状态" /> : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />}
                 <Typography className="section-label">AL 状态码</Typography>
-                <Typography className="mono ov-strong">{slave.state_error ? "—" : `${hex(slave.al_status)} · ${alInfo.name}`}</Typography>
+                <Typography className="mono ov-strong">{alCode === undefined ? "未取得有效读数" : `${hex(alCode)} · ${alInfo.name}`}</Typography>
                 <Typography className="ov-pdo-label">SM Size IN <b className="mono">{slave.input_size == null ? "—" : `${slave.input_size} B`}</b> OUT <b className="mono">{slave.output_size == null ? "—" : `${slave.output_size} B`}</b></Typography>
               </Box>
               <Box className="ov-runtime-actions">
                 <Typography className="section-label">状态请求</Typography>
-                <StateSelector key={`${status.session_id}:${slaveIdentityKey(slave)}`} state={slave.state} disabled={busy || stateRequestBusy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
+                <StateSelector key={`${status.session_id}:${slaveIdentityKey(slave)}`} state={isSlaveStateUnknown(slave) ? undefined : slave.state} disabled={busy || stateRequestBusy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
                 <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再清除从站状态错误。" : "确认当前从站的状态错误，保持当前状态"}>
                   <span><Button className="overview-clear-error" size="small" variant="outlined" disabled={busy || status.cycle_running} onClick={() => run(() => bridgeRequest<SlaveInfo[]>("clear_error", { position: slave.position }), "已确认从站状态错误")}>Clear Error</Button></span>
                 </Tooltip>
@@ -388,12 +391,6 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
             />
             <OverviewEeprom key={`eeprom-${slave.position}`} slave={slave} profile={registerProfile} />
           </Box>
-          {!slave.state_error && slave.al_status !== 0 && <Alert severity={alInfo.known ? "warning" : "error"}>
-            <Typography fontWeight={700}>{hex(slave.al_status)} · {alInfo.name}</Typography>
-            <Typography variant="body2">说明：{alInfo.detail}</Typography>
-            <Typography variant="body2">排查：{alInfo.action}</Typography>
-          </Alert>}
-
         </Stack>
       )}
     </>
@@ -473,6 +470,7 @@ export default function App() {
   const [bridgeStarting, setBridgeStarting] = useState(true);
   const [bridgeExit, setBridgeExit] = useState<BridgeExitInfo>();
   const [message, setMessage] = useState<{ text: string; severity: "success" | "error" | "info" | "warning"; dismissed?: boolean }>();
+  const [stateFailures, setStateFailures] = useState<Record<number, BridgeFailure>>({});
   const [settings, setSettings] = useState(false);
   const [featureGuideOpen, setFeatureGuideOpen] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>("idle");
@@ -513,8 +511,8 @@ export default function App() {
   const updateBlockedReason = eepromExclusive
     ? "EEPROM 操作进行中，完成后即可更新。"
     : hardwareBusy || stateRequestBusy ? "设备操作进行中，完成后即可更新。" : "";
-  const busState = minimumBusState(status.slaves);
-  const communicationErrors = status.slaves.filter((item) => item.state_error);
+  const busState = status.slaves.some(isSlaveStateUnknown) ? undefined : minimumBusState(status.slaves);
+  const linkDisconnected = status.slaves.some((item) => item.state_error_kind === "link_disconnected");
   const busStateBlockedReason = !bridgeAvailable
     ? "暂时无法连接设备，请重启软件后重试。"
     : !status.connected
@@ -566,6 +564,7 @@ export default function App() {
       setSnapshot(undefined);
       setRegisterProfileOverrides({});
       setEepromReadCache({});
+      setStateFailures({});
     }
   }), []);
 
@@ -578,17 +577,27 @@ export default function App() {
   // Preserve the text and severity until the snackbar finishes its exit animation.
   const closeMessage = () => setMessage((current) => current ? { ...current, dismissed: true } : current);
 
-  const run: Run = useCallback(async (operation, success) => {
+  const run: Run = useCallback(async (operation, success, statePositions) => {
+    const clock = operationStore.context();
     try {
       const result = await operation();
+      const currentClock = operationStore.context();
+      if (statePositions && clock.hostGeneration === currentClock.hostGeneration && clock.sessionId === currentClock.sessionId) {
+        setStateFailures(current => Object.fromEntries(Object.entries(current).filter(([position]) => !statePositions.includes(Number(position)))));
+      }
       if (success) setMessage({ text: success, severity: "success" });
       return result;
     } catch (error) {
       const text = error instanceof BridgeRequestError ? error.message : "操作未完成，请检查当前连接和操作条件。";
       const cancelled = error instanceof BridgeRequestError && error.code === "CANCELLED";
+      const failure = error instanceof BridgeRequestError ? error.failure : undefined;
+      const currentClock = operationStore.context();
+      const sameSession = clock.hostGeneration === currentClock.hostGeneration && clock.sessionId === currentClock.sessionId;
+      const positions = statePositions && sameSession && !cancelled ? failure?.details?.positions ?? statePositions : [];
+      if (failure && positions.length) setStateFailures(current => ({ ...current, ...Object.fromEntries(positions.map(position => [position, failure])) }));
       setMessage({ text: cancelled ? `已取消：${text}` : text, severity: cancelled ? "info" : "error" });
       if (cancelled) return undefined;
-      setProgress((previous) => previous ? { ...previous, stage: "操作失败", detail: text, tone: "error" } : previous);
+      if (!statePositions) setProgress((previous) => previous ? { ...previous, stage: "操作失败", detail: text, tone: "error" } : previous);
       return undefined;
     }
   }, []);
@@ -683,14 +692,7 @@ export default function App() {
         // are the authoritative source of EtherCAT session and state.
       }
       if (event.kind === "cycle_fault") setMessage({ text: cycleFaultMessage(event.data), severity: "error" });
-      if (event.kind === "slave_communication_changed") {
-        const { unavailable, restored } = event.data as { unavailable: number[]; restored: number[] };
-        const messages = [
-          unavailable.length ? `从站 ${unavailable.join("、")} 通信异常` : "",
-          restored.length ? `从站 ${restored.join("、")} 通信已恢复` : "",
-        ].filter(Boolean);
-        setMessage({ text: messages.join("；"), severity: unavailable.length ? "error" : "success" });
-      }
+      // Background observations update the snapshot without replacing operation notifications.
       if (event.kind === "worker_fatal") {
         const text = "暂时无法连接设备，请重启软件后重试。";
         console.error("Bridge worker stopped", event.data);
@@ -907,6 +909,7 @@ export default function App() {
   };
   const requestBusState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: 0, state }),
+    undefined, status.slaves.map(item => item.position),
   );
   const selectAdapter = (value: string) => {
     setAdapter(value);
@@ -991,7 +994,7 @@ export default function App() {
             <Typography variant="caption" color="text.secondary" noWrap>{!bridgeAvailable ? bridgeStarting ? "正在准备连接，请稍候" : "请重启软件后重试" : status.connected ? status.slaves.length ? `已发现 ${status.slaves.length} 个从站` : "暂无从站" : "检测网卡并自动扫描 EtherCAT 从站"}</Typography>
           </Stack>
           {status.connected && status.slaves.length > 0 && status.slaves.length !== 1 && <Box sx={{ pl: 1, borderLeft: 1, borderColor: "divider", flexShrink: 0 }}>
-            <Tooltip title={busStateBlockedReason || `全部从站状态控制 · 当前 ${busState === undefined ? "无状态" : stateLabel(busState)}`}>
+            <Tooltip title={busStateBlockedReason || `全部从站状态控制 · 当前 ${busState === undefined ? "未知状态" : stateLabel(busState)}`}>
               <span>
                 <StateSelector key={status.session_id} state={busState} disabled={Boolean(busStateBlockedReason)} onRequest={requestBusState} label="全部从站状态控制" />
               </span>
@@ -1004,27 +1007,34 @@ export default function App() {
           </Box>
         </Toolbar>
       </AppBar>
-      {adapterLoadError && <Alert severity="error" sx={{ borderRadius: 0, flexShrink: 0 }} action={<Button color="inherit" size="small" disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || busy} onClick={() => reloadAdaptersRef.current()}>重新加载网卡</Button>}>{adapterLoadError}</Alert>}
-      {communicationErrors.length > 0 && <Alert severity="error" sx={{ borderRadius: 0, flexShrink: 0 }}>
-        从站 {communicationErrors.map((item) => item.position).join("、")} 通信异常，请检查供电、网线及设备状态。
-      </Alert>}
+      {bridgeAvailable && adapterLoadError && <Alert severity="error" sx={{ borderRadius: 0, flexShrink: 0 }} action={<Button color="inherit" size="small" disabled={!bridgeAvailable || adaptersLoading || eepromExclusive || busy} onClick={() => reloadAdaptersRef.current()}>重新加载网卡</Button>}>{adapterLoadError}</Alert>}
+      {bridgeAvailable && linkDisconnected && <Alert severity="error" sx={{ borderRadius: 0, flexShrink: 0 }}>网卡链路未连接，请检查网卡连接。</Alert>}
+      {!bridgeStarting && !bridgeAvailable && <Alert severity="error" sx={{ borderRadius: 0, flexShrink: 0 }}>{bridgeExit ? "通信服务已停止" : "通信服务不可用"}，请重新启动软件。</Alert>}
       <Box sx={{ display: "flex", minHeight: 0, flex: 1 }}>
-        {status.slaves.length > 0 && <Box component="aside" sx={{ width: { xs: 190, xl: 204 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography><Stack direction="row" alignItems="center" gap={0.45} minWidth={0}>{status.slaves.some((item) => item.state_error) ? <Chip size="small" label="—" /> : <StateChip state={busState!} />}</Stack></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 32, alignItems: "center" }}>
+        {status.slaves.length > 0 && <Box component="aside" sx={{ width: { xs: 190, xl: 204 }, flexShrink: 0, bgcolor: "background.paper", borderRight: 1, borderColor: "divider", overflow: "auto", p: 0.75 }}><Stack direction="row" justifyContent="space-between" alignItems="center" gap={0.5} sx={{ px: 0.75, py: 0.55 }}><Typography variant="overline" color="text.secondary" sx={{ flexShrink: 0 }}>从站 · {status.slaves.length}</Typography></Stack><List dense sx={{ pt: 0.35 }}>{status.slaves.map((item) => <ListItemButton disabled={eepromExclusive} key={item.position} selected={item.position === selectedPosition} onClick={() => setSelectedPosition(item.position)} onContextMenu={(event) => openSlaveContextMenu(event, item.position)} sx={{ mb: 0.25, py: 0.55, px: 0.75 }}><ListItemIcon sx={{ minWidth: 32, alignItems: "center" }}>
                   <Box sx={{ position: "relative", display: "inline-flex" }}>
                     <DeveloperBoardRounded className="slave-state-icon" data-state={item.state_error ? 0 : item.state} sx={{ fontSize: 22 }} />
                     {!item.state_error && Boolean((item.raw_state ?? item.state) & 0x10) && <WarningAmberRounded titleAccess="状态错误" color="error" sx={{ position: "absolute", right: -4, top: -5, fontSize: 13, bgcolor: "background.paper", borderRadius: "50%" }} />}
                   </Box>
-                </ListItemIcon><ListItemText primary={`${item.position}. ${slaveDisplayName(item)}`} secondary={`${item.state_error ? "通信异常" : item.state === 0 ? "—" : stateLabel(item.state)}${!item.state_error && (item.raw_state ?? item.state) & 0x10 ? " + ERROR" : ""} IN ${item.input_size ?? "—"}B | OUT ${item.output_size ?? "—"}B`} primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5, title: slaveDisplayName(item) }} secondaryTypographyProps={{ noWrap: true, fontSize: 11.5, color: item.state_error ? "error.main" : undefined }} /></ListItemButton>)}</List></Box>}
+                </ListItemIcon><ListItemText
+                  primary={`${item.position}. ${slaveDisplayName(item)}`}
+                  secondary={<>
+                    <Typography component="span" fontSize={11.5} color={isSlaveStateUnknown(item) ? "warning.main" : (item.raw_state ?? item.state) & 0x10 || item.al_status ? "error.main" : "text.secondary"}>{slaveStateLabel(item)}</Typography>
+                    {showSlaveIoSizes(item, Boolean(stateFailures[item.position])) && <Typography component="span" fontSize={11.5} color="text.secondary">{" "}IN {item.input_size ?? "—"}B | OUT {item.output_size ?? "—"}B</Typography>}
+                  </>}
+                  primaryTypographyProps={{ noWrap: true, fontWeight: 650, fontSize: 12.5, title: slaveDisplayName(item) }}
+                  secondaryTypographyProps={{ component: "div", noWrap: true, align: isSlaveStateUnknown(item) ? "center" : "left" }}
+                /></ListItemButton>)}</List></Box>}
         <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
           {slave && <Stack direction="row" alignItems="center" gap={1} sx={{ px: 2, pt: page === "overview" ? 1.5 : 0.75, pb: page === "overview" ? 0 : 0.75, borderBottom: page === "overview" ? 0 : 1, borderColor: "divider", bgcolor: page === "overview" ? "background.default" : "background.paper" }}>
             {page === "overview" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>设备概览</Typography>}
             {page === "eeprom" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>EEPROM</Typography>}
             {page === "registers" && <Typography variant="h5" fontWeight={750} sx={{ mr: 1 }}>寄存器</Typography>}
             <Typography variant="body2" fontWeight={650} noWrap onContextMenu={(event) => openSlaveContextMenu(event, slave.position)} sx={{ minWidth: 0 }} title={slaveDisplayName(slave)}>从站 {slave.position} · {slaveDisplayName(slave)}</Typography>
-            {page !== "overview" && (slave.state_error ? <Chip size="small" color="error" label="通信异常" /> : page === "registers" && slave.state === 1 ? null : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />)}
+            {page !== "overview" && (isSlaveStateUnknown(slave) ? <Chip size="small" color="warning" label="未知状态" /> : page === "registers" && slave.state === 1 ? null : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />)}
             {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refreshStates)}>刷新状态</Button>}
           </Stack>}
-        <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: page === "eeprom" ? "hidden" : "auto", p: { xs: 1.5, xl: 2 }, ...(page === "overview" && slave ? { pt: 0 } : {}) }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto", ...(page === "eeprom" ? { height: "100%", minHeight: 0, display: "flex", flexDirection: "column" } : {}) }}>{bridgeExit && <Alert severity="error" sx={{ mb: 1.25 }}><Typography fontWeight={700}>设备连接已中断</Typography><Typography variant="body2">请重新连接网卡；如仍无法使用，请重启软件。</Typography></Alert>}<Suspense fallback={<Box sx={{ p: 3 }}><CircularProgress size={24} /></Box>}>{content}</Suspense></Box></Box>
+        <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: page === "eeprom" ? "hidden" : "auto", p: { xs: 1.5, xl: 2 }, ...(page === "overview" && slave ? { pt: 0 } : {}) }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto", ...(page === "eeprom" ? { height: "100%", minHeight: 0, display: "flex", flexDirection: "column" } : {}) }}><Suspense fallback={<Box sx={{ p: 3 }}><CircularProgress size={24} /></Box>}>{content}</Suspense></Box></Box>
         </Box>
       </Box>
     </Box>
