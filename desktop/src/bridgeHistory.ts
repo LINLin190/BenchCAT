@@ -1,7 +1,7 @@
 import { alStatusInfo } from "./alStatus";
 import { messageHistory, type MessageInput } from "./messageHistory";
 import type { BridgeFailure } from "./operationStore";
-import { currentAlCode, isSlaveStateUnknown } from "./slaveState";
+import { currentAlCode, isSlaveStateHealthy, isSlaveStateUnknown } from "./slaveState";
 import { stateLabel, type SlaveInfo, type WorkbenchStatus } from "./types";
 
 export interface HistoryOptions {
@@ -34,7 +34,6 @@ type Data = Record<string, unknown>;
 const object = (value: unknown): Data => value && typeof value === "object" && !Array.isArray(value) ? value as Data : {};
 const array = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const textOf = (value: unknown) => typeof value === "string" ? value : "";
-const validState = (slave: SlaveInfo) => !isSlaveStateUnknown(slave) && !slave.al_status && !((slave.raw_state ?? slave.state) & 0x10);
 const reading = (label: string, actual: unknown, expected = 1): NonNullable<MessageInput["wkc"]> =>
   typeof actual === "number" && Number.isFinite(actual) ? [{ label, actual, expected }] : [];
 
@@ -99,11 +98,11 @@ export function createHistoryRequest(method: string, params: Data, before?: Work
           // A failed command can only be described using its fresh response snapshot.
           if (!slave || error && error.code !== "STATE_REQUEST_FAILED") { unknown++; return [`从站 ${item} · 无法确认请求结果`]; }
           if (isSlaveStateUnknown(slave)) { unknown++; return [stateText(slave), ...alReadings(slave)]; }
-          return validState(slave) && slave.state === target ? [] : [stateText(slave), ...alReadings(slave)];
+          return isSlaveStateHealthy(slave) && slave.state === target ? [] : [stateText(slave), ...alReadings(slave)];
         });
         const failedCount = affected.filter(item => {
           const slave = finalSlaves.find(slave => slave.position === item);
-          return slave && (!error || error.code === "STATE_REQUEST_FAILED") && !isSlaveStateUnknown(slave) && (!validState(slave) || slave.state !== target);
+          return slave && (!error || error.code === "STATE_REQUEST_FAILED") && !isSlaveStateUnknown(slave) && (!isSlaveStateHealthy(slave) || slave.state !== target);
         }).length;
         if (error || failures.length) {
           record({ result: failedCount || error && !unknown && error.failure?.operation_result !== "unknown" ? "error" : "warning",
@@ -114,7 +113,7 @@ export function createHistoryRequest(method: string, params: Data, before?: Work
         }
       } else if (error) {
         const stateDetails = ["read_states", "clear_error", "recover", "reconfig"].includes(method)
-          ? finalSlaves.filter(slave => (position === 0 || slave.position === position) && !validState(slave)).flatMap(slave => [stateText(slave), ...alReadings(slave)]) : [];
+          ? finalSlaves.filter(slave => (position === 0 || slave.position === position) && !isSlaveStateHealthy(slave)).flatMap(slave => [stateText(slave), ...alReadings(slave)]) : [];
         record({ result: error.failure?.operation_result === "unknown" ? "warning" : "error",
           text: `${operation}${error.failure?.operation_result === "unknown" ? "结果未确认" : "失败"}`, reason: error.message,
           details: [...stateDetails, `错误码：${error.code}`, ...(error.failure?.message && error.failure.message !== error.message ? [error.failure.message] : [])] });
@@ -123,7 +122,7 @@ export function createHistoryRequest(method: string, params: Data, before?: Work
         const slaves = (method === "scan" ? array(result) : array(value.slaves)) as SlaveInfo[];
         const attempts = array(value.attempts).map(object);
         const failed = attempts.filter(attempt => attempt.error || attempt.disconnect_error);
-        const abnormal = slaves.filter(slave => !validState(slave) || slave.scan_errors?.length);
+        const abnormal = slaves.filter(slave => !isSlaveStateHealthy(slave) || slave.scan_errors?.length);
         if (failed.length || abnormal.length) {
           const adapters = array(value.adapters).map(object);
           const label = (name: unknown) => textOf(adapters.find(item => item.name === name)?.description) || textOf(name);
@@ -134,8 +133,13 @@ export function createHistoryRequest(method: string, params: Data, before?: Work
           }, method === "auto_scan" ? label(value.selected_adapter) || undefined : context);
           return;
         }
+        if (!slaves.length) {
+          record({ result: method === "auto_scan" && !array(value.adapters).length ? "error" : "warning",
+            text: method === "auto_scan" && !array(value.adapters).length ? "未发现可用网卡" : "未扫描到从站" });
+          return;
+        }
       } else if (method === "read_states") {
-        const abnormal = finalSlaves.filter(slave => !validState(slave));
+        const abnormal = finalSlaves.filter(slave => !isSlaveStateHealthy(slave));
         if (abnormal.length) {
           record({ result: "warning", text: "从站状态异常", reason: `${abnormal.length} 个从站状态异常`, details: abnormal.flatMap(slave => [stateText(slave), ...alReadings(slave)]) });
           return;
@@ -144,7 +148,8 @@ export function createHistoryRequest(method: string, params: Data, before?: Work
         const flash = object(value.result), comparison = object(flash.comparison);
         const reasons = [value.success === false ? textOf(flash.image_verification) || "回读与目标镜像不一致" : "",
           flash.reload_verified === false ? "复位后重新加载未确认" : "", flash.sii_valid === false ? "镜像 SII 解析异常" : "",
-          flash.semantic_valid === false ? "镜像设备信息与所选 Device 不一致" : ""].filter(Boolean);
+          flash.semantic_valid === false ? "镜像设备信息与所选 Device 不一致" : "",
+          params.auto_reset === false ? "未复位 ESC，未确认新内容已加载" : ""].filter(Boolean);
         if (reasons.length) {
           record({ result: value.success === false ? "error" : "warning", text: value.success === false ? `${operation}失败` : "EEPROM 写入后存在异常", reason: reasons.join("；"),
             details: [textOf(flash.reload_error), comparison.equal === false ? `差异 ${comparison.differing_bytes} B；首次差异 ${comparison.first_difference}` : ""].filter(Boolean) });
@@ -185,10 +190,18 @@ export function createHistoryRequest(method: string, params: Data, before?: Work
         }
       } else if (method === "register_read" || method === "register_raw_read") {
         if (value.wkc !== 1) { record({ result: "error", text: "寄存器读取失败", reason: typeof value.wkc === "number" ? undefined : "未返回 WKC", wkc: reading("读取 WKC", value.wkc) }); return; }
+      } else if (method === "register_reset") {
+        record({ result: "warning", text: "ESC 复位命令已发送", reason: "需要重新扫描总线" });
+        return;
       } else if (["recover", "reconfig", "clear_error"].includes(method)) {
-        if (!observed || !validState(observed)) {
+        if (!observed || !isSlaveStateHealthy(observed)) {
           record({ result: "warning", text: `${operation}后状态${!observed || isSlaveStateUnknown(observed) ? "未确认" : "异常"}`,
             reason: observed ? stateText(observed) : "无法读取从站状态", details: observed ? alReadings(observed) : [] });
+          return;
+        }
+        if (method === "reconfig" && options.profileChange && options.profileChange.from !== options.profileChange.to) {
+          record({ result: "warning", text: `ESC 型号切换为 ${options.profileChange.to}`,
+            reason: `已完成重配置 · 原型号 ${options.profileChange.from}` });
           return;
         }
       }

@@ -50,7 +50,7 @@ function registerPreferences(profile: string): { favorites: string[]; pinned: st
       format: ["hex", "decimal"].includes(saved.format) ? saved.format : "hex" };
   } catch { return { favorites: [], pinned: [], intervalMs: 1000, format: "hex" }; }
 }
-interface WriteResult { readback: string | null; fpwr_wkc: number }
+interface WriteResult { readback: string | null; fpwr_wkc: number; verified?: boolean | null; conclusion?: string }
 interface RawWriteResult { write_wkc: number | null; readback: RegisterValue | null; write_error: string | null; read_error: string | null }
 type RawFormat = "hex" | "decimal";
 
@@ -411,6 +411,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   const [writeFormat, setWriteFormat] = useState<ValueFormat>("hex");
   const [writeError, setWriteError] = useState("");
   const [writeMessage, setWriteMessage] = useState("");
+  const [writeTone, setWriteTone] = useState<"success" | "warning" | "error">("success");
   const [readbackKeys, setReadbackKeys] = useState<Set<string>>(new Set());
   const reportedErrors = useRef<string[]>([]);
   useEffect(() => {
@@ -908,9 +909,14 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
           } else if (target.definition && canRead(target.definition)) {
             enqueueReads([target.definition]);
           }
-          setWriteMessage("已写入");
+          setWriteTone(result.verified === true ? "success" : result.verified === false ? "error" : "warning");
+          setWriteMessage(result.verified === true ? "已写入，回读一致" : result.conclusion || (result.verified === false ? "写入值与回读值不一致" : "写入已返回，动作结果尚未确认"));
         } catch (error) {
-          if (mounted.current && contextRef.current === requestedContext) setWriteError(failureText(error));
+          if (mounted.current && contextRef.current === requestedContext) {
+            if (error instanceof BridgeRequestError && error.severity === "warning") {
+              setWriteTone("warning"); setWriteMessage(failureText(error));
+            } else setWriteError(failureText(error));
+          }
           throw error;
         }
       });
@@ -990,7 +996,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
     <Button fullWidth variant="contained" size="small" disabled={controlsBlocked || !writeBytes || Boolean(writeError) || !writeContext || (writeContext.access === "RW" && !writeContext.current)} onClick={() => void executeWrite()}>
       {writing ? "写入中…" : writeContext?.access === "WAC" ? "清零" : "写入"}
     </Button>
-    {writeMessage && <Typography fontSize={12} color="success.main">{writeMessage}</Typography>}
+    {writeMessage && <Typography fontSize={12} color={`${writeTone}.main`}>{writeMessage}</Typography>}
     <Disclosure title="写入细节"><Stack spacing={0.75}>
       {writeBytes && <>
         <Typography variant="caption" className="mono">目标值：{spaceHexValue(formatRegisterValue(writeBytes.match(/../g)!.join(" ")))}</Typography>
@@ -1186,7 +1192,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
     <Dialog open={Boolean(watchConfirm)} onClose={() => setWatchConfirm(undefined)} fullWidth maxWidth="xs"><DialogTitle>加入持续监视</DialogTitle><DialogContent><Typography fontSize={13}>{watchConfirm && `${registerDisplayName(watchConfirm)}：${readDescription(watchConfirm)}`} 开始监视后会按所选周期重复读取。</Typography></DialogContent><DialogActions><Button onClick={() => setWatchConfirm(undefined)}>取消</Button><Button variant="contained" onClick={() => { if (watchConfirm && canRead(watchConfirm)) setPinned((current) => current.some((item) => definitionKey(item) === definitionKey(watchConfirm)) ? current : [...current, watchConfirm]); setWatchConfirm(undefined); }}>加入监视</Button></DialogActions></Dialog>
     <Dialog open={resetConfirm} onClose={() => { if (!writing) setResetConfirm(false); }}><DialogTitle>复位 EtherCAT 控制器</DialogTitle><DialogContent><Alert severity="error">复位会中断从站通信。</Alert></DialogContent><DialogActions><Button disabled={writing} onClick={() => setResetConfirm(false)}>取消</Button><Button color="error" variant="contained" disabled={controlsBlocked} onClick={async () => {
       const requestedContext = context; setWriting(true); setWatching(false);
-      try { const value = await run(() => bridgeRequest("register_reset", { position: slave.position, profile: registerProfile }), "复位命令已发送"); if (value && contextRef.current === requestedContext) setResetConfirm(false); }
+      try { const value = await run(() => bridgeRequest("register_reset", { position: slave.position, profile: registerProfile })); if (value && contextRef.current === requestedContext) setResetConfirm(false); }
       finally { if (mounted.current && contextRef.current === requestedContext) setWriting(false); }
     }}>复位</Button></DialogActions></Dialog>
     {manualTarget && <Suspense fallback={<Dialog open={manualOpen} onClose={() => setManualOpen(false)}><DialogContent><CircularProgress size={24} /> 正在加载查看器…</DialogContent></Dialog>}>

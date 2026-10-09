@@ -75,6 +75,29 @@ describe("session message history", () => {
 });
 
 describe("operation faults", () => {
+  it("records an ESC profile change as a warning even when reconfiguration succeeds", () => {
+    createHistoryRequest("reconfig", { position: 1 }, status([slave(1)]), { profileChange: { from: "ET1100", to: "LAN9252" } })
+      ?.finish({ succeeded: true }, undefined, status([slave(1, { state: 2, raw_state: 2 })]));
+    expect(messageHistory.snapshot().entries[0]).toMatchObject({ result: "warning", text: "ESC 型号切换为 LAN9252", context: "从站 1" });
+    expect(messageHistory.snapshot().entries).toHaveLength(1);
+  });
+  it("separates an empty scan from a scan without any available adapter", () => {
+    createHistoryRequest("scan", {})?.finish([]);
+    expect(messageHistory.snapshot().entries[0]).toMatchObject({ result: "warning", text: "未扫描到从站" });
+    createHistoryRequest("auto_scan", {})?.finish({ adapters: [], slaves: [], attempts: [] });
+    expect(messageHistory.snapshot().entries[0]).toMatchObject({ result: "error", text: "未发现可用网卡" });
+  });
+  it("warns when EEPROM bytes are written but the new configuration has not been loaded", () => {
+    createHistoryRequest("eeprom_flash", { position: 1, auto_reset: false })?.finish({ success: true, result: { sii_valid: true, semantic_valid: true, reload_verified: null } });
+    expect(messageHistory.snapshot().entries[0]).toMatchObject({ result: "warning", text: "EEPROM 写入后存在异常", reason: "未复位 ESC，未确认新内容已加载" });
+  });
+  it("does not record normal scans, unchanged profiles, or confirmed EEPROM writes as warnings", () => {
+    createHistoryRequest("scan", {})?.finish([slave(1)]);
+    createHistoryRequest("reconfig", { position: 1 }, status([slave(1)]), { profileChange: { from: "LAN9252", to: "LAN9252" } })
+      ?.finish({ succeeded: true }, undefined, status([slave(1)]));
+    createHistoryRequest("eeprom_flash", { position: 1, auto_reset: true })?.finish({ success: true, result: { sii_valid: true, semantic_valid: true, reload_verified: true } });
+    expect(messageHistory.snapshot().entries).toEqual([]);
+  });
   it("ignores successful operations, polling, and intentional cancellation", () => {
     expect(createHistoryRequest("status", {})).toBeUndefined();
     expect(createHistoryRequest("register_snapshot", { automatic: true })).toBeUndefined();

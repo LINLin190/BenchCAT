@@ -125,6 +125,10 @@ export class BridgeRequestError extends Error {
   readonly failure: ReturnType<typeof normalizeBridgeFailure>;
   historyRecorded = false;
 
+  get severity(): "warning" | "error" {
+    return this.failure.operation_result === "unknown" ? "warning" : "error";
+  }
+
   constructor(failure: ReturnType<typeof normalizeBridgeFailure>) {
     const connectionMessage = connectionErrorMessages[failure.code];
     super(connectionMessage

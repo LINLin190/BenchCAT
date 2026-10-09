@@ -87,7 +87,7 @@ import {
 } from "./api";
 import { minimumBusState } from "./busState";
 import { operationStore, type BridgeFailure } from "./operationStore";
-import { currentAlCode, isSlaveStateUnknown, showSlaveIoSizes, slaveStateLabel } from "./slaveState";
+import { currentAlCode, isSlaveStateHealthy, isSlaveStateUnknown, showSlaveIoSizes, slaveStateLabel } from "./slaveState";
 import { messageHistory } from "./messageHistory";
 import { MessageHistoryPanel } from "./MessageHistoryPanel";
 import { cycleFaultHistory } from "./bridgeHistory";
@@ -114,7 +114,7 @@ const FeatureGuideDialog = lazy(() => import("./FeatureGuideDialog").then(module
 const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
 
 type PageKey = "overview" | "registers" | "eeprom";
-type Run = <T>(operation: () => Promise<T>, success?: string, statePositions?: number[]) => Promise<T | undefined>;
+type Run = <T>(operation: () => Promise<T>, success?: string | ((result: T) => string | undefined), statePositions?: number[]) => Promise<T | undefined>;
 interface ToastMessage { text: string; severity: "success" | "error" | "info" | "warning"; record?: boolean; id?: number; historyId?: number }
 const PREFERRED_ADAPTER_KEY = "benchcat.preferred-adapter";
 const AL_LANGUAGE_KEY = "benchcat.al-language";
@@ -318,7 +318,7 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
   );
   const repair = (method: "recover", success: string) => slave && run(
     () => bridgeRequest<{ slaves: SlaveInfo[] }>(method, { position: slave.position }),
-    success,
+    result => result.slaves.some(item => item.position === slave.position && isSlaveStateHealthy(item)) ? success : undefined,
   );
   const changeEscModel = async (profile: string) => {
     if (!slave || profile === registerProfile || switchingProfile) return;
@@ -326,7 +326,6 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
     try {
       const result = await run(
         () => bridgeRequest<{ succeeded: boolean; slaves: SlaveInfo[] }>("reconfig", { position: slave.position }, { profileChange: { from: registerProfile, to: profile } }),
-        `从站 ${slave.position} 已完成重配置，ESC 型号切换为 ${escModelLabel(slave.chip_model, profile)}`,
       );
       if (result) onRegisterProfileChange(profile);
     } finally {
@@ -355,7 +354,7 @@ const OverviewPage = memo(function OverviewPage({ slave, status, busy, stateRequ
                 <Typography className="section-label">状态请求</Typography>
                 <StateSelector key={`${status.session_id}:${slaveIdentityKey(slave)}`} state={isSlaveStateUnknown(slave) ? undefined : slave.state} disabled={busy || stateRequestBusy} onRequest={requestState} label="从站状态请求" className="overview-state-buttons" />
                 <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP，再清除从站状态错误。" : "确认当前从站的状态错误，保持当前状态"}>
-                  <span><Button className="overview-clear-error" size="small" variant="outlined" disabled={busy || status.cycle_running} onClick={() => run(() => bridgeRequest<SlaveInfo[]>("clear_error", { position: slave.position }), "已确认从站状态错误")}>Clear Error</Button></span>
+                  <span><Button className="overview-clear-error" size="small" variant="outlined" disabled={busy || status.cycle_running} onClick={() => run(() => bridgeRequest<SlaveInfo[]>("clear_error", { position: slave.position }), result => result.some(item => item.position === slave.position && isSlaveStateHealthy(item)) ? "已确认从站状态错误" : undefined)}>Clear Error</Button></span>
                 </Tooltip>
                 <Tooltip title={status.cycle_running ? "请先请求 SAFE-OP；停止周期通信将影响整条总线。" : busy ? "操作进行中" : ""}>
                 <Stack direction="row" gap={0.75} className="ov-repair-actions">
@@ -638,7 +637,8 @@ export default function App() {
       if (statePositions && clock.hostGeneration === currentClock.hostGeneration && clock.sessionId === currentClock.sessionId) {
         setStateFailures(current => Object.fromEntries(Object.entries(current).filter(([position]) => !statePositions.includes(Number(position)))));
       }
-      if (success) setMessage({ text: success, severity: "success", record: false });
+      const completion = typeof success === "function" ? success(result) : success;
+      if (completion) setMessage({ text: completion, severity: "success", record: false });
       return result;
     } catch (error) {
       const text = error instanceof BridgeRequestError ? error.message : "操作未完成，请检查当前连接和操作条件。";
@@ -648,9 +648,10 @@ export default function App() {
       const sameSession = clock.hostGeneration === currentClock.hostGeneration && clock.sessionId === currentClock.sessionId;
       const positions = statePositions && sameSession && !cancelled ? failure?.details?.positions ?? statePositions : [];
       if (failure && positions.length) setStateFailures(current => ({ ...current, ...Object.fromEntries(positions.map(position => [position, failure])) }));
-      setMessage({ text: cancelled ? `已取消：${text}` : text, severity: cancelled ? "info" : "error", record: !(error instanceof BridgeRequestError && error.historyRecorded) });
+      const severity = error instanceof BridgeRequestError ? error.severity : "error";
+      setMessage({ text: cancelled ? `已取消：${text}` : text, severity: cancelled ? "info" : severity, record: !(error instanceof BridgeRequestError && error.historyRecorded) });
       if (cancelled) return undefined;
-      if (!statePositions) setProgress((previous) => previous ? { ...previous, stage: "操作失败", detail: text, tone: "error" } : previous);
+      if (!statePositions) setProgress((previous) => previous ? { ...previous, stage: severity === "warning" ? "结果未确认" : "操作失败", detail: text, tone: severity } : previous);
       return undefined;
     }
   }, [setMessage]);
@@ -672,28 +673,13 @@ export default function App() {
   }, []);
 
   const applyAutoScan = useCallback((result: AutoScanResult) => {
-    if (result.connected && result.slaves.length) {
-      if (result.selected_adapter) window.localStorage.setItem(PREFERRED_ADAPTER_KEY, result.selected_adapter);
-      const adapterName = result.adapters.find((item) => item.name === result.selected_adapter)?.description
-        || result.selected_adapter;
-      setMessage({ text: `已在 ${adapterName} 上发现 ${result.slaves.length} 个从站`, severity: "success", record: false });
-      return;
-    }
-
-    if (!result.adapters.length) {
-      return;
-    }
-    const failed = result.attempts.filter((attempt) => attempt.error);
-    const openedWithoutSlaves = result.attempts.filter((attempt) => !attempt.error && attempt.slave_count === 0);
-    if (failed.length && failed.length === result.attempts.length) {
-      setMessage({ text: "网卡扫描未完成。请检查网卡连接；如果反复出现，请记录操作步骤并反馈。", severity: "error", record: false });
-    } else if (failed.length && openedWithoutSlaves.length) {
-      setMessage({ text: "未扫描到从站，部分网卡的扫描也未完成。请检查网卡连接后重试。", severity: "warning", record: false });
-    } else if (openedWithoutSlaves.length) {
-      setMessage({ text: "未扫描到从站", severity: "info", record: false });
-    } else {
-      setMessage({ text: "自动扫描未发现从站。请确认设备已连接并通电，再重新扫描。", severity: "info", record: false });
-    }
+    if (result.connected && result.slaves.length && result.selected_adapter) window.localStorage.setItem(PREFERRED_ADAPTER_KEY, result.selected_adapter);
+    // The request observer already announces partial scans and missing devices.
+    if (!result.connected || !result.slaves.length
+      || result.attempts.some(attempt => attempt.error || attempt.disconnect_error)
+      || result.slaves.some(slave => !isSlaveStateHealthy(slave) || slave.scan_errors?.length)) return;
+    const adapterName = result.adapters.find(item => item.name === result.selected_adapter)?.description || result.selected_adapter;
+    setMessage({ text: `已在 ${adapterName} 上发现 ${result.slaves.length} 个从站`, severity: "success", record: false });
   }, []);
 
   useEffect(() => {
@@ -966,7 +952,7 @@ export default function App() {
   }, [checkUpdate]);
   const scan = async () => {
     const found = await run(() => bridgeRequest<SlaveInfo[]>("scan"));
-    if (found) setMessage({ text: found.length ? `扫描完成，发现 ${found.length} 个从站` : "未扫描到从站", severity: found.length ? "success" : "info", record: false });
+    if (found?.length && found.every(slave => isSlaveStateHealthy(slave) && !slave.scan_errors?.length)) setMessage({ text: `扫描完成，发现 ${found.length} 个从站`, severity: "success", record: false });
   };
   const requestBusState = (state: number) => run(
     () => bridgeRequest<SlaveInfo[]>("request_state", { position: 0, state }),

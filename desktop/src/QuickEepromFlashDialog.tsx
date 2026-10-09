@@ -20,7 +20,7 @@ import { hex } from "./types";
 
 export interface EepromProgressState extends OperationProgress {
   percent: number;
-  tone?: "error" | "success" | "info";
+  tone?: "error" | "success" | "info" | "warning";
 }
 
 interface EsiResult {
@@ -59,7 +59,7 @@ interface LibraryResult {
 
 interface FlashPayload {
   success: boolean;
-  result: { image_verification: string; reload_verified?: boolean; reload_error?: string; words_written: number };
+  result: { image_verification: string; reload_verified?: boolean; reload_error?: string; words_written: number; sii_valid?: boolean; semantic_valid?: boolean | null };
 }
 
 export interface EepromDetailSelection {
@@ -432,16 +432,18 @@ export function QuickEepromFlashDialog({ open, slave, onSelectSlave, initialSour
           .catch(() => { if (contextRef.current === contextKey) setHeaderError("无法读取设备当前配置"); });
       }
       const reloadFailed = payload.result.reload_verified === false;
+      const hasWarning = reloadFailed || !autoResetEsc || payload.result.sii_valid === false || payload.result.semantic_valid === false;
       const text = reloadFailed
         ? payload.result.reload_error || "镜像已写入，但复位后未能重新加载。"
         : autoResetEsc ? "烧录完成，完整回读与目标一致。" : "烧录完成，完整回读与目标一致；未复位 ESC。";
-      setResult({ severity: reloadFailed ? "warning" : "success", text });
-      setProgress({ operation: "eeprom-flash", stage: reloadFailed ? "烧录完成，复位后重新加载失败" : "烧录完成", completed: 100, total: 100, percent: 100, detail: text, tone: reloadFailed ? "info" : "success", cancellable: false });
+      setResult({ severity: hasWarning ? "warning" : "success", text });
+      setProgress({ operation: "eeprom-flash", stage: reloadFailed ? "烧录完成，复位后重新加载失败" : "烧录完成", completed: 100, total: 100, percent: 100, detail: text, tone: hasWarning ? "warning" : "success", cancellable: false });
     } catch (error) {
       const text = error instanceof BridgeRequestError ? error.message : "烧录未完成，请重新读取设备确认当前内容。";
       const cancelled = error instanceof BridgeRequestError && error.code === "CANCELLED";
-      setResult({ severity: cancelled ? "info" : "error", text });
-      setProgress({ operation: "eeprom-flash", stage: cancelled ? "已取消" : "烧录失败", completed: 100, total: 100, percent: 100, detail: text, tone: cancelled ? "info" : "error", cancellable: false });
+      const severity = cancelled ? "info" : error instanceof BridgeRequestError ? error.severity : "error";
+      setResult({ severity, text });
+      setProgress({ operation: "eeprom-flash", stage: cancelled ? "已取消" : severity === "warning" ? "烧录结果未确认" : "烧录失败", completed: 100, total: 100, percent: 100, detail: text, tone: severity, cancellable: false });
     }
   };
 

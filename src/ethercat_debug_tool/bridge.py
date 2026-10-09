@@ -224,6 +224,10 @@ class EepromExclusiveError(RuntimeError):
     """Raised when a hardware command is rejected during an EEPROM write/restore."""
 
 
+class RegisterWriteVerificationError(RuntimeError):
+    """Readback confirmed a failed write, rather than an uncertain outcome."""
+
+
 class StateRequestDisplayError(CommunicationError):
     """A state request failure phrased for the ordinary user notification."""
 
@@ -255,6 +259,8 @@ _OPERATION_LABELS = {
 
 # Describe missing XML sources explicitly while preserving other operation errors.
 def _user_error_message(exc: BaseException, code: str, method: str, mutating: bool) -> str:
+    if isinstance(exc, RegisterWriteVerificationError):
+        return str(exc)
     if isinstance(exc, EsiConfigSaveError):
         return str(exc)
     if isinstance(exc, StateRequestDisplayError):
@@ -303,7 +309,9 @@ def _structured_error(
     session_id: int,
     snapshot: Any | None = None,
 ) -> dict[str, Any]:
-    if isinstance(exc, StateRequestDisplayError):
+    if isinstance(exc, RegisterWriteVerificationError):
+        code = "REGISTER_WRITE_MISMATCH"
+    elif isinstance(exc, StateRequestDisplayError):
         code = "STATE_REQUEST_FAILED"
     elif isinstance(exc, StateReadFailure):
         code = "STATE_READ_FAILED"
@@ -327,6 +335,7 @@ def _structured_error(
         "message": str(exc),
         "user_message": _user_error_message(exc, code, method, mutating),
         "category": (
+            "verification" if code == "REGISTER_WRITE_MISMATCH" else
             "configuration" if isinstance(exc, StateRequestDisplayError) and exc.details
             and exc.details.get("phase") in {"initialization", "pdo_mapping"} else
             "state" if code in {"STATE_REQUEST_FAILED", "STATE_READ_FAILED"} else
@@ -1437,7 +1446,7 @@ class BridgeRuntime:
                 raise
             if result.verified is False:
                 self.audit.record("register_write", details, outcome="failed", error=result.conclusion)
-                raise RuntimeError(result.conclusion)
+                raise RegisterWriteVerificationError(result.conclusion)
             self.audit.record("register_write", details, outcome="succeeded")
             return result
         if method == "register_reset":

@@ -1076,3 +1076,16 @@ def test_bin_library_accepts_raw_images_and_rejects_empty_files(tmp_path):
             runtime.dispatch("eeprom_bin_load", {"path": str(tmp_path / "empty.bin")})
     finally:
         runtime.shutdown()
+
+
+def test_confirmed_register_write_mismatch_is_failed_instead_of_unknown():
+    from ethercat_debug_tool.bridge import RegisterWriteVerificationError
+
+    error = _structured_error(
+        RegisterWriteVerificationError("写入值与回读值不一致"), request_id=1,
+        method="register_execute_write", spec=load_command_registry().require("register_execute_write"), session_id=1,
+    )
+    assert error["code"] == "REGISTER_WRITE_MISMATCH"
+    assert error["operation_result"] == "failed"
+    assert error["category"] == "verification"
+    assert error["user_message"] == "写入值与回读值不一致"

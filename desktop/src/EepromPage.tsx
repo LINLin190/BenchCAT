@@ -297,7 +297,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
       if (contextRef.current === context && loadRequestRef.current === requestId) setConfigSaving(false);
     }
   };
-  const operation = async <T,>(fn: () => Promise<T>, success: string, failure = "操作失败"): Promise<T | undefined> => {
+  const operation = async <T,>(fn: () => Promise<T>, success: string, failure = "操作失败", resetRequested = true): Promise<T | undefined> => {
     if (["eeprom_read", "eeprom_backup", "eeprom_flash", "eeprom_restore"].some((method) => operationStore.active(method))) return undefined;
     setOperationResult(undefined);
     setProgress({ operation: "eeprom", stage: "准备", completed: 0, total: 100, percent: 0, detail: "正在检查操作条件", tone: "info", cancellable: true });
@@ -312,9 +312,15 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
           return value;
         }
         const reloadFailed = flashPayload.result.reload_verified === false;
+        const hasWarning = reloadFailed || !resetRequested || flashPayload.result.sii_valid === false || flashPayload.result.semantic_valid === false;
         const title = reloadFailed ? "镜像校验成功；复位后复核失败" : success;
-        setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: reloadFailed ? "EEPROM 镜像已通过校验，但复位后的重新加载复核未通过。" : success, tone: reloadFailed ? "info" : "success" });
-        setOperationResult({ title, severity: reloadFailed ? "warning" : "success", payload: flashPayload, error: reloadFailed ? "复位后未能确认设备已加载新内容，请重新读取设备。" : undefined });
+        setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: reloadFailed ? "EEPROM 镜像已通过校验，但复位后的重新加载复核未通过。" : success, tone: hasWarning ? "warning" : "success" });
+        setOperationResult({ title, severity: hasWarning ? "warning" : "success", payload: flashPayload, error: reloadFailed ? "复位后未能确认设备已加载新内容，请重新读取设备。" : undefined });
+      } else if (value && typeof value === "object" && ((value as Partial<EepromReadResult>).sii_valid === false || (value as Partial<EepromReadResult>).comparison?.equal === false)) {
+        const reading = value as Partial<EepromReadResult>;
+        const text = reading.sii_valid === false ? "SII 数据无法解析" : "与目标镜像不一致";
+        setProgress({ operation: "eeprom", stage: "读取完成，数据存在异常", completed: 100, total: 100, percent: 100, detail: text, tone: "warning" });
+        setOperationResult({ title: "读取完成，数据存在异常", severity: "warning", error: text });
       } else {
         setProgress({ operation: "eeprom", stage: success, completed: 100, total: 100, percent: 100, detail: success, tone: "success" });
         setOperationResult({ title: success, severity: "success" });
@@ -327,8 +333,10 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
         setOperationResult({ title: "操作已取消", severity: "info", error: text });
         return undefined;
       }
-      setProgress({ operation: "eeprom", stage: failure, completed: 100, total: 100, percent: 100, detail: text, tone: "error" });
-      setOperationResult({ title: failure, severity: "error", error: text });
+      const severity = error instanceof BridgeRequestError ? error.severity : "error";
+      const title = severity === "warning" ? "结果未确认" : failure;
+      setProgress({ operation: "eeprom", stage: title, completed: 100, total: 100, percent: 100, detail: text, tone: severity });
+      setOperationResult({ title, severity, error: text });
       return undefined;
     }
   };
@@ -357,7 +365,7 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
     if (!canFlash || !slave || !flashTarget) return;
     // A write attempt can change bytes even when it fails; discard the old read snapshot.
     setReadResult(undefined); setConfigurationChanged(true);
-    return operation(() => bridgeRequest<EepromFlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc }, { file: bin?.path ?? esi?.path, device: bin ? "原始 BIN" : currentDevice ? esiDeviceDisplayName(currentDevice) : undefined, size: flashTarget.size }), autoResetEsc ? "烧录完成" : "烧录完成，未复位 ESC", "烧录失败");
+    return operation(() => bridgeRequest<EepromFlashPayload>("eeprom_flash", { position: slave.position, target_id: flashTarget.target_id, auto_reset: autoResetEsc }, { file: bin?.path ?? esi?.path, device: bin ? "原始 BIN" : currentDevice ? esiDeviceDisplayName(currentDevice) : undefined, size: flashTarget.size }), autoResetEsc ? "烧录完成" : "烧录完成，未复位 ESC", "烧录失败", autoResetEsc);
   };
 
   // Prefer a complete read snapshot; shorter reads cannot describe the configuration area.
