@@ -1,7 +1,5 @@
 import {
-  lazy,
   memo,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -68,7 +66,10 @@ import {
 } from "@mui/icons-material";
 import packageInfo from "../package.json";
 import { OverviewEeprom } from "./OverviewEeprom";
-import type { EepromReadResult } from "./EepromPage";
+import { EepromPage, type EepromReadResult } from "./EepromPage";
+import { RegistersPage } from "./RegistersPage";
+import { SettingsDialog } from "./SettingsDialog";
+import { FeatureGuideDialog } from "./FeatureGuideDialog";
 import { EmptyState, PageTitle, slaveDisplayName, slaveIdentityKey } from "./pageShared";
 import { CardHeading } from "./OverviewDisclosure";
 import { EscHardwareCard } from "./EscHardwareCard";
@@ -105,11 +106,6 @@ import type {
 } from "./types";
 import { hex, stateLabel } from "./types";
 import { checkForUpdate, type AvailableUpdate } from "./updater";
-
-const RegistersPage = lazy(() => import("./RegistersPage").then(module => ({ default: module.RegistersPage })));
-const EepromPage = lazy(() => import("./EepromPage").then(module => ({ default: module.EepromPage })));
-const SettingsDialog = lazy(() => import("./SettingsDialog").then(module => ({ default: module.SettingsDialog })));
-const FeatureGuideDialog = lazy(() => import("./FeatureGuideDialog").then(module => ({ default: module.FeatureGuideDialog })));
 
 const appIconUrl = new URL("../src-tauri/icons/icon.png", import.meta.url).href;
 
@@ -1083,7 +1079,7 @@ export default function App() {
             {page !== "overview" && (isSlaveStateUnknown(slave) ? <Chip size="small" color="warning" label="未知状态" /> : page === "registers" && slave.state === 1 ? null : <StateChip state={slave.state} error={Boolean((slave.raw_state ?? slave.state) & 0x10)} />)}
             {page === "overview" && <Button size="small" sx={{ ml: "auto" }} disabled={busy} startIcon={<RefreshRounded className={busy ? "operation-icon-spinning" : undefined} />} onClick={() => run(refreshStates)}>刷新状态</Button>}
           </Stack>}
-        <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: page === "eeprom" ? "hidden" : "auto", p: { xs: 1.5, xl: 2 }, ...(page === "overview" && slave ? { pt: 0 } : {}) }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto", ...(page === "eeprom" ? { height: "100%", minHeight: 0, display: "flex", flexDirection: "column" } : {}) }}><Suspense fallback={<Box sx={{ p: 3 }}><CircularProgress size={24} /></Box>}>{content}</Suspense></Box></Box>
+        <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, overflow: page === "eeprom" ? "hidden" : "auto", p: { xs: 1.5, xl: 2 }, ...(page === "overview" && slave ? { pt: 0 } : {}) }}><Box sx={{ width: "100%", maxWidth: 1840, mx: "auto", ...(page === "eeprom" ? { height: "100%", minHeight: 0, display: "flex", flexDirection: "column" } : {}) }}>{content}</Box></Box>
         </Box>
       </Box>
     </Box>
@@ -1100,12 +1096,12 @@ export default function App() {
       </MenuItem>
     </Menu>
     <QuickEepromFlashDialog open={quickFlashOpen} slave={slave} onSelectSlave={setSelectedPosition} initialSource={quickFlashSource} onInitialSourceConsumed={consumeQuickFlashSource} onBusyChange={setQuickFlashBusy} status={status} progress={progress} autoResetEsc={eepromAutoReset} setProgress={setProgress} onClose={() => { setQuickFlashOpen(false); setQuickFlashSource(undefined); }} onOpenDetails={(selection) => { setQuickFlashOpen(false); setEepromDetailSelection(selection); navigate("eeprom"); }} />
-    {settings && <Suspense fallback={<Dialog open onClose={() => setSettings(false)} fullWidth maxWidth="sm"><DialogContent><CircularProgress size={24} /></DialogContent></Dialog>}>
+    {settings &&
       <SettingsDialog onClose={() => setSettings(false)} onOpenGuide={() => { setSettings(false); setFeatureGuideOpen(true); }} alLanguage={alLanguage} onLanguageChange={value => { setAlLanguage(value); window.localStorage.setItem(AL_LANGUAGE_KEY, value); }} autoCheckUpdates={autoCheckUpdates} onAutoCheckChange={enabled => { setAutoCheckUpdates(enabled); window.localStorage.setItem(AUTO_UPDATE_KEY, String(enabled)); }} updateState={updateState} updateError={updateError ? updateFailureMessage(updateError) : undefined} updateStageLabel={updating ? UPDATE_STAGE_LABELS[updateState as UpdateStage] : undefined} updating={updating} availableVersion={availableUpdate?.version} ignoredUpdateVersion={ignoredUpdateVersion} pendingUpdateReminder={pendingUpdateReminder} visit={visit} checkUpdate={checkUpdate} onShowUpdate={() => setUpdateDialogOpen(true)} onShowAvailableUpdate={() => { setPendingUpdateReminder(false); setUpdateDialogOpen(true); }} />
-    </Suspense>}
-    {featureGuideOpen && <Suspense fallback={<Dialog open onClose={() => setFeatureGuideOpen(false)} fullWidth maxWidth="lg"><DialogContent><CircularProgress size={24} /></DialogContent></Dialog>}>
+    }
+    {featureGuideOpen &&
       <FeatureGuideDialog onClose={() => setFeatureGuideOpen(false)} />
-    </Suspense>}
+    }
     <UpdateDialog
       open={updateDialogOpen}
       state={updateState}
