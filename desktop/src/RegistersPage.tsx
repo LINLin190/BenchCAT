@@ -36,6 +36,8 @@ interface RegisterSnapshot {
 interface RegisterCatalog { catalog: RegisterDefinition[] | null; catalog_version: string }
 interface CachedRegisters { catalog: RegisterDefinition[]; catalogVersion: string; details: Map<string, RegisterDefinition>; values: Record<string, RegisterValue>; errors: Record<string, string>; snapshot?: RegisterSnapshot }
 const snapshots = new Map<string, CachedRegisters>();
+interface RegisterNavigation { view: CatalogView; group: string; query: string; showReservedAddresses: boolean; selectedKey: string; scrollTop: number }
+const navigation = new Map<string, RegisterNavigation>();
 let cachedSession = "";
 let registerPageVisited = false;
 // Load the PDF engine only when the user opens a reference manual.
@@ -250,6 +252,7 @@ interface RegisterTableProps {
   errors: Record<string, string>; favorites: Set<string>; selectedKey: string; favoriteFeedback?: string;
   format: ValueFormat; monitor: boolean; writing: boolean; reading: boolean; scope: string;
   loading: boolean; emptyText: string; detailsVisible: boolean; animateDetails: boolean;
+  initialScrollTop: number; onScrollPosition: (top: number) => void;
   onSelect: RegisterRowProps["onSelect"]; onFavorite: RegisterRowProps["onFavorite"];
 }
 const registerRowHeight = 36;
@@ -258,8 +261,10 @@ const registerOverscan = 8;
 
 /** Keep only viewport rows mounted while spacer rows preserve the full scroll range. */
 const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, values, changes, errors, favorites, selectedKey,
-  favoriteFeedback, format, monitor, writing, reading, scope, loading, emptyText, detailsVisible, animateDetails, onSelect, onFavorite }: RegisterTableProps) {
+  favoriteFeedback, format, monitor, writing, reading, scope, loading, emptyText, detailsVisible, animateDetails, initialScrollTop, onScrollPosition, onSelect, onFavorite }: RegisterTableProps) {
   const container = useRef<HTMLDivElement>(null);
+  const pendingScroll = useRef(initialScrollTop);
+  const previousScope = useRef(scope);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   useLayoutEffect(() => {
     const element = container.current;
@@ -272,9 +277,13 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
   }, []);
   // Filters reset the scroll position; selecting or favoriting a row does not.
   useLayoutEffect(() => {
-    if (container.current) container.current.scrollTop = 0;
-    setViewport((current) => current.top === 0 ? current : { ...current, top: 0 });
-  }, [scope]);
+    if (previousScope.current !== scope) { pendingScroll.current = 0; previousScope.current = scope; }
+    if (!definitions.length || !container.current) return;
+    container.current.scrollTop = pendingScroll.current;
+    const top = container.current.scrollTop;
+    setViewport((current) => current.top === top ? current : { ...current, top });
+    onScrollPosition(top);
+  }, [scope, definitions.length, onScrollPosition]);
   const firstVisible = Math.floor(Math.max(0, viewport.top - registerHeaderHeight) / registerRowHeight);
   const start = Math.max(0, Math.min(firstVisible - registerOverscan, definitions.length - 1));
   const end = Math.min(definitions.length, Math.ceil((viewport.top + viewport.height) / registerRowHeight) + registerOverscan);
@@ -296,6 +305,8 @@ const VirtualRegisterTable = memo(function VirtualRegisterTable({ definitions, v
   };
   return <TableContainer ref={container} onKeyDown={navigate} onScroll={(event) => {
     const top = event.currentTarget.scrollTop;
+    pendingScroll.current = top;
+    onScrollPosition(top);
     setViewport((current) => current.top === top ? current : { ...current, top });
   }} sx={{ flex: 1, minHeight: 0, overflowAnchor: "none" }}>
     {/* Adjust the value column position with the detail panel while keeping header and cells aligned. */}
@@ -338,6 +349,10 @@ function RegisterDetailsPanel({ open, animate, children }: { open: boolean; anim
 }
 /** A session snapshot serves all list views; only explicit monitoring repeats reads. */
 export const RegistersPage = memo(function RegistersPage({ slave, run, onError, registerProfile, deviceOperationsBlocked, sessionContext }: Props) {
+  const identity = slave ? `${slave.position}:${slave.configured_address}:${Object.values(slave.identity).join(":")}` : "none";
+  const context = `${sessionContext}:${identity}:${registerProfile}`;
+  const savedNavigation = useRef(cachedSession === sessionContext ? navigation.get(context) : undefined);
+  const scrollPosition = useRef(savedNavigation.current?.scrollTop ?? 0);
   const [animateDetails, setAnimateDetails] = useState(() => !registerPageVisited);
   useEffect(() => { registerPageVisited = true; }, []);
   const outerTheme = useTheme();
@@ -371,9 +386,9 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   const catalogVersion = useRef("");
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [pageError, setPageError] = useState("");
-  const [view, setView] = useState<CatalogView>("common");
-  const [group, setGroup] = useState("");
-  const [query, setQuery] = useState("");
+  const [view, setView] = useState<CatalogView>(savedNavigation.current?.view ?? "common");
+  const [group, setGroup] = useState(savedNavigation.current?.group ?? "");
+  const [query, setQuery] = useState(savedNavigation.current?.query ?? "");
   const [monitor, setMonitor] = useState(false);
   const [selected, setSelected] = useState<RegisterDefinition>();
   const [fieldVariant, setFieldVariant] = useState("");
@@ -386,7 +401,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [changes, setChanges] = useState<Record<string, ValueChange>>({});
   const [snapshotInfo, setSnapshotInfo] = useState<RegisterSnapshot>();
-  const [showReservedAddresses, setShowReservedAddresses] = useState(false);
+  const [showReservedAddresses, setShowReservedAddresses] = useState(savedNavigation.current?.showReservedAddresses ?? false);
   const [format, setFormat] = useState<ValueFormat>(preferences.format);
   const [reading, setReading] = useState(false);
   const [watching, setWatching] = useState(false);
@@ -443,8 +458,6 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   const busyRef = useRef(false);
   const drainRef = useRef<() => Promise<void>>(async () => {});
   const blockedRef = useRef(deviceOperationsBlocked);
-  const identity = slave ? `${slave.position}:${slave.configured_address}:${Object.values(slave.identity).join(":")}` : "none";
-  const context = `${sessionContext}:${identity}:${registerProfile}`;
   const contextRef = useRef(context);
   contextRef.current = context;
   valuesRef.current = values;
@@ -476,7 +489,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   }, []);
   useEffect(() => {
     let active = true;
-    if (cachedSession !== sessionContext) { snapshots.clear(); cachedSession = sessionContext; }
+    if (cachedSession !== sessionContext) { snapshots.clear(); navigation.clear(); cachedSession = sessionContext; }
     const saved = snapshots.get(context);
     cache.current = new Map(); resolvedDefinitions.current = saved?.details ?? new Map();
     catalogVersion.current = saved?.catalogVersion ?? ""; queue.current = []; queued.current.clear(); attempted.current.clear();
@@ -559,6 +572,16 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   }, [searchCatalog, view, group, deferredQuery, favorites, showReservedAddresses]);
   const displayed = monitor ? pinned : filtered;
   const selectedKey = selected ? definitionKey(selected) : "";
+  // Keep browsing state within the connection, without keeping hardware monitoring active off-page.
+  useEffect(() => {
+    if (!catalog.length) return;
+    navigation.set(context, { view, group, query, showReservedAddresses, selectedKey, scrollTop: scrollPosition.current });
+  }, [context, catalog, view, group, query, showReservedAddresses, selectedKey]);
+  const rememberScroll = useCallback((top: number) => {
+    scrollPosition.current = top;
+    const saved = navigation.get(context);
+    if (saved) saved.scrollTop = top;
+  }, [context]);
   // Reset conditional tables on selection; reset status is the normal read interpretation.
   useEffect(() => { setFieldVariant(selected?.field_variants?.[0]?.name === "读取状态" ? "读取状态" : ""); }, [selectedKey, selected?.field_variants]);
   const variantFields = selected?.field_variants?.find((variant) => variant.name === fieldVariant)?.fields;
@@ -1015,7 +1038,10 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
   useLayoutEffect(() => {
     if (defaultSelectionDone.current || monitor || writing || deviceOperationsBlocked || !displayed.length) return;
     defaultSelectionDone.current = true;
-    if (!selected) void rowActions.current.select(displayed[0]);
+    const savedKey = savedNavigation.current?.selectedKey;
+    const target = savedKey ? displayed.find(item => definitionKey(item) === savedKey) ?? displayed[0]
+      : savedNavigation.current ? undefined : displayed[0];
+    if (!selected && target) void rowActions.current.select(target);
   }, [context, displayed, monitor, writing, deviceOperationsBlocked, selected, selectRow]);
   const favoriteRow = useCallback((definition: RegisterDefinition, monitoring: boolean, favorite: boolean) => {
     const key = definitionKey(definition);
@@ -1057,6 +1083,7 @@ export const RegistersPage = memo(function RegistersPage({ slave, run, onError, 
         <VirtualRegisterTable definitions={displayed} values={values} changes={changes} errors={errors} favorites={favorites}
           selectedKey={selectedKey} favoriteFeedback={favoriteFeedback} format={format} monitor={monitor} writing={writing} reading={reading} detailsVisible={Boolean(selected)} animateDetails={animateDetails}
           scope={`${monitor}:${view}:${group}:${deferredQuery}:${showReservedAddresses}`} loading={catalogLoading}
+          initialScrollTop={savedNavigation.current?.scrollTop ?? 0} onScrollPosition={rememberScroll}
           emptyText={monitor ? "从寄存器详情中加入需要监视的项目" : view === "favorites" ? "将鼠标移到寄存器行，点击星标收藏" : "没有匹配的寄存器"}
           onSelect={selectRow} onFavorite={favoriteRow} />
         <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.25, height: 30, flexShrink: 0, borderTop: 1, borderColor: "divider", color: "text.secondary" }}>
