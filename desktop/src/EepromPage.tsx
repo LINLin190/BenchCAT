@@ -60,6 +60,12 @@ export interface EepromReadResult extends ImageSnapshot { data: string; size: nu
 interface EepromFlashDetails { bytes_read_back: number; words_written: number; comparison: EepromComparisonResult; sii_valid: boolean; semantic_valid: boolean | null; image_verification: string; reset_sequence?: boolean[] | null; rediscovered?: boolean | null; reload_verified?: boolean | null; reload_error?: string | null }
 interface EepromFlashPayload { success: boolean; result: EepromFlashDetails; slaves: SlaveInfo[] }
 interface EepromOperationResult { title: string; severity: "success" | "warning" | "error" | "info"; payload?: EepromFlashPayload; error?: string }
+interface EepromSourceState {
+  esi?: EsiResult; bin?: EepromBinTarget; ordinal: number; target?: TargetResult;
+  configData: string; configEditing: boolean; generatedConfig: string; targetContext: string; generationError: string;
+}
+const sourceCache = new Map<string, EepromSourceState>();
+let sourceSession = "";
 
 function deviceRevision(device: EsiDevice): number {
   return Number(device.revision ?? device.revision_number ?? 0);
@@ -114,16 +120,20 @@ interface EepromPageProps {
 
 // ConfigData drafts are written to the selected XML only after an explicit save.
 export const EepromPage = memo(function EepromPage({ slave, status, progress, setProgress, run, readResult, setReadResult, initialSelection, onInitialSelectionConsumed, autoResetEsc, onAutoResetChange, fileDropEnabled, deviceOperationsBlocked }: EepromPageProps) {
-  const [esi, setEsi] = useState<EsiResult>();
-  const [bin, setBin] = useState<EepromBinTarget>();
-  const [ordinal, setOrdinal] = useState(-1);
-  const [target, setTarget] = useState<TargetResult>();
+  const sessionKey = `${status.host_generation}:${status.session_id}`;
+  const contextKey = `${sessionKey}:${slaveIdentityKey(slave)}`;
+  const savedSource = useRef(sourceSession === sessionKey ? sourceCache.get(contextKey) : undefined);
+  const restoredTargetAttempted = useRef(false);
+  const [esi, setEsi] = useState<EsiResult | undefined>(savedSource.current?.esi);
+  const [bin, setBin] = useState<EepromBinTarget | undefined>(savedSource.current?.bin);
+  const [ordinal, setOrdinal] = useState(savedSource.current?.ordinal ?? -1);
+  const [target, setTarget] = useState<TargetResult | undefined>(savedSource.current?.target);
   const flashTarget = bin ?? target;
-  const [generationError, setGenerationError] = useState("");
+  const [generationError, setGenerationError] = useState(savedSource.current?.generationError ?? "");
   const [backupPath, setBackupPath] = useState("");
   const [readLength, setReadLength] = useState("");
   const [readRange, setReadRange] = useState<"device" | "target" | "custom">();
-  const [configEditing, setConfigEditing] = useState(false);
+  const [configEditing, setConfigEditing] = useState(savedSource.current?.configEditing ?? false);
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaveError, setConfigSaveError] = useState("");
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -142,13 +152,12 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
   const [recentEsi, setRecentEsi] = useState(loadRecentEsi);
   // Refresh records changed by quick programming when its dialog closes.
   useEffect(() => { if (fileDropEnabled) setRecentEsi(loadRecentEsi()); }, [fileDropEnabled]);
-  const [configData, setConfigData] = useState("");
+  const [configData, setConfigData] = useState(savedSource.current?.configData ?? "");
   const [operationResult, setOperationResult] = useState<EepromOperationResult>();
   const generationRequestRef = useRef(0);
   const loadRequestRef = useRef(0);
-  const generatedConfigRef = useRef("");
-  const targetContextRef = useRef("");
-  const contextKey = `${status.host_generation}:${status.session_id}:${slaveIdentityKey(slave)}`;
+  const generatedConfigRef = useRef(savedSource.current?.generatedConfig ?? "");
+  const targetContextRef = useRef(savedSource.current?.targetContext ?? "");
   const contextRef = useRef(contextKey);
   contextRef.current = contextKey;
   const currentDevice = esi?.devices[ordinal];
@@ -157,13 +166,16 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
   const canFlash = Boolean(slave && flashTarget && !configEditing && !configSaving && (!esi || !configDataResult.error) && !generationError && targetContextRef.current === contextKey && !status.cycle_running && !operationInProgress && !deviceOperationsBlocked);
   const blockers = [deviceOperationsBlocked && "软件正在更新", operationInProgress && "已有 EEPROM 操作正在执行", status.cycle_running && "需要停止周期通信", configEditing && "请先保存 ConfigData 到 XML", configSaving && "正在保存 XML", !slave && "请选择从站", esi && ordinal < 0 && "请选择 XML Device", esi && ordinal >= 0 && configDataResult.error, generationError, !flashTarget && "需要准备 XML/BIN 目标", flashTarget && targetContextRef.current !== contextKey && "目标从站或连接已变化"].filter(Boolean) as string[];
   useEffect(() => {
+    if (sourceSession !== sessionKey) { sourceCache.clear(); sourceSession = sessionKey; }
     generationRequestRef.current += 1;
     loadRequestRef.current += 1;
-    generatedConfigRef.current = "";
-    setEsi(undefined); setBin(undefined); setOrdinal(-1); setTarget(undefined); setConfigData("");
-    setGenerationError(""); setOperationResult(undefined); setBackupPath(""); setReadLength("");
-    setReadRange(undefined); setConfigEditing(false); setConfigSaving(false); setConfigSaveError(""); setDetailsOpen(false); setConfigurationChanged(false);
+    return () => { generationRequestRef.current += 1; loadRequestRef.current += 1; };
   }, [contextKey]);
+  // Source documents and drafts survive page navigation, scoped to the same slave and connection.
+  useEffect(() => {
+    sourceCache.set(contextKey, { esi, bin, ordinal, target, configData, configEditing,
+      generatedConfig: generatedConfigRef.current, targetContext: targetContextRef.current, generationError });
+  }, [contextKey, esi, bin, ordinal, target, configData, configEditing, generationError]);
 
   // Generate a new XML target whenever its selected Device or ConfigData changes.
   const generate = useCallback(async (document: EsiResult, selectedOrdinal: number, effectiveConfig?: string, automatic = false) => {
@@ -184,6 +196,15 @@ export const EepromPage = memo(function EepromPage({ slave, status, progress, se
       setTarget(value);
     }
   }, [contextKey, run, slave?.position]);
+
+  useEffect(() => {
+    if (restoredTargetAttempted.current) return;
+    restoredTargetAttempted.current = true;
+    const saved = savedSource.current;
+    if (!initialSelection && saved?.esi && saved.ordinal >= 0 && !saved.target && !saved.configEditing && !saved.generationError) {
+      void generate(saved.esi, saved.ordinal, saved.configData, true);
+    }
+  }, [generate]);
 
   const loadXml = useCallback(async (path: string, preferredOrdinal?: number, overrideConfig?: string, record = true) => {
     const loadId = ++loadRequestRef.current;
