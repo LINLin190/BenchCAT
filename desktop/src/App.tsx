@@ -538,21 +538,36 @@ export default function App() {
     : hardwareBusy || stateRequestBusy ? "设备操作进行中，完成后即可更新。" : "";
   const busState = status.slaves.some(isSlaveStateUnknown) ? undefined : minimumBusState(status.slaves);
   const linkDisconnected = status.slaves.some((item) => item.state_error_kind === "link_disconnected");
-  useEffect(() => { if (status.cycle_running) cycleFaultRecorded.current = false; }, [status.cycle_running]);
-  const connectionObservation = useRef<{ service?: boolean; link?: boolean }>({});
+  useEffect(() => {
+    if (status.cycle_running && cycleFaultRecorded.current) {
+      messageHistory.append({ operation: "周期通信", result: "recovered", text: "周期通信已恢复" });
+      cycleFaultRecorded.current = false;
+    }
+  }, [status.cycle_running]);
+  const connectionObservation = useRef<{ service?: boolean; link?: boolean; adapter?: string; session?: number }>({});
   const serviceFault = useRef<{ text: string; details: string[] }>({ text: "通信服务不可用，请重新启动软件。", details: [] });
   useEffect(() => {
     const previous = connectionObservation.current;
     if (!bridgeStarting) {
       if (!bridgeAvailable && previous.service !== false) messageHistory.append({ operation: "通信服务", result: "error", text: serviceFault.current.text.split("。")[0], details: serviceFault.current.details });
+      if (bridgeAvailable && previous.service === false) messageHistory.append({ operation: "通信服务", result: "recovered", text: "通信服务已恢复" });
       previous.service = bridgeAvailable;
     }
     if (status.connected) {
+      if (previous.adapter !== (status.adapter ?? undefined) || previous.session !== status.session_id) previous.link = undefined;
+      previous.adapter = status.adapter ?? undefined;
+      previous.session = status.session_id;
       const context = status.adapter ? `网卡：${adapters.find(adapter => adapter.name === status.adapter)?.description || status.adapter}` : undefined;
       if (linkDisconnected && previous.link !== false) messageHistory.append({ operation: "网卡链路", result: "error", text: "网卡链路未连接", context });
-      previous.link = !linkDisconnected;
+      // Missing state responses cannot establish that a disconnected link recovered.
+      const linkResponding = status.slaves.some(slave => !slave.state_error && slave.state !== 0 || slave.state_error_kind === "invalid_state");
+      if (linkDisconnected) previous.link = false;
+      else if (linkResponding) {
+        if (previous.link === false) messageHistory.append({ operation: "网卡链路", result: "recovered", text: "网卡链路已恢复", context });
+        previous.link = true;
+      }
     } else previous.link = undefined;
-  }, [bridgeStarting, bridgeAvailable, status.connected, status.adapter, linkDisconnected, adapters]);
+  }, [bridgeStarting, bridgeAvailable, status.connected, status.adapter, status.session_id, status.slaves, linkDisconnected, adapters]);
   const busStateBlockedReason = !bridgeAvailable
     ? "暂时无法连接设备，请重启软件后重试。"
     : !status.connected

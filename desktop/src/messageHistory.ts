@@ -1,4 +1,4 @@
-export type MessageResult = "started" | "success" | "error" | "warning" | "info" | "cancelled" | "unknown";
+export type MessageResult = "started" | "success" | "error" | "warning" | "info" | "cancelled" | "unknown" | "recovered";
 export interface HistoryMessage {
   id: number;
   time: number;
@@ -18,7 +18,7 @@ export interface HistoryMessage {
 }
 export type MessageInput = Omit<HistoryMessage, "id" | "time" | "repeatCount" | "firstTime" | "lastEvent">;
 export const HISTORY_LIMIT = 300;
-export const resultLabels: Record<MessageResult, string> = { started: "开始", success: "成功", error: "错误", warning: "警告", info: "信息", cancelled: "已取消", unknown: "未确认" };
+export const resultLabels: Record<MessageResult, string> = { started: "开始", success: "成功", error: "错误", warning: "警告", info: "信息", cancelled: "已取消", unknown: "未确认", recovered: "恢复" };
 
 // Intentionally memory-only: a new application process starts with an empty history.
 export function createMessageHistory() {
@@ -29,7 +29,7 @@ export function createMessageHistory() {
   let snapshot: { entries: readonly HistoryMessage[]; unread: number; unreadErrors: number } = { entries: [], unread: 0, unreadErrors: 0 };
   const listeners = new Set<() => void>();
   const publish = (entries: readonly HistoryMessage[]) => {
-    const unread = entries.filter(entry => entry.lastEvent > readThrough);
+    const unread = entries.filter(entry => entry.lastEvent > readThrough && entry.result !== "recovered");
     snapshot = { entries, unread: unread.length, unreadErrors: unread.filter(entry => entry.result === "error").length };
     const retained = new Set(entries.map(entry => entry.id));
     for (const [key, id] of repeats) if (!retained.has(id)) repeats.delete(key);
@@ -39,7 +39,7 @@ export function createMessageHistory() {
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     snapshot: () => snapshot,
     append(input: MessageInput) {
-      if (input.result !== "error" && input.result !== "warning" && input.result !== "unknown") {
+      if (input.result !== "error" && input.result !== "warning" && input.result !== "unknown" && input.result !== "recovered") {
         if (input.repeatKey && input.result === "success") repeats.delete(input.repeatKey);
         return;
       }

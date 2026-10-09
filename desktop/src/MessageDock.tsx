@@ -90,7 +90,7 @@ function useDockMorph(ref: RefObject<HTMLDivElement | null>, mode: DockMode, wid
 function fromHistory(entry: HistoryMessage): Notice {
   const diagnostics = entry.wkc?.map(value => `${value.label} ${value.actual} / ${value.expected}`).join(" · ");
   return { key: `history:${entry.id}`, title: entry.text, detail: [entry.context, diagnostics || entry.reason].filter(Boolean).join(" · "),
-    severity: entry.result === "error" ? "error" : "warning", historyId: entry.id };
+    severity: entry.result === "error" ? "error" : entry.result === "recovered" ? "success" : "warning", historyId: entry.id };
 }
 
 export function MessageDock({ entries, unread, unreadErrors, messages, onMessagesConsumed, progress, open, triggerRef, dockRef, onToggle, onShowRecord, children, onHistorySettled }: {
@@ -157,9 +157,10 @@ export function MessageDock({ entries, unread, unreadErrors, messages, onMessage
 
   useEffect(() => { if (open) { setShowNotice(false); setPending([]); } }, [open]);
   const visibleProgress = progress && dismissedProgress !== progress.key ? progress : undefined;
-  const showingProgress = Boolean(visibleProgress && (!showNotice || !notice || priority[visibleProgress.severity] > priority[notice.severity]));
+  // Queued notifications take their turn; progress resumes when they finish.
+  const showingProgress = Boolean(visibleProgress && (!showNotice || !notice));
   const expanded = !open && Boolean(showingProgress || showNotice && notice);
-  const paused = hovered || focused || showingProgress;
+  const autoHidePaused = hovered || focused || showingProgress;
   const frame = useMemo<ContentFrame | undefined>(() => {
     const content = showingProgress && visibleProgress
       ? { ...visibleProgress, key: `progress:${visibleProgress.key}`, progress: visibleProgress } : notice;
@@ -217,20 +218,22 @@ export function MessageDock({ entries, unread, unreadErrors, messages, onMessage
     if (open || !pending.length) return;
     const advance = () => { setNotice(pending[0]); setShowNotice(true); setPending(queue => queue.slice(1)); };
     if (!showNotice) { advance(); return; }
-    if (notice && priority[pending[0].severity] < priority[notice.severity]) return;
-    if (paused || !settled || displayed?.key !== notice?.key || !readClock.current.readyAt) return;
-    const remaining = Math.max(0, readClock.current.readyAt + minimumVisibleTime - performance.now());
+    if (!settled || displayed?.key !== notice?.key || !readClock.current.readyAt) return;
+    // Hover and focus pause retraction, never delivery of the next notification.
+    const holdTime = notice && priority[pending[0].severity] < priority[notice.severity]
+      ? duration[notice.severity] : minimumVisibleTime;
+    const remaining = Math.max(0, readClock.current.readyAt + holdTime - performance.now());
     const timer = window.setTimeout(advance, remaining);
     return () => window.clearTimeout(timer);
-  }, [open, pending, showNotice, paused, settled, displayed?.key, notice?.key, notice?.severity]);
+  }, [open, pending, showNotice, settled, displayed?.key, notice?.key, notice?.severity]);
 
   useEffect(() => {
     if (notice && clock.current.key !== notice.key) clock.current = { key: notice.key, remaining: duration[notice.severity] };
-    if (!showNotice || open || paused || !settled || displayed?.key !== notice?.key) return;
+    if (!showNotice || open || autoHidePaused || !settled || displayed?.key !== notice?.key) return;
     const started = Date.now();
     const timer = window.setTimeout(() => { clock.current.remaining = 0; setShowNotice(false); }, clock.current.remaining);
     return () => { window.clearTimeout(timer); clock.current.remaining = Math.max(0, clock.current.remaining - (Date.now() - started)); };
-  }, [notice?.key, showNotice, open, paused, settled, displayed?.key]);
+  }, [notice?.key, showNotice, open, autoHidePaused, settled, displayed?.key]);
   useEffect(() => {
     if (!visibleProgress || visibleProgress.running || open || hovered || focused || !settled || displayed?.key !== `progress:${visibleProgress.key}`) return;
     const timer = window.setTimeout(() => { setDismissedProgress(visibleProgress.key); visibleProgress.onDismiss?.(); }, duration[visibleProgress.severity]);

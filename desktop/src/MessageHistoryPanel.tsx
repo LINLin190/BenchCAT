@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Accordion, AccordionDetails, AccordionSummary, Box, Button, IconButton, Stack, Tooltip, Typography } from "@mui/material";
-import { ArrowUpwardRounded, CloseRounded, ContentCopyRounded, DeleteOutlineRounded, ErrorOutlineRounded, ExpandMoreRounded, NotificationsNoneRounded, WarningAmberRounded } from "@mui/icons-material";
+import { ArrowUpwardRounded, CheckCircleOutlineRounded, CloseRounded, ContentCopyRounded, DeleteOutlineRounded, ErrorOutlineRounded, ExpandMoreRounded, NotificationsNoneRounded, WarningAmberRounded } from "@mui/icons-material";
 import { copyMessage, messageHistory, messageTime, type HistoryMessage } from "./messageHistory";
 import { MessageDock, type DockMessage, type DockProgress } from "./MessageDock";
 
@@ -133,11 +133,11 @@ export const MessageHistoryPanel = memo(function MessageHistoryPanel({ messages,
           {!filtered.length && <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ height: "100%", minHeight: 140, color: "text.secondary" }}>
             <NotificationsNoneRounded sx={{ fontSize: 28, color: "#AAB3C4" }} />
             <Typography fontSize={12}>{entries.length ? "没有匹配的记录" : "暂无错误或警告"}</Typography>
-            <Typography fontSize={11}>{entries.length ? "可切换消息类型查看" : "运行中出现的错误与警告会显示在这里"}</Typography>
+            <Typography fontSize={11}>{entries.length ? "可切换消息类型查看" : "运行中的错误、警告与恢复记录会显示在这里"}</Typography>
           </Stack>}
           {filtered.slice(0, visible).map(entry => <Box key={entry.id} data-message-id={entry.id} sx={{ py: 1.5, borderBottom: 1, borderColor: "#EDF0F5", bgcolor: highlighted === entry.id ? "#F1F5FC" : "transparent", transition: "background-color 180ms", userSelect: "text", "& .message-copy": { opacity: 0, pointerEvents: "none" }, "&:hover .message-copy, &:focus-within .message-copy": { opacity: 1, pointerEvents: "auto" } }}>
             <Stack direction="row" spacing={1} alignItems="flex-start">
-              <Tooltip title={entry.result === "error" ? "错误" : "警告"}>{entry.result === "error" ? <ErrorOutlineRounded aria-label="错误" sx={{ color: "error.main", fontSize: 15, mt: 0.25 }} /> : <WarningAmberRounded aria-label="警告" sx={{ color: "warning.main", fontSize: 15, mt: 0.25 }} />}</Tooltip>
+              <Tooltip title={entry.result === "error" ? "错误" : entry.result === "recovered" ? "恢复" : "警告"}>{entry.result === "error" ? <ErrorOutlineRounded aria-label="错误" sx={{ color: "error.main", fontSize: 15, mt: 0.375 }} /> : entry.result === "recovered" ? <CheckCircleOutlineRounded aria-label="恢复" sx={{ color: "success.main", fontSize: 15, mt: 0.375 }} /> : <WarningAmberRounded aria-label="警告" sx={{ color: "warning.main", fontSize: 15, mt: 0.375 }} />}</Tooltip>
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <Typography fontSize={12} fontWeight={650} sx={{ flex: 1, overflowWrap: "anywhere", lineHeight: 1.6 }}>{entry.text}</Typography>
